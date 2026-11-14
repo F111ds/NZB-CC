@@ -492,11 +492,16 @@ def load_config(path: Path | None = None) -> dict:
 
 
 _cfg_lock = threading.Lock()
-_cfg_state: dict = {"mtime": None, "data": None}
+_cfg_state: dict = {"mtime": None, "data": None, "retry_at": 0.0, "failed_mtime": None}
+CONFIG_RETRY_SECONDS = 5
 
 
 def get_config() -> dict:
-    """Returns the current desktop configuration, re-reading it whenever the file changes."""
+    """Returns the current desktop configuration, re-reading it whenever the file changes.
+
+    A reload that fails (e.g. the file was caught mid-save) keeps the previous settings and is
+    retried every few seconds, so the final save is picked up even if its timestamp doesn't change again.
+    """
     try:
         mtime = CONFIG_FILE.stat().st_mtime_ns
     except OSError:
@@ -507,16 +512,20 @@ def get_config() -> dict:
     with _cfg_lock:
         if _cfg_state["data"] is not None and _cfg_state["mtime"] == mtime:
             return _cfg_state["data"]
+        if _cfg_state["data"] is not None and time.monotonic() < _cfg_state.get("retry_at", 0.0):
+            return _cfg_state["data"]  # a recent reload failed; don't re-read the file on every request
         try:
             data = load_config()
         except ConfigError as exc:
             if _cfg_state["data"] is not None:  # e.g. caught the desktop app mid-edit; keep working
-                log.warning("Configuration reload failed (%s); keeping the previous settings.", redact(exc))
-                _cfg_state["mtime"] = mtime
+                if _cfg_state.get("failed_mtime") != mtime:  # log once per file version, not every retry
+                    log.warning("Configuration reload failed (%s); keeping the previous settings and retrying.", redact(exc))
+                # mtime is deliberately NOT recorded, so the same file version is read again after the delay.
+                _cfg_state.update(retry_at=time.monotonic() + CONFIG_RETRY_SECONDS, failed_mtime=mtime)
                 return _cfg_state["data"]
             raise
         first = _cfg_state["data"] is None
-        _cfg_state.update(mtime=mtime, data=data)
+        _cfg_state.update(mtime=mtime, data=data, retry_at=0.0, failed_mtime=None)
         if not first:
             log.info("Configuration reloaded: %d enabled indexer(s).", len(data["indexers"]))
         return data
@@ -657,9 +666,13 @@ def kodi_call(method: str, params: dict | None = None, timeout: float = 6):
                          data=json.dumps(payload).encode("utf-8"), headers=headers)
     except UpstreamError as exc:
         msg = str(exc)
-        if "401" in msg:
+        if msg.startswith("HTTP 401"):
             raise UpstreamError("Kodi refused the username / password saved in the desktop app.") from None
-        raise UpstreamError(f"Kodi: {msg}" if msg.startswith("HTTP") else "Can't reach Kodi — is it on?") from None
+        # Only genuine connection failures mean "Kodi is off"; anything else (an HTTP error,
+        # a response over the size limit, ...) is reported as-is so it isn't misdiagnosed.
+        if msg.startswith(("Connection failed", "Network error")):
+            raise UpstreamError("Can't reach Kodi — is it on?") from None
+        raise UpstreamError(f"Kodi: {msg}") from None
     try:
         body = json.loads(raw.decode("utf-8", errors="replace"))
     except ValueError:
@@ -768,18 +781,35 @@ _lib_lock = threading.Lock()
 _lib_state: dict = {"ts": 0.0, "movies": {}, "shows": set(), "episodes": set(), "ok": False}
 
 
-def kodi_library_index(max_age: float = 600) -> dict:
-    """Normalised titles of what Kodi already has, refreshed at most every 10 minutes (empty if Kodi is unreachable)."""
+def kodi_library_index(max_age: float = 600, background: bool = False) -> dict:
+    """Normalised titles of what Kodi already has, refreshed at most every 10 minutes (empty if Kodi is unreachable).
+
+    With background=True a stale index is returned immediately and refreshed on a worker thread,
+    so a search never waits on a slow or sleeping Kodi.
+    """
     with _lib_lock:
         if time.time() - _lib_state["ts"] < max_age:
             return _lib_state
-        _lib_state["ts"] = time.time()  # don't hammer an offline Kodi on every search
-    if not kodi_configured():
+        _lib_state["ts"] = time.time()  # don't hammer an offline Kodi; also stops a second refresh starting
+    if background:
+        threading.Thread(target=_refresh_library_index, name="kodi-library", daemon=True).start()
+        return _lib_state
+    return _refresh_library_index()
+
+
+def _refresh_library_index() -> dict:
+    try:
+        if not kodi_configured():
+            return _lib_state
+    except ConfigError:
         return _lib_state
     try:
         movies = (kodi_call("VideoLibrary.GetMovies", {"properties": ["title", "year"]}, timeout=10) or {}).get("movies", [])
         eps = (kodi_call("VideoLibrary.GetEpisodes", {"properties": ["showtitle", "season", "episode"]}, timeout=15) or {}).get("episodes", [])
-    except UpstreamError:
+    except (UpstreamError, ConfigError):
+        return _lib_state
+    except Exception:  # on a worker thread nobody else would see this
+        log.exception("Refreshing the Kodi library index failed")
         return _lib_state
     mv_index: dict[str, set[int]] = {}
     for m in movies:
@@ -832,6 +862,25 @@ def _rating_of(mv: dict, *sources: str):
 
 
 KODI_MOVIE_PROPS = ["title", "year", "runtime", "playcount", "resume", "dateadded", "art", "thumbnail", "ratings", "mpaa", "genre"]
+KODI_MOVIE_PAGE = 500               # movies per JSON-RPC call: keeps each response far below MAX_KODI_BYTES
+KODI_MAX_MOVIES = 50_000
+
+
+def kodi_all_movies() -> list[dict]:
+    """The whole movie library (A-Z), fetched in pages so a large library never trips the response-size limit."""
+    movies: list[dict] = []
+    while len(movies) < KODI_MAX_MOVIES:
+        start = len(movies)
+        res = kodi_call("VideoLibrary.GetMovies", {
+            "properties": KODI_MOVIE_PROPS,
+            "sort": {"method": "sorttitle", "order": "ascending", "ignorearticle": True},
+            "limits": {"start": start, "end": start + KODI_MOVIE_PAGE}}, timeout=20) or {}
+        page = res.get("movies") or []
+        movies.extend(page)
+        total = to_int((res.get("limits") or {}).get("total"), len(movies))
+        if len(page) < KODI_MOVIE_PAGE or len(movies) >= total:
+            break
+    return movies
 
 
 # ==============================================================================
@@ -1120,17 +1169,19 @@ class SlidingWindowLimiter:
         self._events: dict[str, deque] = {}
         self._lock = threading.Lock()
 
-    def allow(self, key: str) -> bool:
+    def allow(self, key: str, cost: int = 1) -> bool:
+        """Records `cost` events for `key` if they fit in the window (all or nothing)."""
         now = time.monotonic()
+        cost = max(1, int(cost))
         with self._lock:
             if len(self._events) > 1000:
                 self._events = {k: q for k, q in self._events.items() if q and now - q[-1] <= self.window}
             q = self._events.setdefault(key, deque())
             while q and now - q[0] > self.window:
                 q.popleft()
-            if len(q) >= self.max_events:
+            if len(q) + cost > self.max_events:
                 return False
-            q.append(now)
+            q.extend([now] * cost)
             return True
 
 
@@ -1922,8 +1973,8 @@ class MobileHandler(BaseHTTPRequestHandler):
         AUTH_FAILURES.clear(self.ip)
         return True
 
-    def _limited(self, limiter: SlidingWindowLimiter, what: str) -> bool:
-        if limiter.allow(self.ip):
+    def _limited(self, limiter: SlidingWindowLimiter, what: str, cost: int = 1) -> bool:
+        if limiter.allow(self.ip, cost):
             return False
         self.send_json(429, {"error": f"Too many {what} requests — slow down a little."}, {"Retry-After": "30"})
         return True
@@ -1989,9 +2040,7 @@ class MobileHandler(BaseHTTPRequestHandler):
                 raise ValueError("Invalid movie.")
             self.send_json(200, kodi_movie_details(movieid))
         elif path == "/api/kodi/movies":
-            res = kodi_call("VideoLibrary.GetMovies", {"properties": KODI_MOVIE_PROPS,
-                            "sort": {"method": "sorttitle", "order": "ascending", "ignorearticle": True}}, timeout=20) or {}
-            self.send_json(200, {"movies": [_kodi_movie(x) for x in res.get("movies", [])]})
+            self.send_json(200, {"movies": [_kodi_movie(x) for x in kodi_all_movies()]})
         elif path == "/api/queue":
             q = sab_request("queue", {"limit": 100}).get("queue", {})
             kb = to_float(q.get("kbpersec"), -1.0)
@@ -2163,7 +2212,7 @@ class MobileHandler(BaseHTTPRequestHandler):
         merged = merge_duplicate_results(combined)
         merged.sort(key=lambda x: (x["pub_ts"], x["size_bytes"]), reverse=True)  # newest survive the cap
         output = cache_results(merged[:MAX_TOTAL_RESULTS])
-        lib = kodi_library_index()
+        lib = kodi_library_index(background=True)
         for item in output:
             item["in_library"] = library_match(item.get("title", ""), lib)
         log.info("search ip=%s indexers=%d q=%r cat=%s results=%d errors=%d", self.ip, len(selected), query, category or "-", len(output), len(errors))
@@ -2191,10 +2240,10 @@ class MobileHandler(BaseHTTPRequestHandler):
             raise ValueError("Select at least one result.")
         if len(ids) > MAX_BATCH_ADD:
             raise ValueError(f"You can add at most {MAX_BATCH_ADD} NZBs at once.")
-        if self._limited(ADD_LIMITER, "add"):
+        unique_ids = list(dict.fromkeys(str(x) for x in ids))
+        if self._limited(ADD_LIMITER, "add", cost=len(unique_ids)):  # each NZB counts, not each batch
             return
         category, priority = parse_add_options(body)
-        unique_ids = list(dict.fromkeys(str(x) for x in ids))
 
         def add(result_id: str):
             try:
@@ -2285,6 +2334,7 @@ def main(argv=None) -> None:
     cfg = init_state()
     if not cfg["indexers"]:
         log.warning("No enabled indexers were found in %s.", CONFIG_FILE.name)
+    kodi_library_index(background=True)  # warm up so the first search can already show "Already in Kodi"
 
     server = ThreadingHTTPServer((args.host, args.port), MobileHandler)
     server.daemon_threads = True

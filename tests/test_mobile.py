@@ -60,7 +60,7 @@ def fake_add(rid, cat, prio):
     if rid == "bad": raise m.UpstreamError("indexer down")
     if rid == "boom": raise KeyError("x")
     return {"id": rid}
-fake = types.SimpleNamespace(_add_one=fake_add, _limited=lambda *a: False,
+fake = types.SimpleNamespace(_add_one=fake_add, _limited=lambda *a, **k: False,
                              send_json=lambda st, d: sent.update(status=st, data=d))
 t0 = time.time()
 m.MobileHandler._post_add_batch(fake, {"ids": ["a", "bad", "b", "boom", "c", "d"]})
