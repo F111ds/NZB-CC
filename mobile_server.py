@@ -6,10 +6,13 @@ A phone version of NZB Command Center, served on your home network:
   * Home   - current download, pause/resume, today's done/failed, free space, Kodi now playing
   * Search - your Newznab indexers, with a category drop-down per indexer; send to SABnzbd
   * Queue  - SABnzbd queue and history (pause, delete, retry, speed limit)
-  * Kodi   - now playing (pause/stop), library scan, recently added, find and play movies
+  * Kodi   - now playing with a full remote, movies and TV shows (continue watching,
+             next episode, missing episodes), "find a better copy" for a movie
+  * More   - download stats, Plex/Jellyfin streams, saved searches, phone alerts (ntfy)
 It reads the SAME nzb_manager_config.json (and DPAPI-protected keys) as the desktop
-app, including its Kodi settings, and never modifies it. Add the page to your phone's
-home screen to open it like an app.
+app, including its Kodi and media-server settings, and never modifies it. Phone-only
+settings (alerts, saved searches) live in mobile_settings.json. Add the page to your
+phone's home screen to open it like an app.
 
 Place this file in the SAME folder as nzb_manager_config.json.
 Standard library only (Python 3.9+).
@@ -18,6 +21,8 @@ Standard library only (Python 3.9+).
     python mobile_server.py --port 9000
     python mobile_server.py --allow-cidr 203.0.113.0/24
     python mobile_server.py --allow-any-client   # NOT recommended
+    python mobile_server.py --install-autostart  # start hidden whenever you log in to Windows
+    python mobile_server.py --remove-autostart
 
 Security model
   * Every /api/ call needs the access code (X-Mobile-Token header, constant-time compare).
@@ -55,11 +60,12 @@ import xml.etree.ElementTree as ET
 import zlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, timedelta
 from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.4.1"
+VERSION = "3.5.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -235,13 +241,14 @@ class ConfigError(RuntimeError):
 
 
 _KNOWN_SECRETS: frozenset[str] = frozenset()
-_SECRET_QS = re.compile(r"(?i)\b(apikey|api_key|passkey|token|r)=([^&\s'\"<>]+)")
+_EXTRA_SECRETS: frozenset[str] = frozenset()  # phone-only secrets (the ntfy access token)
+_SECRET_QS = re.compile(r"(?i)\b(apikey|api_key|passkey|token|r|x-plex-token)=([^&\s'\"<>]+)")
 
 
 def redact(text) -> str:
     """Strips API keys from any text (query-string style, plus every key currently configured)."""
     out = _SECRET_QS.sub(lambda m: f"{m.group(1)}=***", str(text))
-    for secret in _KNOWN_SECRETS:  # a frozenset that is only ever swapped whole, never mutated
+    for secret in _KNOWN_SECRETS | _EXTRA_SECRETS:  # frozensets that are only ever swapped whole, never mutated
         if secret and len(secret) >= 6:
             out = out.replace(secret, "***")
     return out
@@ -485,10 +492,22 @@ def load_config(path: Path | None = None) -> dict:
     kodi = {"url": normalize_kodi_url(str(data.get("kodi_url") or "")),
             "user": str(data.get("kodi_username") or ""), "password": kodi_pw}
 
+    media_token = ""
+    try:
+        media_token = _dpapi_unprotect(str(data.get("media_server_token") or "")).strip()
+    except ConfigError:
+        log.warning("Media server token could not be decrypted; Plex/Jellyfin will be unavailable.")
+    media_url = str(data.get("media_server_url") or "").strip().rstrip("/")
+    if media_url and not media_url.startswith(("http://", "https://")):
+        media_url = "http://" + media_url
+    media_type = "Plex" if str(data.get("media_server_type") or "").lower() == "plex" else "Jellyfin"
+    media = {"type": media_type, "url": media_url, "token": media_token}
+
     global _KNOWN_SECRETS
     # Swap in a complete new set at once, so a concurrent redact() never sees an empty/partial set.
-    _KNOWN_SECRETS = frozenset([sab_key] + [ix["api_key"] for ix in indexers if ix["api_key"]] + ([kodi_pw] if kodi_pw else []))
-    return {"sab_url": sab_url, "sab_api_key": sab_key, "indexers": indexers, "kodi": kodi}
+    _KNOWN_SECRETS = frozenset([sab_key] + [ix["api_key"] for ix in indexers if ix["api_key"]]
+                               + [s for s in (kodi_pw, media_token) if s])
+    return {"sab_url": sab_url, "sab_api_key": sab_key, "indexers": indexers, "kodi": kodi, "media": media}
 
 
 _cfg_lock = threading.Lock()
@@ -678,7 +697,7 @@ def kodi_call(method: str, params: dict | None = None, timeout: float = 6):
     except ValueError:
         raise UpstreamError("Kodi returned an invalid response.") from None
     if isinstance(body, dict) and body.get("error"):
-        raise UpstreamError(f"Kodi: {(body['error'] or {}).get('message', 'error')}")
+        raise UpstreamError(f"Kodi: {_kdict(body['error']).get('message', 'error')}")
     return body.get("result") if isinstance(body, dict) else None
 
 
@@ -688,13 +707,15 @@ def _kodi_secs(t) -> int:
 
 
 def kodi_now_playing() -> dict | None:
-    players = kodi_call("Player.GetActivePlayers") or []
+    players = kodi_call("Player.GetActivePlayers")
+    players = [p for p in players if isinstance(p, dict)] if isinstance(players, list) else []
     video = [p for p in players if p.get("type") == "video"] or players
     if not video:
         return None
     pid = to_int(video[0].get("playerid"))
-    item = (kodi_call("Player.GetItem", {"playerid": pid, "properties": ["title", "showtitle", "season", "episode", "year", "art", "thumbnail"]}) or {}).get("item", {})
-    props = kodi_call("Player.GetProperties", {"playerid": pid, "properties": ["percentage", "time", "totaltime", "speed"]}) or {}
+    item = _kdict(kodi_call("Player.GetItem", {"playerid": pid, "properties": ["title", "showtitle", "season", "episode", "year", "art", "thumbnail"]})).get("item", {})
+    props = _kdict(kodi_call("Player.GetProperties", {"playerid": pid, "properties": [
+        "percentage", "time", "totaltime", "speed", "currentsubtitle", "subtitleenabled", "currentaudiostream"]}))
     title = str(item.get("title") or item.get("label") or "Playing")
     if item.get("showtitle"):
         sub = f"{item['showtitle']} · S{to_int(item.get('season')):02d}E{to_int(item.get('episode')):02d}"
@@ -707,7 +728,66 @@ def kodi_now_playing() -> dict | None:
             "movieid": to_int(item.get("id")) if item.get("type") == "movie" else None,
             "time": _kodi_secs(props.get("time")),
             "total": _kodi_secs(props.get("totaltime")), "pct": to_float(props.get("percentage")),
-            "paused": to_int(props.get("speed")) == 0}
+            "paused": to_int(props.get("speed")) == 0,
+            "subtitle": _stream_label(props.get("currentsubtitle")) if props.get("subtitleenabled") else "",
+            "audio": _stream_label(props.get("currentaudiostream"))}
+
+
+def _kdict(value) -> dict:
+    """Kodi results are dicts; anything else (e.g. "OK" from an action) is treated as empty."""
+    return value if isinstance(value, dict) else {}
+
+
+def _stream_label(stream) -> str:
+    stream = _kdict(stream)
+    name, lang = str(stream.get("name") or "").strip(), str(stream.get("language") or "").strip()
+    return (name if name.lower() not in ("", lang.lower()) else lang.upper())[:40]
+
+
+def kodi_volume() -> dict | None:
+    try:
+        res = _kdict(kodi_call("Application.GetProperties", {"properties": ["volume", "muted"]}))
+    except UpstreamError:
+        return None
+    return {"level": to_int(res.get("volume")), "muted": bool(res.get("muted"))} if res else None
+
+
+KODI_NAV = {"up": "Input.Up", "down": "Input.Down", "left": "Input.Left", "right": "Input.Right",
+            "select": "Input.Select", "back": "Input.Back", "home": "Input.Home", "info": "Input.Info",
+            "menu": "Input.ContextMenu", "osd": "Input.ShowOSD"}
+KODI_PLAYER_ACTIONS = ("playpause", "stop", "seek_fwd", "seek_back", "seek_pct", "subs_next", "subs_off", "audio_next")
+
+
+def kodi_control(action: str, pid: int, value=None) -> None:
+    """Remote-control actions. Navigation and volume need no player; the rest act on `pid`."""
+    if action in KODI_NAV:
+        kodi_call(KODI_NAV[action])
+    elif action in ("vol_up", "vol_down"):
+        kodi_call("Application.SetVolume", {"volume": "increment" if action == "vol_up" else "decrement"})
+    elif action == "mute":
+        kodi_call("Application.SetMute", {"mute": "toggle"})
+    elif action in KODI_PLAYER_ACTIONS:
+        if not 0 <= pid <= 10:
+            raise ValueError("Nothing is playing on Kodi.")
+        if action == "playpause":
+            kodi_call("Player.PlayPause", {"playerid": pid})
+        elif action == "stop":
+            kodi_call("Player.Stop", {"playerid": pid})
+        elif action in ("seek_fwd", "seek_back"):
+            kodi_call("Player.Seek", {"playerid": pid, "value": {"seconds": 30 if action == "seek_fwd" else -15}})
+        elif action == "seek_pct":
+            pct = to_float(value, -1.0)
+            if not 0 <= pct <= 100:
+                raise ValueError("Seek position must be 0-100%.")
+            kodi_call("Player.Seek", {"playerid": pid, "value": {"percentage": pct}})
+        elif action == "subs_next":
+            kodi_call("Player.SetSubtitle", {"playerid": pid, "subtitle": "next", "enable": True})
+        elif action == "subs_off":
+            kodi_call("Player.SetSubtitle", {"playerid": pid, "subtitle": "off"})
+        else:
+            kodi_call("Player.SetAudioStream", {"playerid": pid, "stream": "next"})
+    else:
+        raise ValueError("Invalid player action.")
 
 
 def _art_ref(value) -> str:
@@ -741,8 +821,9 @@ def kodi_art(ref: str) -> tuple[bytes, str]:
 def kodi_movie_details(movieid: int) -> dict:
     # Kodi rejects a request that names the same property twice ("Invalid params"), so de-duplicate.
     props = list(dict.fromkeys(KODI_MOVIE_PROPS + [
-        "plot", "tagline", "genre", "director", "mpaa", "rating", "ratings", "votes", "imdbnumber", "cast", "studio", "premiered"]))
-    res = kodi_call("VideoLibrary.GetMovieDetails", {"movieid": movieid, "properties": props}) or {}
+        "plot", "tagline", "genre", "director", "mpaa", "rating", "ratings", "votes", "imdbnumber", "cast", "studio", "premiered",
+        "streamdetails"]))
+    res = _kdict(kodi_call("VideoLibrary.GetMovieDetails", {"movieid": movieid, "properties": props}))
     mv = res.get("moviedetails") or {}
     if not mv:
         raise ValueError("That movie isn't in Kodi's library any more.")
@@ -752,7 +833,10 @@ def kodi_movie_details(movieid: int) -> dict:
     imdb = ratings.get("imdb") or {}
     other = next((dict(v, source=k) for k, v in ratings.items() if k != "imdb" and isinstance(v, dict)), None)
     imdb_id = str(mv.get("imdbnumber") or "")
+    quality, hdr = video_quality(mv.get("streamdetails"))
     out.update({
+        "quality": quality, "hdr": hdr,
+        "imdb_id": imdb_id if IMDB_RE.fullmatch(imdb_id) else "",
         "fanart": _art_ref(art.get("fanart")),
         "plot": str(mv.get("plot") or ""), "tagline": str(mv.get("tagline") or ""),
         "genres": [str(g) for g in (mv.get("genre") or [])][:5],
@@ -768,6 +852,25 @@ def kodi_movie_details(movieid: int) -> dict:
         "cast": [{"name": str(c.get("name") or ""), "role": str(c.get("role") or "")} for c in (mv.get("cast") or [])[:8]],
     })
     return out
+
+
+IMDB_RE = re.compile(r"tt\d{5,10}")
+
+
+def video_quality(streamdetails) -> tuple[str, str]:
+    """("2160p" / "1080p" / "720p" / "SD" / "", HDR type) of the file Kodi has."""
+    videos = _kdict(streamdetails).get("video") or [{}]
+    v = _kdict(videos[0] if isinstance(videos, list) and videos else {})
+    w, h = to_int(v.get("width")), to_int(v.get("height"))
+    if w >= 3200 or h >= 2000:
+        q = "2160p"
+    elif w >= 1800 or h >= 1000:
+        q = "1080p"
+    elif w >= 1200 or h >= 700:
+        q = "720p"
+    else:
+        q = "SD" if w or h else ""
+    return q, str(v.get("hdrtype") or "")
 
 
 def _norm_title(text: str) -> str:
@@ -804,8 +907,8 @@ def _refresh_library_index() -> dict:
     except ConfigError:
         return _lib_state
     try:
-        movies = (kodi_call("VideoLibrary.GetMovies", {"properties": ["title", "year"]}, timeout=10) or {}).get("movies", [])
-        eps = (kodi_call("VideoLibrary.GetEpisodes", {"properties": ["showtitle", "season", "episode"]}, timeout=15) or {}).get("episodes", [])
+        movies = _kdict(kodi_call("VideoLibrary.GetMovies", {"properties": ["title", "year"]}, timeout=10)).get("movies", [])
+        eps = _kdict(kodi_call("VideoLibrary.GetEpisodes", {"properties": ["showtitle", "season", "episode"]}, timeout=15)).get("episodes", [])
     except (UpstreamError, ConfigError):
         return _lib_state
     except Exception:  # on a worker thread nobody else would see this
@@ -866,21 +969,135 @@ KODI_MOVIE_PAGE = 500               # movies per JSON-RPC call: keeps each respo
 KODI_MAX_MOVIES = 50_000
 
 
-def kodi_all_movies() -> list[dict]:
-    """The whole movie library (A-Z), fetched in pages so a large library never trips the response-size limit."""
-    movies: list[dict] = []
-    while len(movies) < KODI_MAX_MOVIES:
-        start = len(movies)
-        res = kodi_call("VideoLibrary.GetMovies", {
-            "properties": KODI_MOVIE_PROPS,
-            "sort": {"method": "sorttitle", "order": "ascending", "ignorearticle": True},
-            "limits": {"start": start, "end": start + KODI_MOVIE_PAGE}}, timeout=20) or {}
-        page = res.get("movies") or []
-        movies.extend(page)
-        total = to_int((res.get("limits") or {}).get("total"), len(movies))
-        if len(page) < KODI_MOVIE_PAGE or len(movies) >= total:
+def kodi_paged(method: str, key: str, params: dict, page: int = KODI_MOVIE_PAGE,
+               cap: int = KODI_MAX_MOVIES, timeout: float = 20) -> list[dict]:
+    """Fetches a Kodi list in pages so a large library never trips the response-size limit."""
+    items: list[dict] = []
+    while len(items) < cap:
+        start = len(items)
+        res = _kdict(kodi_call(method, dict(params, limits={"start": start, "end": start + page}), timeout=timeout))
+        chunk = [x for x in (res.get(key) or []) if isinstance(x, dict)]
+        items.extend(chunk)
+        total = to_int(_kdict(res.get("limits")).get("total"), len(items))
+        if len(chunk) < page or len(items) >= total:
             break
-    return movies
+    return items
+
+
+def kodi_all_movies() -> list[dict]:
+    """The whole movie library, A-Z."""
+    return kodi_paged("VideoLibrary.GetMovies", "movies", {
+        "properties": KODI_MOVIE_PROPS, "sort": {"method": "sorttitle", "order": "ascending", "ignorearticle": True}})
+
+
+# ---- TV shows ------------------------------------------------------------------
+KODI_SHOW_PROPS = ["title", "year", "art", "thumbnail", "episode", "watchedepisodes", "dateadded", "lastplayed", "genre"]
+KODI_EP_PROPS = ["title", "season", "episode", "playcount", "resume", "runtime", "firstaired", "tvshowid", "showtitle"]
+EPISODE_SORT = {"method": "episode", "order": "ascending"}
+
+
+def _kodi_show(s: dict) -> dict:
+    art = _kdict(s.get("art"))
+    return {"id": to_int(s.get("tvshowid")), "title": str(s.get("title") or s.get("label") or "Untitled"),
+            "year": to_int(s.get("year")) or None, "poster": _art_ref(art.get("poster") or s.get("thumbnail")),
+            "episodes": to_int(s.get("episode")), "watched": to_int(s.get("watchedepisodes")),
+            "added": str(s.get("dateadded") or "")[:19], "lastplayed": str(s.get("lastplayed") or "")[:19],
+            "genres": [str(g) for g in (s.get("genre") or [])][:3]}
+
+
+def _kodi_episode(e: dict) -> dict:
+    return {"id": to_int(e.get("episodeid")), "show_id": to_int(e.get("tvshowid")), "show": str(e.get("showtitle") or ""),
+            "title": str(e.get("title") or e.get("label") or "Episode"),
+            "season": to_int(e.get("season")), "episode": to_int(e.get("episode")),
+            "watched": to_int(e.get("playcount")) > 0, "resume": int(to_float(_kdict(e.get("resume")).get("position"))),
+            "runtime": to_int(e.get("runtime")), "aired": str(e.get("firstaired") or "")[:10]}
+
+
+def episode_gaps(numbers) -> list[int]:
+    """Episode numbers missing before the highest one Kodi has (Kodi can't know about later ones)."""
+    have = {n for n in numbers if n > 0}
+    return [n for n in range(1, max(have)) if n not in have] if have else []
+
+
+def next_episode(episodes: list[dict]) -> dict | None:
+    """The episode to watch next: one already started, else the first unwatched one after the last watched."""
+    ordered = sorted((e for e in episodes if e["season"] > 0), key=lambda e: (e["season"], e["episode"]))
+    started = [e for e in ordered if e["resume"] > 0 and not e["watched"]]
+    if started:
+        return started[0]
+    last = max((i for i, e in enumerate(ordered) if e["watched"]), default=-1)
+    return next((e for e in ordered[last + 1:] if not e["watched"]), None)
+
+
+def kodi_all_shows() -> list[dict]:
+    return [_kodi_show(s) for s in kodi_paged("VideoLibrary.GetTVShows", "tvshows", {
+        "properties": KODI_SHOW_PROPS, "sort": {"method": "sorttitle", "order": "ascending", "ignorearticle": True}})]
+
+
+def kodi_show_episodes(show_id: int) -> list[dict]:
+    return [_kodi_episode(e) for e in kodi_paged("VideoLibrary.GetEpisodes", "episodes", {
+        "tvshowid": show_id, "properties": KODI_EP_PROPS, "sort": EPISODE_SORT}, page=1000, cap=10_000)]
+
+
+def kodi_show_details(show_id: int) -> dict:
+    det = _kdict(_kdict(kodi_call("VideoLibrary.GetTVShowDetails", {"tvshowid": show_id, "properties": list(dict.fromkeys(
+        KODI_SHOW_PROPS + ["plot", "studio", "premiered", "imdbnumber"]))})).get("tvshowdetails"))
+    if not det:
+        raise ValueError("That show isn't in Kodi's library any more.")
+    det.setdefault("tvshowid", show_id)
+    episodes = kodi_show_episodes(show_id)
+    by_season: dict[int, list[dict]] = {}
+    for ep in episodes:
+        by_season.setdefault(ep["season"], []).append(ep)
+    out = _kodi_show(det)
+    art = _kdict(det.get("art"))
+    out.update({
+        "fanart": _art_ref(art.get("fanart")), "plot": str(det.get("plot") or ""),
+        "studio": [str(x) for x in (det.get("studio") or [])][:2], "premiered": str(det.get("premiered") or ""),
+        "seasons": [{"season": s, "episodes": sorted(eps, key=lambda e: e["episode"]),
+                     "missing": episode_gaps(e["episode"] for e in eps) if s > 0 else []}
+                    for s, eps in sorted(by_season.items(), key=lambda kv: (kv[0] == 0, kv[0]))],  # specials last
+        "next": next_episode(episodes),
+    })
+    return out
+
+
+def kodi_continue_watching(limit: int = 6) -> list[dict]:
+    """Shows you've started and not finished, most recently watched first, each with its next episode."""
+    res = _kdict(kodi_call("VideoLibrary.GetTVShows", {"properties": KODI_SHOW_PROPS,
+                           "sort": {"method": "lastplayed", "order": "descending"}, "limits": {"start": 0, "end": 25}}))
+    out = []
+    for raw in res.get("tvshows") or []:
+        show = _kodi_show(_kdict(raw))
+        if not show["lastplayed"] or show["watched"] >= show["episodes"]:
+            continue
+        nxt = next_episode(kodi_show_episodes(show["id"]))
+        if nxt:
+            out.append({"show": show, "episode": nxt})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def kodi_missing_episodes(cap: int = 400) -> list[dict]:
+    """Gaps inside each season of every show in Kodi's library."""
+    episodes = kodi_paged("VideoLibrary.GetEpisodes", "episodes", {"properties": ["tvshowid", "showtitle", "season", "episode"]},
+                          page=5000, cap=300_000, timeout=30)
+    by_show: dict[tuple[int, str], dict[int, set[int]]] = {}
+    for e in episodes:
+        season = to_int(e.get("season"))
+        if season > 0:
+            key = (to_int(e.get("tvshowid")), str(e.get("showtitle") or ""))
+            by_show.setdefault(key, {}).setdefault(season, set()).add(to_int(e.get("episode")))
+    out: list[dict] = []
+    for (show_id, title), seasons in sorted(by_show.items(), key=lambda kv: _norm_title(kv[0][1])):
+        for season in sorted(seasons):
+            gaps = episode_gaps(seasons[season])
+            if gaps:
+                out.append({"show_id": show_id, "show": title, "season": season, "missing": gaps[:60]})
+                if len(out) >= cap:
+                    return out
+    return out
 
 
 # ==============================================================================
@@ -973,7 +1190,7 @@ def parse_newznab_json(raw: bytes, indexer: dict) -> list[dict]:
     return results
 
 
-def search_one(indexer: dict, query: str, category: str, limit: int) -> list[dict]:
+def search_one(indexer: dict, query: str, category: str, limit: int, plan: dict | None = None) -> list[dict]:
     if not indexer["api_key"]:
         raise UpstreamError(indexer.get("key_error") or "API key is blank in the desktop configuration.")
     params: dict[str, object] = {"t": "search", "apikey": indexer["api_key"], "limit": limit}
@@ -981,6 +1198,8 @@ def search_one(indexer: dict, query: str, category: str, limit: int) -> list[dic
         params["q"] = query
     if category:
         params["cat"] = category
+    if plan:  # a Newznab TV / movie search (t=tvsearch / t=movie and their own parameters)
+        params.update(plan)
     url = indexer["url"] + "?" + urllib.parse.urlencode(params)
     raw = http_fetch(url, timeout=REQUEST_TIMEOUT, max_bytes=MAX_API_BYTES)
 
@@ -995,11 +1214,82 @@ def search_one(indexer: dict, query: str, category: str, limit: int) -> list[dic
             raise UpstreamError(f"Indexer returned malformed XML ({redact(xml_err)}).") from None
 
 
+_TV_QUERY = re.compile(r"^(.*?)[ ._\-]+S(\d{1,2})(?:[ ._\-]?E(\d{1,3}))?$", re.I)
+
+
+def search_plan(query: str, imdbid: str = "") -> dict | None:
+    """A Newznab TV or movie search when the request allows one ("Show S02E04", or an IMDb id)."""
+    if imdbid:
+        return {"t": "movie", "imdbid": imdbid[2:]}
+    m = _TV_QUERY.match(query.strip())
+    if m and m.group(1).strip():
+        plan: dict = {"t": "tvsearch", "q": m.group(1).strip(), "season": int(m.group(2))}
+        if m.group(3):
+            plan["ep"] = int(m.group(3))
+        return plan
+    return None
+
+
+def search_indexer(indexer: dict, query: str, category: str, limit: int, plan: dict | None) -> list[dict]:
+    """Uses the precise TV/movie search when it applies, falling back to a plain text search
+    if the indexer doesn't support it or finds nothing that way."""
+    if plan:
+        try:
+            found = search_one(indexer, query, category, limit, plan)
+            if found:
+                return found
+        except UpstreamError as exc:
+            if not query or str(exc).startswith(("Connection failed", "Network error", "HTTP 401", "HTTP 429")):
+                raise
+        if not query:
+            return []
+    return search_one(indexer, query, category, limit)
+
+
+def run_search(query: str, chosen: str, category: str, imdbid: str = "") -> tuple[list[dict], list[str], int]:
+    """Searches the chosen indexers in parallel. Returns (merged results, per-indexer errors, indexers searched)."""
+    query = str(query or "").strip()[:180]
+    category = str(category or "").strip()
+    if category and not CATEGORY_RE.match(category):
+        raise ValueError("Category must be numeric Newznab IDs, e.g. 2000 or 5030,5040.")
+    if imdbid and not IMDB_RE.fullmatch(imdbid):
+        raise ValueError("Invalid IMDb id.")
+    indexers = get_config()["indexers"]
+    if not indexers:
+        raise ValueError("No enabled indexers were found in the desktop configuration.")
+    chosen = str(chosen or "*")
+    selected = indexers if chosen == "*" else [x for x in indexers if x["id"] == chosen]
+    if not selected:
+        raise ValueError("Selected indexer does not exist.")
+    plan = search_plan(query, imdbid)
+
+    combined: list[dict] = []
+    errors: list[str] = []
+    with ThreadPoolExecutor(max_workers=min(6, len(selected))) as pool:
+        futures = {pool.submit(search_indexer, ix, query, category, MAX_RESULTS_PER_INDEXER, plan): ix for ix in selected}
+        for future in as_completed(futures):
+            ix = futures[future]
+            try:
+                combined.extend(future.result())
+            except UpstreamError as exc:
+                errors.append(f"{ix['name']}: {exc}")
+            except Exception:
+                log.exception("Unexpected error searching %s", ix["name"])
+                errors.append(f"{ix['name']}: unexpected error (see mobile_server.log)")
+    merged = merge_duplicate_results(combined)
+    merged.sort(key=lambda x: (x["pub_ts"], x["size_bytes"]), reverse=True)  # newest survive the cap
+    return merged[:MAX_TOTAL_RESULTS], errors, len(selected)
+
+
+def result_key(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(title or "").lower())
+
+
 def merge_duplicate_results(items: list[dict]) -> list[dict]:
     """Groups identical titles across indexers, keeping every source so a failed download can fall back."""
     merged: dict[str, dict] = {}
     for item in items:
-        key = re.sub(r"[^a-z0-9]+", "", item["title"].lower()) or secrets.token_hex(8)
+        key = result_key(item["title"]) or secrets.token_hex(8)
         source = {
             "indexer_id": item["indexer_id"], "indexer_name": item["indexer_name"],
             "indexer_url": item["indexer_url"], "nzb_url": item["nzb_url"],
@@ -1143,6 +1433,440 @@ def download_indexer_nzb(item: dict) -> tuple[bytes, str]:
         except UpstreamError as exc:
             errors.append(f"{indexer['name']}: {exc}")
     raise UpstreamError("; ".join(errors) or "No download source is available for this result.")
+
+
+# ==============================================================================
+# 5b. PLEX / JELLYFIN (same settings as the desktop app's Media Server tab)
+# ==============================================================================
+
+_media_user_cache: dict[str, str] = {}
+
+
+def media_configured() -> bool:
+    m = get_config()["media"]
+    return bool(m["url"] and m["token"])
+
+
+def media_call(path: str, params: dict | None = None, timeout: float = 8):
+    m = get_config()["media"]
+    if not (m["url"] and m["token"]):
+        raise UpstreamError("No media server is set up — add one in the desktop app's Media Server tab.")
+    headers = {"Accept": "application/json", ("X-Plex-Token" if m["type"] == "Plex" else "X-Emby-Token"): m["token"]}
+    url = m["url"] + path + ("?" + urllib.parse.urlencode(params) if params else "")
+    try:
+        raw = http_fetch(url, timeout=timeout, max_bytes=MAX_KODI_BYTES, headers=headers)
+    except UpstreamError as exc:
+        msg = str(exc)
+        if msg.startswith(("Connection failed", "Network error")):
+            raise UpstreamError(f"Can't reach {m['type']} — is it running?") from None
+        raise UpstreamError(f"{m['type']}: {msg}") from None
+    if not raw.strip():
+        return {}
+    try:
+        return json.loads(raw.decode("utf-8", errors="replace"))
+    except ValueError:
+        raise UpstreamError(f"{m['type']} returned an unreadable response.") from None
+
+
+def _media_session(title: str, sub: str, user: str, device: str, paused: bool, pos_s: float, dur_s: float, method: str) -> dict:
+    return {"title": title, "sub": sub, "user": user, "device": device, "paused": paused, "method": method,
+            "time": int(pos_s), "total": int(dur_s), "pct": round(min(100.0, pos_s / dur_s * 100), 1) if dur_s > 0 else 0.0}
+
+
+def media_sessions() -> list[dict]:
+    m = get_config()["media"]
+    out = []
+    if m["type"] == "Plex":
+        for x in _kdict(_kdict(media_call("/status/sessions")).get("MediaContainer")).get("Metadata") or []:
+            x = _kdict(x)
+            player, user = _kdict(x.get("Player")), _kdict(x.get("User"))
+            episode = x.get("type") == "episode"
+            out.append(_media_session(
+                str(x.get("grandparentTitle") if episode else x.get("title") or "Playing"),
+                f"S{to_int(x.get('parentIndex')):02d}E{to_int(x.get('index')):02d} · {x.get('title') or ''}" if episode else str(x.get("year") or ""),
+                str(user.get("title") or "User"), str(player.get("product") or player.get("title") or "Plex"),
+                str(player.get("state") or "").lower() == "paused",
+                to_float(x.get("viewOffset")) / 1000, to_float(x.get("duration")) / 1000,
+                "Transcode" if x.get("TranscodeSession") else "Direct play"))
+        return out
+    sessions = media_call("/Sessions")
+    for s in sessions if isinstance(sessions, list) else []:
+        item = _kdict(_kdict(s).get("NowPlayingItem"))
+        if not item:
+            continue
+        ps = _kdict(s.get("PlayState"))
+        episode = item.get("Type") == "Episode"
+        out.append(_media_session(
+            str(item.get("SeriesName") if episode else item.get("Name") or "Playing"),
+            f"S{to_int(item.get('ParentIndexNumber')):02d}E{to_int(item.get('IndexNumber')):02d} · {item.get('Name') or ''}" if episode else str(item.get("ProductionYear") or ""),
+            str(s.get("UserName") or "User"), f"{s.get('Client') or 'Client'} · {s.get('DeviceName') or 'Device'}",
+            bool(ps.get("IsPaused")), to_float(ps.get("PositionTicks")) / 1e7, to_float(item.get("RunTimeTicks")) / 1e7,
+            "Transcode" if s.get("TranscodingInfo") or ps.get("PlayMethod") == "Transcode" else "Direct play"))
+    return out
+
+
+def media_recent(limit: int = 12) -> list[dict]:
+    m = get_config()["media"]
+    out = []
+    if m["type"] == "Plex":
+        mc = _kdict(_kdict(media_call("/library/recentlyAdded", {"X-Plex-Container-Start": 0, "X-Plex-Container-Size": limit})).get("MediaContainer"))
+        for x in (mc.get("Metadata") or [])[:limit]:
+            x = _kdict(x)
+            kind = str(x.get("type") or "")
+            if kind == "episode":
+                title, sub = x.get("grandparentTitle"), f"S{to_int(x.get('parentIndex')):02d}E{to_int(x.get('index')):02d} · {x.get('title') or ''}"
+            elif kind == "season":
+                title, sub = x.get("parentTitle"), str(x.get("title") or "")
+            else:
+                title, sub = x.get("title"), str(x.get("year") or "")
+            out.append({"title": str(title or "Untitled"), "sub": sub, "kind": kind})
+        return out
+    key = f"{m['url']}|{m['token']}"
+    uid = _media_user_cache.get(key, "")
+    if not uid:
+        users = media_call("/Users")
+        users = [u for u in users if isinstance(u, dict)] if isinstance(users, list) else []
+        admin = next((u for u in users if _kdict(u.get("Policy")).get("IsAdministrator")), users[0] if users else {})
+        uid = str(admin.get("Id") or "")
+        if not re.fullmatch(r"[A-Za-z0-9\-]{1,64}", uid):
+            raise UpstreamError("Jellyfin didn't list any users for this API key.")
+        _media_user_cache[key] = uid
+    items = media_call(f"/Users/{uid}/Items/Latest", {"Limit": limit, "Fields": "ProductionYear"})
+    for x in (items if isinstance(items, list) else [])[:limit]:
+        x = _kdict(x)
+        if x.get("Type") == "Episode":
+            title, sub = x.get("SeriesName"), f"S{to_int(x.get('ParentIndexNumber')):02d}E{to_int(x.get('IndexNumber')):02d} · {x.get('Name') or ''}"
+        else:
+            title, sub = x.get("Name"), str(x.get("ProductionYear") or "")
+        out.append({"title": str(title or "Untitled"), "sub": sub, "kind": str(x.get("Type") or "").lower()})
+    return out
+
+
+def media_overview(with_recent: bool = True) -> dict:
+    if not media_configured():
+        return {"configured": False}
+    m = get_config()["media"]
+    info: dict = {"configured": True, "type": m["type"], "online": True}
+    try:
+        info["sessions"] = media_sessions()
+        if with_recent:
+            info["recent"] = media_recent()
+    except UpstreamError as exc:
+        info.update(online=False, error=str(exc))
+    return info
+
+
+# ==============================================================================
+# 5c. PHONE SETTINGS, ALERTS (ntfy), SAVED SEARCHES, STATS, AUTOSTART
+# ==============================================================================
+
+SETTINGS_FILE = BASE_DIR / "mobile_settings.json"
+MAX_SAVED_SEARCHES = 20
+SAVED_SEEN_CAP = 600
+SAVED_INTERVALS = (1, 3, 6, 12, 24)
+_settings_lock = threading.RLock()
+
+
+def _default_settings() -> dict:
+    return {"ntfy_url": "", "ntfy_token": "", "notify_complete": True, "notify_failed": True, "notify_saved": True,
+            "saved_interval_hours": 6, "saved_searches": []}
+
+
+def load_settings() -> dict:
+    """Phone-only settings (never the desktop configuration). Missing/damaged file -> defaults."""
+    settings = _default_settings()
+    try:
+        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return settings
+    except (OSError, ValueError) as exc:
+        log.warning("%s could not be read (%s); using defaults.", SETTINGS_FILE.name, exc)
+        return settings
+    if isinstance(data, dict):
+        for key, default in _default_settings().items():
+            if isinstance(data.get(key), type(default)):
+                settings[key] = data[key]
+    settings["saved_searches"] = [x for x in settings["saved_searches"] if isinstance(x, dict) and x.get("id")]
+    return settings
+
+
+def save_settings(settings: dict) -> None:
+    tmp = SETTINGS_FILE.with_name(SETTINGS_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(settings, indent=1, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, SETTINGS_FILE)
+
+
+def update_settings(fn):
+    """Read-modify-write of the settings file under a lock; returns fn's result."""
+    with _settings_lock:
+        settings = load_settings()
+        result = fn(settings)
+        save_settings(settings)
+        return result
+
+
+def _dpapi_protect(text: str) -> str:
+    """Encrypts a phone-only secret for this Windows user (stored as-is elsewhere)."""
+    if not text or os.name != "nt":
+        return text
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", ctypes.wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
+
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    crypt32.CryptProtectData.argtypes = [
+        ctypes.POINTER(DATA_BLOB), ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.wintypes.DWORD, ctypes.POINTER(DATA_BLOB)]
+    crypt32.CryptProtectData.restype = ctypes.wintypes.BOOL
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    raw = text.encode("utf-8")
+    in_buf = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
+    in_blob, out_blob = DATA_BLOB(len(raw), in_buf), DATA_BLOB()
+    if not crypt32.CryptProtectData(ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)):
+        return text
+    try:
+        return "dpapi:" + base64.b64encode(ctypes.string_at(out_blob.pbData, out_blob.cbData)).decode("ascii")
+    finally:
+        kernel32.LocalFree(out_blob.pbData)
+
+
+def ntfy_token(settings: dict) -> str:
+    global _EXTRA_SECRETS
+    try:
+        token = _dpapi_unprotect(str(settings.get("ntfy_token") or ""))
+    except ConfigError:
+        return ""
+    if token and token not in _EXTRA_SECRETS:
+        _EXTRA_SECRETS = frozenset([token])
+    return token
+
+
+def validate_ntfy_url(url: str) -> str:
+    url = str(url or "").strip()
+    if not url:
+        return ""
+    if len(url) > 300:
+        raise ValueError("That ntfy URL is too long.")
+    p = urllib.parse.urlsplit(url)
+    if p.scheme not in ("http", "https") or not p.hostname:
+        raise ValueError("Use a full ntfy topic URL, e.g. https://ntfy.sh/my-secret-topic.")
+    if p.query or p.fragment or p.username or p.password:
+        raise ValueError("Leave out ?query, #fragment and user:password — put a token in the token field instead.")
+    topic = p.path.rstrip("/").rpartition("/")[2]
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", topic):
+        raise ValueError("The URL must end in a topic name (letters, digits, - and _).")
+    if p.scheme == "http" and host_is_public(p.hostname):
+        raise ValueError("Use https:// for an ntfy server on the internet.")
+    return urllib.parse.urlunsplit((p.scheme, p.netloc, p.path.rstrip("/"), "", ""))
+
+
+def send_notification(title: str, message: str, tags: tuple = (), priority: int = 3, settings: dict | None = None) -> bool:
+    """Publishes to the configured ntfy topic (JSON publishing, so any language works). False if not set up."""
+    settings = settings or load_settings()
+    url = settings.get("ntfy_url") or ""
+    if not url:
+        return False
+    p = urllib.parse.urlsplit(url)
+    base_path, _, topic = p.path.rstrip("/").rpartition("/")
+    endpoint = urllib.parse.urlunsplit((p.scheme, p.netloc, base_path + "/", "", ""))
+    body = json.dumps({"topic": topic, "title": title[:120], "message": message[:1500],
+                       "tags": list(tags), "priority": priority}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    token = ntfy_token(settings)
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    http_fetch(endpoint, timeout=10, max_bytes=64_000, data=body, headers=headers)
+    return True
+
+
+def _title_list(names: list[str], limit: int = 5) -> str:
+    text = "\n".join(names[:limit])
+    return text + (f"\n…and {len(names) - limit} more" if len(names) > limit else "")
+
+
+def due_saved_search(settings: dict, now: float) -> dict | None:
+    hours = to_int(settings.get("saved_interval_hours"), 6)
+    interval = (hours if hours in SAVED_INTERVALS else 6) * 3600
+    due = [x for x in settings["saved_searches"] if now - to_float(x.get("last_run")) >= interval]
+    return min(due, key=lambda x: to_float(x.get("last_run")), default=None)
+
+
+def run_saved_search(search_id: str, notify: bool = True) -> dict:
+    """Runs one saved search. The first successful run only records what exists; later runs report new releases."""
+    settings = load_settings()
+    entry = next((x for x in settings["saved_searches"] if x.get("id") == search_id), None)
+    if not entry:
+        raise ValueError("That saved search no longer exists.")
+    try:
+        merged, errors, _ = run_search(entry.get("query", ""), entry.get("indexer") or "*", entry.get("category") or "")
+        error = "; ".join(errors)[:300] if errors and not merged else ""
+    except (ValueError, UpstreamError, ConfigError) as exc:
+        merged, error = [], redact(exc)[:300]
+    now = time.time()
+
+    def apply(st: dict):
+        e = next((x for x in st["saved_searches"] if x.get("id") == search_id), None)
+        if e is None:
+            return None
+        seen = [str(k) for k in (e.get("seen") or [])]
+        seen_set = set(seen)
+        fresh, keys = [], set()
+        for item in merged:
+            key = result_key(item["title"])
+            if key and key not in seen_set and key not in keys:
+                keys.add(key)
+                fresh.append(item)
+        baseline = not e.get("baselined")
+        e["seen"] = (seen + [result_key(x["title"]) for x in fresh])[-SAVED_SEEN_CAP:]
+        if fresh and not baseline:
+            e["new"] = ([{"title": x["title"], "size": format_bytes(x["size_bytes"]),
+                          "indexer": x["sources"][0]["indexer_name"], "found": int(now)} for x in fresh]
+                        + list(e.get("new") or []))[:25]
+        if not error:
+            e["baselined"] = True
+        e.update(last_run=now, last_error=error, last_count=len(merged))
+        return [] if baseline else fresh
+
+    fresh = update_settings(apply)
+    if fresh is None:
+        raise ValueError("That saved search no longer exists.")
+    if fresh and notify and settings.get("notify_saved"):
+        try:
+            send_notification(f"New for “{entry.get('query')}”", _title_list([x["title"] for x in fresh]), tags=("mag",), settings=settings)
+        except UpstreamError as exc:
+            log.warning("Saved-search alert failed: %s", redact(exc))
+    log.info("saved search %r: %d result(s), %d new%s", entry.get("query"), len(merged), len(fresh), f", error: {error}" if error else "")
+    return {"new": len(fresh), "error": error}
+
+
+class BackgroundWorker:
+    """Sends download alerts and runs saved searches while the server is up."""
+
+    TICK = 15
+    HISTORY_EVERY = 30
+
+    def __init__(self):
+        self._seen: set[str] | None = None
+        self._next_history = 0.0
+        self._stop = threading.Event()
+
+    def start(self) -> None:
+        threading.Thread(target=self._run, name="mobile-worker", daemon=True).start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.TICK):
+            try:
+                self.tick()
+            except Exception:
+                log.exception("Background task failed")
+
+    def tick(self, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        settings = load_settings()
+        if settings["ntfy_url"] and now >= self._next_history:
+            self._next_history = now + self.HISTORY_EVERY
+            self.check_history(settings)
+        due = due_saved_search(settings, now)
+        if due:  # one per tick spreads indexer API use out
+            run_saved_search(due["id"], notify=True)
+
+    def check_history(self, settings: dict) -> None:
+        try:
+            slots = sab_request("history", {"limit": 40}).get("history", {}).get("slots", [])
+        except (UpstreamError, ConfigError):
+            return
+        final = {str(x.get("nzo_id")): x for x in slots if str(x.get("status", "")).lower() in ("completed", "failed")}
+        if self._seen is None:  # first look: remember what's already there, announce nothing
+            self._seen = set(final)
+            return
+        fresh = [x for nzo, x in final.items() if nzo not in self._seen]
+        self._seen |= set(final)
+        if len(self._seen) > 5000:
+            self._seen = set(final)
+        done = [str(x.get("name") or "Download") for x in fresh if str(x.get("status")).lower() == "completed"]
+        failed = [f"{x.get('name') or 'Download'} — {str(x.get('fail_message') or 'failed')[:120]}"
+                  for x in fresh if str(x.get("status")).lower() == "failed"]
+        try:
+            if done and settings.get("notify_complete"):
+                send_notification("Download finished" if len(done) == 1 else f"{len(done)} downloads finished",
+                                  _title_list(done), tags=("white_check_mark",), settings=settings)
+            if failed and settings.get("notify_failed"):
+                send_notification("Download failed" if len(failed) == 1 else f"{len(failed)} downloads failed",
+                                  _title_list(failed), tags=("warning",), priority=4, settings=settings)
+        except UpstreamError as exc:
+            log.warning("Download alert failed: %s", redact(exc))
+
+
+def sab_stats(days: int = 7) -> dict:
+    """Data downloaded (SABnzbd server_stats) plus finished / failed jobs per day for the last week."""
+    st = sab_request("server_stats")
+    slots = sab_request("history", {"limit": 500}).get("history", {}).get("slots", [])
+    today = date.today()
+    buckets = {(today - timedelta(days=d)).isoformat(): {"date": (today - timedelta(days=d)).isoformat(), "done": 0, "failed": 0, "bytes": 0}
+               for d in range(days - 1, -1, -1)}
+    for x in slots:
+        ts = to_int(x.get("completed"))
+        bucket = buckets.get(date.fromtimestamp(ts).isoformat()) if ts > 0 else None
+        if not bucket:
+            continue
+        status = str(x.get("status", "")).lower()
+        if status == "completed":
+            bucket["done"] += 1
+            bucket["bytes"] += to_int(x.get("bytes"))
+        elif status == "failed":
+            bucket["failed"] += 1
+    return {"totals": {k: to_int(st.get(k)) for k in ("day", "week", "month", "total")}, "days": list(buckets.values())}
+
+
+AUTOSTART_NAME = "NZB Mobile Server.vbs"
+
+
+def autostart_path() -> Path | None:
+    appdata = os.environ.get("APPDATA")
+    if os.name != "nt" or not appdata:
+        return None
+    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / AUTOSTART_NAME
+
+
+def autostart_enabled() -> bool | None:
+    path = autostart_path()
+    return None if path is None else path.exists()
+
+
+def install_autostart(extra_args: list[str]) -> Path:
+    """Adds a hidden launcher to the user's Startup folder (no admin rights or system changes needed)."""
+    path = autostart_path()
+    if path is None:
+        raise ConfigError("Starting automatically is only available on Windows.")
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable]
+    else:
+        exe = Path(sys.executable)
+        windowless = exe.with_name("pythonw.exe")
+        cmd = [str(windowless if windowless.exists() else exe), str(Path(__file__).resolve())]
+    cmd += extra_args
+    command = " ".join('"' + str(part).replace('"', "") + '"' for part in cmd).replace('"', '""')
+    folder = str(BASE_DIR).replace('"', '""')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "' Starts NZB Command Center's phone server without a window. Delete this file to stop that.\r\n"
+        'Set sh = CreateObject("WScript.Shell")\r\n'
+        f'sh.CurrentDirectory = "{folder}"\r\n'
+        f'sh.Run "{command}", 0, False\r\n',
+        encoding="utf-16")
+    return path
+
+
+def remove_autostart() -> bool:
+    path = autostart_path()
+    if path and path.exists():
+        path.unlink()
+        return True
+    return False
 
 
 # ==============================================================================
@@ -1398,6 +2122,32 @@ img.art{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transiti
 .facts{font-size:13px;color:var(--soft);line-height:1.6;margin-bottom:14px}.facts b{color:var(--white);font-weight:600}
 .dclose{position:absolute;top:12px;right:12px;z-index:3;width:40px;height:40px;border-radius:20px;border:0;background:rgba(0,0,0,.6);color:#fff;display:flex;align-items:center;justify-content:center}
 .viewer{position:fixed;inset:0;z-index:30;background:#000;display:flex;align-items:center;justify-content:center;border:0;padding:0;width:100%}.viewer img{max-width:100%;max-height:100%;object-fit:contain}
+.rrow{display:flex;gap:8px;margin-top:8px}.rrow button,.remote button{flex:1;min-height:46px;border:0;border-radius:12px;background:var(--hover);color:var(--text);font-weight:600;font-size:13px;display:flex;align-items:center;justify-content:center}
+.rrow button:active,.remote button:active{background:var(--line)}
+.remote{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:270px;margin:12px auto 2px}.remote button{min-height:54px;font-size:18px}.remote .ok{background:var(--teal);color:var(--ink);font-size:14px}.remote .sm{font-size:12px;color:var(--soft)}
+.rinfo{font:500 12px var(--mono);color:var(--soft);text-align:center;margin-top:10px;min-height:16px}
+details.remotebox{background:var(--card);border-radius:14px;margin-bottom:12px}details.remotebox summary{list-style:none;cursor:pointer;padding:14px;display:flex;align-items:center;gap:10px;font-weight:600;font-size:14px}details.remotebox summary::-webkit-details-marker{display:none}details.remotebox .body{padding:0 14px 14px}details.remotebox summary .chev{margin-left:auto;color:var(--muted);transition:transform .2s}details.remotebox[open] summary .chev{transform:rotate(180deg)}
+.cw{display:flex;gap:10px;overflow-x:auto;padding-bottom:6px;margin:0 -2px 8px;scroll-snap-type:x mandatory}
+.citem{flex:none;width:136px;scroll-snap-align:start;background:var(--card);border-radius:12px;padding:8px;border:0;text-align:left;color:inherit;cursor:pointer}
+.citem .ph{width:100%;aspect-ratio:2/3;border-radius:8px;overflow:hidden;background:var(--hover);margin-bottom:8px}
+.citem .t{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.citem .m{font:500 11px var(--mono);color:var(--soft);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.citem .go{font:700 11px var(--mono);color:var(--teal);margin-top:6px}
+details.season{border-top:1px solid #10242C}details.season summary{list-style:none;cursor:pointer;padding:12px 0;display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px}details.season summary::-webkit-details-marker{display:none}details.season summary .m{margin-left:auto;font:500 11px var(--mono);color:var(--soft)}
+.eprow{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #0E1F26}.eprow .n{font:600 12px var(--mono);color:var(--muted);width:30px;flex:none}.eprow .info{flex:1;min-width:0}.eprow .t{font-size:14px;overflow-wrap:anywhere}.eprow .m{font-size:12px;color:var(--soft);margin-top:2px}.eprow.w .t{color:var(--soft)}
+.miss{background:#2E2410;color:var(--amber);border-radius:10px;padding:8px 10px 8px 12px;font-size:13px;margin:8px 0;display:flex;align-items:center;gap:10px}.miss span{flex:1;min-width:0;overflow-wrap:anywhere}.miss .btn{background:transparent;color:var(--amber);border:1px solid #5A4512;flex:none}
+.badge.up{background:#0B2230;color:var(--sky)}
+.tiles.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.chart{display:flex;align-items:flex-end;gap:6px;height:150px;margin-top:6px}
+.chart .col{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%;cursor:default;position:relative}
+.chart .stack{flex:1;width:100%;max-width:34px;display:flex;flex-direction:column;justify-content:flex-end;gap:2px}
+.chart .seg{width:100%;min-height:0}.chart .seg.ok{background:var(--teal)}.chart .seg.bad{background:var(--red)}.chart .stack>.seg:first-child{border-radius:4px 4px 0 0}
+.chart .num{font:600 11px var(--mono);color:var(--text);min-height:14px}.chart .lbl{font:500 10px var(--mono);color:var(--muted)}
+.chart .col:hover .stack,.chart .col:focus .stack{filter:brightness(1.15)}.chart .col:focus{outline:none}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--soft);margin-top:10px}.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.ctip{font:500 12px var(--mono);color:var(--soft);margin-top:8px;min-height:16px}
+.toggle{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:14px;color:var(--text)}.toggle input{width:20px;height:20px;accent-color:var(--teal);flex:none}
+.newlist{margin:8px 0 2px;padding:8px 10px;background:var(--deep);border-radius:10px;font-size:12px;color:var(--text)}.newlist div{padding:3px 0;overflow-wrap:anywhere}
+.pills{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}.pills button{border:1px solid var(--line);background:transparent;color:var(--text);border-radius:18px;padding:0 14px;min-height:38px;font-size:13px;font-weight:600}.pills button.on{background:var(--teal);color:var(--ink);border-color:var(--teal)}
+.mrow{background:var(--card);border-radius:12px;padding:12px;margin-bottom:8px}.mrow .t{font-size:14px;font-weight:600;overflow-wrap:anywhere}.mrow .m{font:500 11px var(--mono);color:var(--soft);margin-top:3px}
 </style></head><body>
 <header><div class="brand"><img src="/icon.png" alt="">NZB Command Center</div><div id="statusbar" class="statusbar hidden"><span id="sabpill" class="spill"><i></i>SABnzbd</span></div></header>
 <main>
@@ -1409,13 +2159,15 @@ img.art{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transiti
 <div class="tiles"><div class="tile"><div class="k">Done today</div><div class="v" id="hdone">—</div></div><div class="tile"><div class="k">Free space</div><div class="v" id="hfree">—</div></div><div class="tile"><div class="k">Failed today</div><div class="v" id="hfail">—</div></div></div>
 <button class="shortcut" data-tab="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search your indexers…</button>
 <div id="homekodi"></div>
+<div id="homemedia"></div>
 </section>
 <section id="search" class="hidden">
 <h1>Search</h1><p class="lede">Your indexers, from anywhere at home.</p>
 <div class="card">
 <label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="query" placeholder="Movie, show or release" enterkeyhint="search" autocomplete="off" aria-label="Search"></label>
 <div class="row"><select id="indexer" class="field" aria-label="Indexer"><option value="*">All indexers</option></select><select id="category" class="field" aria-label="Category"><option value="">All categories</option></select></div>
-<button class="btn full" id="searchbtn">Search</button>
+<div class="row"><button class="btn" id="searchbtn">Search</button><button class="btn ghost" id="savesearch" style="flex:none">Save search</button></div>
+<p class="hint" style="margin:10px 2px 0">Tip: “Show S02E04” or “Show S02” searches by episode or season.</p>
 </div>
 <div id="recent" class="recent"></div>
 <div id="searchstatus" class="status"></div>
@@ -1445,6 +2197,23 @@ img.art{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transiti
 <section id="kodi" class="hidden">
 <div class="row" style="align-items:flex-end"><div><h1>Kodi</h1><p class="lede" id="kodistatus">Loading…</p></div><button class="btn ghost sm" id="kodiscan" style="flex:none;margin-bottom:14px">Scan library</button></div>
 <div id="kodinow"></div>
+<details class="remotebox hidden" id="kodiremote"><summary><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="3"/><circle cx="12" cy="8" r="2"/><path d="M10 14h4M10 17h4"/></svg>Remote<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></summary><div class="body">
+<div class="rrow"><button data-kact="seek_back" aria-label="Back 15 seconds">−15s</button><button data-kact="playpause" aria-label="Play or pause">Play / Pause</button><button data-kact="seek_fwd" aria-label="Forward 30 seconds">+30s</button></div>
+<div class="rrow"><button data-kact="subs_next">Subtitles</button><button data-kact="subs_off">Subs off</button><button data-kact="audio_next">Audio track</button></div>
+<div class="rrow"><button data-kact="vol_down" aria-label="Volume down">Vol −</button><button data-kact="mute">Mute</button><button data-kact="vol_up" aria-label="Volume up">Vol +</button></div>
+<div class="remote"><button class="sm" data-kact="home">Home</button><button data-kact="up" aria-label="Up">▲</button><button class="sm" data-kact="info">Info</button><button data-kact="left" aria-label="Left">◀</button><button class="ok" data-kact="select">OK</button><button data-kact="right" aria-label="Right">▶</button><button class="sm" data-kact="back">Back</button><button data-kact="down" aria-label="Down">▼</button><button class="sm" data-kact="menu">Menu</button></div>
+<div class="rinfo" id="kodirinfo"></div>
+</div></details>
+<div class="seg hidden" id="kodiseg"><button class="on" data-kmode="movies">Movies</button><button data-kmode="tv">TV shows</button></div>
+<div id="kodiTV" class="hidden">
+<div class="section" id="cwtitle">CONTINUE WATCHING</div>
+<div class="cw" id="kodicw"></div>
+<label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="tvfilter" placeholder="Find a show" autocomplete="off" enterkeyhint="search" aria-label="Find a show"></label>
+<div class="row" style="margin:4px 0 8px"><select id="tvview" class="field" style="margin:0" aria-label="Show"><option value="all">All shows (A–Z)</option><option value="recent">Recently watched</option><option value="unwatched">Unwatched episodes</option><option value="added">Newest added</option><option value="missing">Missing episodes</option></select></div>
+<div class="section" id="tvlisttitle">SHOWS</div>
+<div id="tvlist"></div>
+<button class="btn ghost full hidden" id="tvmore" style="margin-top:4px">Show more</button>
+</div>
 <div id="kodilib" class="hidden">
 <label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="kodifilter" placeholder="Find a movie or genre" autocomplete="off" enterkeyhint="search" aria-label="Find a movie"></label>
 <div class="row" style="margin:4px 0 8px"><select id="kodiview" class="field" style="margin:0" aria-label="Show"><option value="recent">Recently added</option><option value="all">All movies (A–Z)</option><option value="newest">All, newest added first</option><option value="year">All, by release year</option><option value="rated">Highest rated</option><option value="unwatched">Unwatched</option><option value="progress">In progress</option></select></div>
@@ -1453,6 +2222,28 @@ img.art{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transiti
 <button class="btn ghost full hidden" id="kodimore" style="margin-top:4px">Show more</button>
 </div>
 </section>
+<section id="more" class="hidden">
+<h1>More</h1><p class="lede">Stats, streams, saved searches and alerts.</p>
+<div class="section">DOWNLOADS</div>
+<div id="statsbox"></div>
+<div id="mediawrap" class="hidden"><div class="section" id="mediatitle">MEDIA SERVER</div><div id="mediabox"></div></div>
+<div class="section">SAVED SEARCHES</div>
+<div id="savedbox"></div>
+<div class="section">PHONE ALERTS</div>
+<div class="card">
+<label class="label" for="ntfyurl">ntfy topic URL</label><input id="ntfyurl" class="field" placeholder="https://ntfy.sh/your-secret-topic" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="url">
+<label class="label" for="ntfytoken">Access token <span style="color:var(--muted)">(optional)</span></label><input id="ntfytoken" class="field" type="password" placeholder="Only for a protected topic" autocomplete="off">
+<label class="toggle hidden" id="ntokclearrow"><input type="checkbox" id="ntokclear">Remove the saved token</label>
+<label class="toggle"><input type="checkbox" id="ncomplete">A download finishes</label>
+<label class="toggle"><input type="checkbox" id="nfailed">A download fails</label>
+<label class="toggle"><input type="checkbox" id="nsaved">A saved search finds something new</label>
+<label class="label" for="savedint" style="margin-top:8px">Check saved searches every</label><select id="savedint" class="field"><option value="1">hour</option><option value="3">3 hours</option><option value="6">6 hours</option><option value="12">12 hours</option><option value="24">day</option></select>
+<div class="row"><button class="btn" id="setsave">Save</button><button class="btn ghost" id="settest">Send test</button></div>
+<p class="hint" style="margin:10px 0 0">Install the free <b>ntfy</b> app, subscribe to a hard-to-guess topic name, and paste the topic's URL here. Alerts come from the PC, so they arrive even when this page is closed.</p>
+</div>
+<div class="section">ABOUT</div>
+<div class="card hint" id="aboutbox" style="font-size:13px">NZB Command Center phone app v__VERSION__</div>
+</section>
 </div></main>
 <div id="batchbar" class="batch hidden"><span id="batchcount">0 selected</span><button id="batchbtn" class="btn sm">Add to SABnzbd</button></div>
 <nav class="tabs hidden" id="tabbar" aria-label="Sections">
@@ -1460,6 +2251,7 @@ img.art{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transiti
 <button id="tabsearch" class="tab" data-tab="search"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search</button>
 <button id="tabqueue" class="tab" data-tab="queue"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>Queue<span id="queuecount" class="count hidden"></span></button>
 <button id="tabkodi" class="tab" data-tab="kodi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/></svg>Kodi</button>
+<button id="tabmore" class="tab" data-tab="more"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>More<span id="morecount" class="count hidden"></span></button>
 </nav>
 <div id="toast" class="toast hidden" role="status"></div>
 <div id="sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-label="Movie details"><div class="panel" id="sheetpanel"></div></div>
@@ -1469,9 +2261,10 @@ img.art{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transiti
 const LS={get:(k,d='')=>{try{const v=localStorage.getItem(k);return v===null?d:v}catch{return d}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}};
 const $=id=>document.getElementById(id);
 let token=LS.get('nzb_mobile_token');
-let results=[],selected=new Set(),added=new Set(),activeTab='home',queueBusy=false,toastTimer=null;
+let results=[],selected=new Set(),added=new Set(),activeTab='home',queueBusy=false,toastTimer=null,searchNote='',sabCats=[],lastQueue=[],kodiPid=-1;
 const ICON={pause:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>',play:'<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l12 7-12 7z"/></svg>',trash:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',retry:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>'};
 ICON.top='<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 4h14M12 20V9M7 13l5-5 5 5"/></svg>';
+ICON.more='<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
 ICON.x='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 const EMPTY_ICON='<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>';
 
@@ -1520,9 +2313,9 @@ function fillSearchCategories(keep){
   }
   sel.innerHTML=h;sel.value=[...sel.options].some(o=>o.value===cur)?cur:'';
 }
-function fillCategories(cats){const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(cats.includes(keep))sel.value=keep}
+function fillCategories(cats){sabCats=cats;const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(cats.includes(keep))sel.value=keep}
 
-function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':t;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi()}
+function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi','more'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':t;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi();if(t==='more')refreshMore()}
 
 function savePrefs(){LS.set('nzb_mobile_prefs',JSON.stringify({sort:$('sort').value,minsize:$('minsize').value,maxsize:$('maxsize').value,mingrabs:$('mingrabs').value,indexer:$('indexer').value,prio:$('prio').value,category:$('category').value}));LS.set('nzb_mobile_cat',$('sabcat').value)}
 function loadPrefs(){try{const p=JSON.parse(LS.get('nzb_mobile_prefs','{}'));if(p.sort)$('sort').value=p.sort;if(p.prio!==undefined)$('prio').value=p.prio;if(p.indexer&&[...$('indexer').options].some(o=>o.value===p.indexer))$('indexer').value=p.indexer;['minsize','maxsize','mingrabs'].forEach(k=>{if(p[k]!==undefined)$(k).value=p[k]})}catch{}}
@@ -1545,12 +2338,13 @@ function resultCard(x){
   let badges=qualityTags(x.title).map(t=>'<span class="badge">'+esc(t)+'</span>').join('');
   if(x.in_library)badges='<span class="badge lib">'+(x.in_library==='episode'?'Episode already in Kodi':'Already in Kodi')+'</span>'+badges;
   if(x.also_found&&x.also_found.length)badges+='<span class="badge purple">Also on '+esc(x.also_found.join(', '))+'</span>';
+  if(upgradeFrom&&isUpgrade(x.title))badges='<span class="badge up">Better than your '+esc(upgradeFrom.q||'copy')+'</span>'+badges;
   return '<article class="result" data-id="'+esc(x.id)+'"><label class="check" aria-label="Select"><input type="checkbox" data-act="sel"'+(selected.has(x.id)?' checked':'')+(done?' disabled':'')+'></label><h3>'+esc(x.title)+'</h3><div class="details">'+details+'</div>'+(badges?'<div class="badges">'+badges+'</div>':'')+'<button class="btn full'+(done?' added':'')+'" data-act="add"'+(done?' disabled':'')+'>'+(done?'Added ✓':'Add to SABnzbd')+'</button></article>';
 }
 function renderResults(){
   $('resulttools').style.display=results.length?'block':'none';
   const a=filterSort(results,currentFilter());
-  if(results.length)$('searchstatus').textContent='Showing '+a.length+' of '+results.length+' result(s)';
+  if(results.length)$('searchstatus').textContent='Showing '+a.length+' of '+results.length+' result(s)'+searchNote;
   $('results').innerHTML=a.map(resultCard).join('')||(results.length?empty('Nothing matches these filters','Clear the size or grabs limits to see all '+results.length+' result(s).'):'');
   updateBatchButton();
 }
@@ -1572,13 +2366,34 @@ function useRecent(i){
   if([...$('indexer').options].some(o=>o.value===x.ix)){$('indexer').value=x.ix;fillSearchCategories(x.cat)}
   search();
 }
-async function search(){
+// ---------- "Find a better copy" ----------
+let upgradeFrom=null;
+const RES_RANK={'2160p':4,'1080p':3,'720p':2,'SD':1};
+function resOf(title){const m=String(title).match(/\b(2160p|1080p|720p)\b/i);return m?m[1].toLowerCase():(/\b(4k|uhd)\b/i.test(title)?'2160p':'')}
+function isUpgrade(title){
+  if(!upgradeFrom)return false;
+  const have=RES_RANK[upgradeFrom.q]||0,res=RES_RANK[resOf(title)]||0;
+  if(res>have)return true;
+  return res===have&&res>0&&!upgradeFrom.hdr&&/\b(hdr|dv|dovi|dolby.?vision)\b/i.test(title);
+}
+function goSearch(q,opts){
+  opts=opts||{};showTab('search');$('query').value=q;
+  if(opts.category&&[...$('category').options].some(o=>o.value===opts.category))$('category').value=opts.category;
+  search(opts);
+}
+async function search(extra){
+  extra=(extra&&!(extra instanceof Event))?extra:{};
+  if(!extra.keepUpgrade)upgradeFrom=null;
+  searchNote='';
   const st=$('searchstatus');st.className='status';st.textContent='Searching…';$('results').innerHTML=skeleton(3,3);rememberSearch();results=[];selected.clear();added.clear();updateBatchButton();
   $('searchbtn').disabled=true;$('query').blur();
   try{
-    const d=await api('/api/search',{query:$('query').value.trim(),indexer:$('indexer').value,category:$('category').value});
+    const d=await api('/api/search',{query:$('query').value.trim(),indexer:$('indexer').value,category:$('category').value,imdbid:extra.imdbid||''});
     results=d.results||[];
-    let msg=results.length+' unique result(s)';if(d.errors&&d.errors.length)msg+=' · '+d.errors.length+' indexer error(s)\n'+d.errors.join('\n');
+    searchNote=(d.mode==='tvsearch'?' · episode search':(d.mode==='movie'?' · matched by IMDb id':''));
+    if(upgradeFrom)searchNote+=' · '+results.filter(x=>isUpgrade(x.title)).length+' better than your '+(upgradeFrom.q||'copy');
+    if(d.errors&&d.errors.length)searchNote+=' · '+d.errors.length+' indexer error(s)\n'+d.errors.join('\n');
+    let msg=results.length+' unique result(s)'+searchNote;
     st.textContent=msg;if(d.errors&&d.errors.length&&!results.length)st.className='status error';
     renderResults();
     if(!results.length&&!(d.errors&&d.errors.length))$('results').innerHTML=empty('No releases found','Try a shorter title or a different category.');
@@ -1606,11 +2421,11 @@ async function addSelected(){
 function stateTag(status){const s=String(status||'').toLowerCase();const cls=s==='downloading'?'ok':(s==='paused'?'warn':'busy');return '<span class="tag '+cls+'">'+esc(String(status||'Queued').toUpperCase())+'</span>'}
 function heroCard(x){
   const p=clampPct(x.percentage),paused=String(x.status).toLowerCase()==='paused';
-  return '<div class="hero queueitem" data-id="'+esc(x.id)+'">'+stateTag(x.status)+'<div class="name">'+esc(x.name)+'</div><div class="sub">'+esc(x.sizeleft)+' of '+esc(x.size)+' left · ETA '+esc(x.eta||'—')+(x.cat&&x.cat!=='*'?' · '+esc(x.cat):'')+'</div><div class="bar"><span style="width:'+p+'%"></span></div><div class="row"><span style="flex:1;font:600 14px var(--mono);color:var(--teal)">'+p.toFixed(0)+'%</span><button class="btn ghost sm" style="flex:none" data-act="'+(paused?'resume':'pause')+'">'+(paused?'Resume':'Pause')+'</button><button class="btn danger sm" style="flex:none" data-act="delete">Delete</button></div></div>';
+  return '<div class="hero queueitem" data-id="'+esc(x.id)+'">'+stateTag(x.status)+'<div class="name">'+esc(x.name)+'</div><div class="sub">'+esc(x.sizeleft)+' of '+esc(x.size)+' left · ETA '+esc(x.eta||'—')+(x.cat&&x.cat!=='*'?' · '+esc(x.cat):'')+'</div><div class="bar"><span style="width:'+p+'%"></span></div><div class="row"><span style="flex:1;font:600 14px var(--mono);color:var(--teal)">'+p.toFixed(0)+'%</span><button class="icon-btn" data-act="more" aria-label="Category and priority">'+ICON.more+'</button><button class="btn ghost sm" style="flex:none" data-act="'+(paused?'resume':'pause')+'">'+(paused?'Resume':'Pause')+'</button><button class="btn danger sm" style="flex:none" data-act="delete">Delete</button></div></div>';
 }
 function queueRow(x){
   const p=clampPct(x.percentage),paused=String(x.status).toLowerCase()==='paused';
-  return '<div class="qrow queueitem" data-id="'+esc(x.id)+'"><div class="info"><div class="t">'+esc(x.name)+'</div><div class="m">'+esc(String(x.status||'').toUpperCase())+' · '+esc(x.size)+(x.eta?' · '+esc(x.eta):'')+(x.cat&&x.cat!=='*'?' · '+esc(x.cat):'')+'</div><div class="bar thin"><span style="width:'+p+'%"></span></div></div><button class="icon-btn" data-act="top" aria-label="Download this next">'+ICON.top+'</button><button class="icon-btn" data-act="'+(paused?'resume':'pause')+'" aria-label="'+(paused?'Resume':'Pause')+'">'+(paused?ICON.play:ICON.pause)+'</button><button class="icon-btn red" data-act="delete" aria-label="Delete">'+ICON.trash+'</button></div>';
+  return '<div class="qrow queueitem" data-id="'+esc(x.id)+'"><div class="info"><div class="t">'+esc(x.name)+'</div><div class="m">'+esc(String(x.status||'').toUpperCase())+' · '+esc(x.size)+(x.eta?' · '+esc(x.eta):'')+(x.cat&&x.cat!=='*'?' · '+esc(x.cat):'')+'</div><div class="bar thin"><span style="width:'+p+'%"></span></div></div><button class="icon-btn" data-act="more" aria-label="More options: move to top, category, priority">'+ICON.more+'</button><button class="icon-btn" data-act="'+(paused?'resume':'pause')+'" aria-label="'+(paused?'Resume':'Pause')+'">'+(paused?ICON.play:ICON.pause)+'</button><button class="icon-btn red" data-act="delete" aria-label="Delete">'+ICON.trash+'</button></div>';
 }
 async function refreshQueue(silent){
   if(queueBusy)return;queueBusy=true;const st=$('queuestatus');
@@ -1630,7 +2445,7 @@ async function refreshQueue(silent){
       const rest=slots.filter((_,i)=>i!==hi);
       if(rest.length)html+='<div class="section">UP NEXT</div>'+rest.map(queueRow).join('');
     }
-    $('queueitems').innerHTML=html;
+    lastQueue=slots;$('queueitems').innerHTML=html;
   }catch(e){if(!silent||activeTab==='queue'){st.textContent=e.message;st.className='lede status error'}}
   finally{queueBusy=false}
 }
@@ -1643,6 +2458,7 @@ function updateStatus(d){
 }
 async function pollStatus(){if(document.hidden||$('app').classList.contains('hidden')||activeTab==='queue'||activeTab==='home')return;try{updateStatus(await api('/api/queue'))}catch{const p=$('sabpill');p.className='spill bad';p.innerHTML='<i></i>SABnzbd offline'}}
 async function itemAction(id,action){
+  if(action==='more')return openQueueItem(id);
   if(action==='top'){try{await api('/api/queue/item',{id,action});toast('Moved to the top of the queue');await refreshQueue(true)}catch(e){toast(e.message,true)}return}
   if(action==='delete'&&!confirm('Remove this item from the queue and delete its partial files?'))return;
   try{await api('/api/queue/item',{id,action});await refreshQueue(true)}catch(e){toast(e.message,true)}
@@ -1658,7 +2474,7 @@ function historyRow(x){
   const color=ok?'var(--green)':(bad?'var(--red)':'var(--amber)');
   const when=x.completed?relAge(x.completed):'';
   const note=bad&&x.fail_message?x.fail_message:[x.status,x.size,x.cat&&x.cat!=='*'?x.cat:''].filter(Boolean).join(' · ');
-  return '<div class="hrow queueitem" data-id="'+esc(x.id)+'"><span class="dot" style="background:'+color+'"></span><div class="info"><div class="t">'+esc(x.name)+'</div><div class="m'+(bad?' bad':'')+'">'+esc(note)+(when?' · '+esc(when):'')+'</div></div>'+(bad?'<button class="icon-btn" data-act="retry" aria-label="Retry">'+ICON.retry+'</button>':'')+'</div>';
+  return '<div class="hrow queueitem" data-id="'+esc(x.id)+'"><span class="dot" style="background:'+color+'"></span><div class="info"><div class="t">'+esc(x.name)+'</div><div class="m'+(bad?' bad':'')+'">'+esc(note)+(when?' · '+esc(when):'')+'</div></div>'+(bad?'<button class="icon-btn" data-act="retry" aria-label="Retry">'+ICON.retry+'</button>':'')+'<button class="icon-btn red" data-act="hdel" aria-label="Remove from history">'+ICON.trash+'</button></div>';
 }
 async function refreshHistory(){
   const st=$('histstatus');
@@ -1699,6 +2515,9 @@ async function refreshHome(){
     $('hfree').innerHTML=d.disk_free_gb!=null&&d.disk_free_gb>=0?esc(Number(d.disk_free_gb).toFixed(0))+' <small>GB</small>':'—';
     const k=d.kodi||{};
     $('homekodi').innerHTML=!k.configured?'':(k.online?nowCard(k.playing,true):'<button class="card kidle" data-tab="kodi">'+ICON.play+'<span>Kodi is offline</span></button>');hydrateArt($('homekodi'));
+    const md=d.media||{};
+    $('homemedia').innerHTML=md.configured&&md.streams?'<button class="card kidle" data-tab="more">'+ICON.play+'<span>'+esc(md.streams)+' streaming on '+esc(md.type)+' · see who</span></button>':'';
+    setMoreBadge(d.saved_new);
   }catch(e){$('homestatus').className='lede status error';$('homestatus').textContent=e.message}
   finally{homeBusy=false}
 }
@@ -1725,7 +2544,7 @@ function hydrateArt(root){root.querySelectorAll('img[data-art]:not([src])').forE
 function openViewer(ref){if(!ref)return;artURL(ref).then(u=>{$('viewerimg').src=u;$('viewer').classList.remove('hidden')}).catch(()=>toast('Couldn\'t load the picture',true))}
 
 // ---------- Movie details sheet ----------
-let sheetOpen=false;
+let sheetOpen=false,detailMovie=null;
 function closeSheet(fromPop){if(!sheetOpen)return;sheetOpen=false;$('sheet').classList.add('hidden');document.body.style.overflow='';if(!fromPop&&history.state&&history.state.sheet)history.back()}
 async function openDetail(id){
   const panel=$('sheetpanel');
@@ -1735,6 +2554,7 @@ async function openDetail(id){
   let d;try{d=await api('/api/kodi/movie?id='+encodeURIComponent(id))}catch(e){panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button>'+empty('Couldn\'t load this movie',e.message);return}
   const meta=[d.year,runtimeText(d.runtime),d.watched?'watched':''].filter(Boolean).join(' · ');
   const chips=[];
+  if(d.quality)chips.push('<span class="chip">Your copy: '+esc(d.quality)+(d.hdr?' '+esc(d.hdr.toUpperCase()):'')+'</span>');
   if(d.imdb_rating)chips.push(d.imdb_url?'<a class="chip imdb" href="'+esc(d.imdb_url)+'" target="_blank" rel="noopener">IMDb '+esc(Number(d.imdb_rating).toFixed(1))+'</a>':'<span class="chip imdb">IMDb '+esc(Number(d.imdb_rating).toFixed(1))+'</span>');
   if(d.tmdb)chips.push('<span class="chip" style="background:#0B2A3A;color:#7DD3FC">TMDb '+esc(Number(d.tmdb).toFixed(1))+'</span>');
   else if(!d.imdb_rating&&d.rating)chips.push('<span class="chip">★ '+esc(d.rating)+(d.rating_source?' '+esc(d.rating_source.replace('themoviedb','TMDb')):'')+'</span>');
@@ -1752,8 +2572,10 @@ async function openDetail(id){
     '<div class="dhead"><button class="dposter" data-view="'+esc(d.poster)+'" aria-label="View poster full size">'+artTag(d.poster)+'</button><div class="dtitle"><h2>'+esc(d.title)+'</h2><div class="m">'+esc(meta)+'</div></div></div>'+
     (chips.length?'<div class="chips">'+chips.join('')+'</div>':'')+
     '<div class="dbody">'+(d.tagline?'<p class="tagline">'+esc(d.tagline)+'</p>':'')+'<p class="plot">'+(esc(d.plot)||'<span style="color:var(--muted)">No synopsis in Kodi for this one.</span>')+'</p>'+
-    (facts.length?'<div class="facts">'+facts.join('<br>')+'</div>':'')+'<div class="row">'+play+'</div></div>';
+    (facts.length?'<div class="facts">'+facts.join('<br>')+'</div>':'')+'<div class="row">'+play+'</div>'+
+    '<button class="btn ghost full" style="margin-top:10px" data-better="1">Find a better copy</button></div>';
   panel.scrollTop=0;hydrateArt(panel);
+  detailMovie=d;
 }
 
 // ---------- Kodi ----------
@@ -1795,27 +2617,204 @@ async function refreshKodi(){
   const st=$('kodistatus');
   try{
     const d=await api('/api/kodi');
-    if(!d.configured){st.className='lede';st.textContent='Kodi isn\'t set up yet — add it in the desktop app\'s Kodi tab.';$('kodinow').innerHTML='';$('kodilib').classList.add('hidden');$('kodiscan').classList.add('hidden');return}
+    const off=()=>{$('kodinow').innerHTML='';['kodilib','kodiTV','kodiseg','kodiremote'].forEach(id=>$(id).classList.add('hidden'));kodiOnline=false};
+    if(!d.configured){st.className='lede';st.textContent='Kodi isn\'t set up yet — add it in the desktop app\'s Kodi tab.';off();$('kodiscan').classList.add('hidden');return}
     $('kodiscan').classList.remove('hidden');
-    if(!d.online){st.className='lede status error';st.textContent=d.error||'Kodi is offline.';$('kodinow').innerHTML='';$('kodilib').classList.add('hidden');return}
-    const c=d.counts||{};st.className='lede';st.textContent=(c.movies||0)+' movies · '+(c.episodes||0)+' episodes';
+    if(!d.online){st.className='lede status error';st.textContent=d.error||'Kodi is offline.';off();return}
+    const c=d.counts||{};st.className='lede';st.textContent=(c.movies||0)+' movies · '+(c.shows||0)+' shows · '+(c.episodes||0)+' episodes';
+    kodiPid=d.playing?d.playing.playerid:-1;
     $('kodinow').innerHTML=nowCard(d.playing,false);hydrateArt($('kodinow'));
-    kodiRecent=d.recent||[];kodiMovies=null;$('kodilib').classList.remove('hidden');renderKodiList(true);
+    kodiOnline=true;$('kodiremote').classList.remove('hidden');$('kodiseg').classList.remove('hidden');
+    kodiRecent=d.recent||[];kodiMovies=null;kodiShows=null;kodiMissing=null;kodiContinue=d.continue||[];
+    setKodiMode(kodiMode);
   }catch(e){st.className='lede status error';st.textContent=e.message}
 }
-async function refreshKodiNow(){try{const d=await api('/api/kodi/now');$('kodinow').innerHTML=nowCard(d.playing,false);hydrateArt($('kodinow'))}catch{}}
-async function kodiControl(action,pid){
-  try{await api('/api/kodi/control',{action,playerid:Number(pid)});setTimeout(()=>{if(activeTab==='kodi')refreshKodiNow();else refreshHome()},400)}catch(e){toast(e.message,true)}
+function remoteInfo(d){
+  const p=d.playing,v=d.volume,bits=[];
+  if(p&&p.subtitle)bits.push('Subtitles: '+p.subtitle);else if(p)bits.push('Subtitles off');
+  if(p&&p.audio)bits.push('Audio: '+p.audio);
+  if(v)bits.push(v.muted?'Muted':'Volume '+v.level+'%');
+  $('kodirinfo').textContent=bits.join(' · ');
+}
+async function refreshKodiNow(){try{const d=await api('/api/kodi/now');kodiPid=d.playing?d.playing.playerid:-1;$('kodinow').innerHTML=nowCard(d.playing,false);hydrateArt($('kodinow'));remoteInfo(d)}catch{}}
+async function kodiControl(action,pid,value){
+  if(pid===undefined||pid==='')pid=kodiPid;
+  try{await api('/api/kodi/control',{action,playerid:Number(pid),value});setTimeout(()=>{if(activeTab==='kodi')refreshKodiNow();else refreshHome()},400)}catch(e){toast(e.message,true)}
 }
 async function playMovie(id,resume){
   try{await api('/api/kodi/play',{movieid:Number(id),resume:!!resume});toast(resume?'Resuming on Kodi…':'Starting on Kodi…');setTimeout(refreshKodiNow,2000)}catch(e){toast(e.message,true)}
 }
+async function playEpisode(id,resume){
+  try{await api('/api/kodi/play',{episodeid:Number(id),resume:!!resume});toast(resume?'Resuming on Kodi…':'Starting on Kodi…');setTimeout(()=>{if(activeTab==='kodi')refreshKodi()},2500)}catch(e){toast(e.message,true)}
+}
+
+// ---------- Kodi TV shows ----------
+const TV_PAGE=100;
+let kodiMode=LS.get('nzb_mobile_kodimode','movies')==='tv'?'tv':'movies',kodiOnline=false,kodiShows=null,kodiContinue=[],showsLoading=false,tvShown=TV_PAGE,kodiMissing=null;
+function setKodiMode(m){
+  kodiMode=m;LS.set('nzb_mobile_kodimode',m);
+  document.querySelectorAll('#kodiseg button').forEach(b=>b.classList.toggle('on',b.dataset.kmode===m));
+  $('kodilib').classList.toggle('hidden',!kodiOnline||m!=='movies');$('kodiTV').classList.toggle('hidden',!kodiOnline||m!=='tv');
+  if(!kodiOnline)return;
+  if(m==='movies')renderKodiList(true);else{renderContinue();renderShows(true)}
+}
+function epCode(e){return 'S'+String(e.season).padStart(2,'0')+'E'+String(e.episode).padStart(2,'0')}
+function renderContinue(){
+  const box=$('kodicw');$('cwtitle').classList.toggle('hidden',!kodiContinue.length);box.classList.toggle('hidden',!kodiContinue.length);
+  box.innerHTML=kodiContinue.map(c=>'<button class="citem" data-ep="'+esc(c.episode.id)+'"'+(c.episode.resume?' data-resume="1"':'')+' aria-label="Play '+esc(c.show.title+' '+epCode(c.episode))+'">'+(c.show.poster?'<div class="ph">'+artTag(c.show.poster)+'</div>':'')+'<div class="t">'+esc(c.show.title)+'</div><div class="m">'+esc(epCode(c.episode)+' · '+c.episode.title)+'</div><div class="go">'+(c.episode.resume?'▶ RESUME '+fmtTime(c.episode.resume):'▶ PLAY NEXT')+'</div></button>').join('');
+  hydrateArt(box);
+}
+function showRow(s){
+  const pct=s.episodes?Math.round(s.watched/s.episodes*100):0,left=s.episodes-s.watched;
+  const meta=[s.year,s.episodes+' episodes',left>0&&s.watched?left+' unwatched':(left<=0&&s.episodes?'all watched':'')].filter(Boolean).join(' · ');
+  return '<div class="qrow"><button class="pthumb" data-show="'+esc(s.id)+'" aria-label="Details for '+esc(s.title)+'">'+artTag(s.poster)+'</button><div class="info tap" data-show="'+esc(s.id)+'"><div class="t">'+esc(s.title)+'</div><div class="m">'+esc(meta)+'</div>'+((s.genres||[]).length?'<div class="rl"><span>'+esc(s.genres.slice(0,2).join(', '))+'</span></div>':'')+'<div class="bar thin"><span style="width:'+pct+'%"></span></div></div></div>';
+}
+function missingRow(x){
+  const eps=x.missing.map(n=>'E'+String(n).padStart(2,'0')),q=x.show+' S'+String(x.season).padStart(2,'0')+(x.missing.length===1?'E'+String(x.missing[0]).padStart(2,'0'):'');
+  return '<div class="miss"><span><b>'+esc(x.show)+'</b> · Season '+esc(x.season)+'<br>Missing '+esc(eps.slice(0,12).join(', ')+(eps.length>12?' …':''))+'</span><button class="btn sm" data-tvsearch="'+esc(q)+'">Search</button></div>';
+}
+async function renderShows(reset){
+  if(reset)tvShown=TV_PAGE;
+  const view=$('tvview').value,q=$('tvfilter').value.trim().toLowerCase(),list=$('tvlist'),title=$('tvlisttitle'),more=$('tvmore');more.classList.add('hidden');
+  if(view==='missing'){
+    if(kodiMissing===null){title.textContent='CHECKING FOR GAPS…';list.innerHTML=skeleton(4,2);try{kodiMissing=(await api('/api/kodi/missing')).missing||[]}catch(e){title.textContent='';list.innerHTML=empty('Couldn\'t check',e.message);return}}
+    const a=kodiMissing.filter(x=>!q||x.show.toLowerCase().includes(q));
+    title.textContent=a.length+' SEASON'+(a.length===1?'':'S')+' WITH GAPS';
+    list.innerHTML=a.slice(0,tvShown).map(missingRow).join('')||empty('No gaps found','Every season has all episodes up to its latest one. (Kodi can\'t know about episodes after the newest one you have.)');
+    if(a.length>tvShown){more.textContent='Show more ('+(a.length-tvShown)+' left)';more.classList.remove('hidden')}
+    return;
+  }
+  if(kodiShows===null){
+    if(showsLoading)return;showsLoading=true;title.textContent='LOADING SHOWS…';list.innerHTML=skeleton(5,2);
+    try{kodiShows=(await api('/api/kodi/shows')).shows||[]}catch(e){title.textContent='';list.innerHTML=empty('Couldn\'t load your shows',e.message);return}finally{showsLoading=false}
+  }
+  let a=kodiShows.filter(s=>!q||s.title.toLowerCase().includes(q));
+  if(view==='unwatched')a=a.filter(s=>s.episodes>s.watched);
+  if(view==='recent')a=a.filter(s=>s.lastplayed).sort((x,y)=>y.lastplayed.localeCompare(x.lastplayed));
+  if(view==='added')a.sort((x,y)=>(y.added||'').localeCompare(x.added||''));
+  title.textContent=a.length+' SHOW'+(a.length===1?'':'S');
+  list.innerHTML=a.slice(0,tvShown).map(showRow).join('')||empty(q?'No matches':'No shows here',q?'Try part of the title.':'Nothing fits this view.');hydrateArt(list);
+  if(a.length>tvShown){more.textContent='Show more ('+(a.length-tvShown)+' left)';more.classList.remove('hidden')}
+}
+function episodeRow(e){
+  const meta=[e.aired,runtimeText(e.runtime),e.resume?'resume at '+fmtTime(e.resume):(e.watched?'watched':'')].filter(Boolean).join(' · ');
+  return '<div class="eprow'+(e.watched?' w':'')+'"><span class="n">E'+String(e.episode).padStart(2,'0')+'</span><div class="info"><div class="t">'+esc(e.title)+'</div><div class="m">'+esc(meta)+'</div></div><button class="icon-btn play" data-ep="'+esc(e.id)+'"'+(e.resume?' data-resume="1"':'')+' aria-label="Play '+esc(epCode(e)+' '+e.title)+'">'+ICON.play+'</button></div>';
+}
+async function openShow(id){
+  const panel=$('sheetpanel');
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button><div class="empty"><b>Loading…</b></div>';
+  $('sheet').classList.remove('hidden');document.body.style.overflow='hidden';
+  if(!sheetOpen){sheetOpen=true;try{history.pushState({sheet:1},'')}catch{}}
+  let d;try{d=await api('/api/kodi/show?id='+encodeURIComponent(id))}catch(e){panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button>'+empty('Couldn\'t load this show',e.message);return}
+  const n=d.next,openSeason=n?n.season:(d.seasons[0]||{}).season;
+  const nextBtn=n?'<button class="btn full" data-ep="'+esc(n.id)+'"'+(n.resume?' data-resume="1"':'')+'>'+(n.resume?'Resume ':'Play next: ')+esc(epCode(n))+' · '+esc(n.title)+'</button>':'<p class="hint">You\'ve watched everything Kodi has for this show.</p>';
+  const seasons=d.seasons.map(s=>{
+    const w=s.episodes.filter(e=>e.watched).length,name=s.season===0?'Specials':'Season '+s.season;
+    const miss=s.missing.length?'<div class="miss"><span>Missing '+esc(s.missing.map(x=>'E'+String(x).padStart(2,'0')).join(', '))+'</span><button class="btn sm" data-tvsearch="'+esc(d.title+' S'+String(s.season).padStart(2,'0')+(s.missing.length===1?'E'+String(s.missing[0]).padStart(2,'0'):''))+'">Search</button></div>':'';
+    return '<details class="season"'+(s.season===openSeason?' open':'')+'><summary>'+esc(name)+'<span class="m">'+w+'/'+s.episodes.length+' watched'+(s.missing.length?' · '+s.missing.length+' missing':'')+'</span></summary>'+miss+s.episodes.map(episodeRow).join('')+'</details>';
+  }).join('');
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button>'+
+    (d.fanart?'<button class="fan" data-view="'+esc(d.fanart)+'" aria-label="View backdrop full size">'+artTag(d.fanart)+'</button>':'<div class="fan" style="aspect-ratio:3/1"></div>')+
+    '<div class="dhead"><button class="dposter" data-view="'+esc(d.poster)+'" aria-label="View poster full size">'+artTag(d.poster)+'</button><div class="dtitle"><h2>'+esc(d.title)+'</h2><div class="m">'+esc([d.year,d.episodes+' episodes',d.watched+' watched'].filter(Boolean).join(' · '))+'</div></div></div>'+
+    ((d.genres||[]).length?'<div class="chips">'+d.genres.map(g=>'<span class="chip">'+esc(g)+'</span>').join('')+'</div>':'')+
+    '<div class="dbody">'+(d.plot?'<p class="plot">'+esc(d.plot)+'</p>':'')+nextBtn+'<div style="margin-top:12px">'+seasons+'</div></div>';
+  panel.scrollTop=0;hydrateArt(panel);
+}
+
+// ---------- Queue item options ----------
+const PRIOS=[['-1','Low'],['0','Normal'],['1','High'],['2','Force']];
+function openQueueItem(id){
+  const x=lastQueue.find(s=>s.id===id);if(!x)return;
+  const panel=$('sheetpanel');panel.dataset.nzo=id;
+  const cats=['*'].concat(sabCats.filter(c=>c!=='*'));
+  const cur=(x.cat&&x.cat!=='*')?x.cat:'*';
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button><div class="dbody" style="padding-top:20px"><h2 style="margin:0 44px 6px 0;font-size:18px;overflow-wrap:anywhere">'+esc(x.name)+'</h2><div class="hint">'+esc([x.status,x.size,x.priority?'priority '+x.priority:''].filter(Boolean).join(' · '))+'</div>'+
+    '<div class="section">PRIORITY</div><div class="pills">'+PRIOS.map(([v,n])=>'<button data-qprio="'+v+'"'+(String(x.priority).toLowerCase()===n.toLowerCase()?' class="on"':'')+'>'+n+'</button>').join('')+'</div>'+
+    '<div class="section">CATEGORY</div><div class="row"><select id="qcat" class="field" style="margin:0">'+cats.map(c=>'<option value="'+esc(c)+'"'+(c===cur?' selected':'')+'>'+esc(c==='*'?'Default':c)+'</option>').join('')+'</select><button class="btn ghost sm" style="flex:none" data-qcat="1">Change</button></div>'+
+    '<div class="section">ORDER</div><button class="btn ghost full" data-qtop="1">Download this next</button></div>';
+  $('sheet').classList.remove('hidden');document.body.style.overflow='hidden';
+  if(!sheetOpen){sheetOpen=true;try{history.pushState({sheet:1},'')}catch{}}
+}
+async function queueItemChange(action,value){
+  const id=$('sheetpanel').dataset.nzo;
+  try{await api('/api/queue/item',{id,action,value});toast(action==='top'?'Moved to the top of the queue':(action==='priority'?'Priority changed':'Category changed'));closeSheet();await refreshQueue(true)}catch(e){toast(e.message,true)}
+}
+
+// ---------- More tab ----------
+function fmtBytes(n){n=Number(n)||0;const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return (i?n.toFixed(n<10?1:0):n)+' '+u[i]}
+function setMoreBadge(n){const c=$('morecount');c.textContent=n||'';c.classList.toggle('hidden',!n)}
+function refreshMore(){loadStats();loadMedia();loadSaved();loadSettings()}
+async function loadStats(){
+  const box=$('statsbox');if(!box.innerHTML)box.innerHTML=skeleton(1,3);
+  let d;try{d=await api('/api/stats')}catch(e){box.innerHTML='<div class="card status error" style="margin:0 0 12px">'+esc(e.message)+'</div>';return}
+  const t=d.totals||{},days=d.days||[],max=Math.max(1,...days.map(x=>x.done+x.failed));
+  const wk=days.reduce((a,x)=>({done:a.done+x.done,failed:a.failed+x.failed}),{done:0,failed:0});
+  const cols=days.map(x=>{
+    const dt=new Date(x.date+'T12:00:00'),lbl=dt.toLocaleDateString(undefined,{weekday:'short'}),tot=x.done+x.failed;
+    const tip=dt.toLocaleDateString(undefined,{weekday:'long',month:'short',day:'numeric'})+': '+x.done+' finished, '+x.failed+' failed, '+fmtBytes(x.bytes);
+    return '<div class="col" tabindex="0" data-tip="'+esc(tip)+'" aria-label="'+esc(tip)+'"><span class="num">'+(tot||'')+'</span><div class="stack">'+
+      (x.failed?'<div class="seg bad" style="height:'+(x.failed/max*100)+'%"></div>':'')+(x.done?'<div class="seg ok" style="height:'+(x.done/max*100)+'%"></div>':'')+'</div><span class="lbl">'+esc(lbl)+'</span></div>';
+  }).join('');
+  box.innerHTML='<div class="tiles"><div class="tile"><div class="k">Today</div><div class="v">'+esc(fmtBytes(t.day))+'</div></div><div class="tile"><div class="k">This week</div><div class="v">'+esc(fmtBytes(t.week))+'</div></div><div class="tile"><div class="k">This month</div><div class="v">'+esc(fmtBytes(t.month))+'</div></div></div>'+
+    '<div class="card"><div class="row" style="align-items:baseline"><b style="font-size:14px">Last 7 days</b><span class="hint" style="text-align:right">'+wk.done+' finished · '+wk.failed+' failed</span></div>'+
+    '<div class="chart" role="img" aria-label="Downloads per day for the last 7 days">'+cols+'</div>'+
+    '<div class="legend"><span><i style="background:var(--teal)"></i>Finished</span><span><i style="background:var(--red)"></i>Failed</span></div><div class="ctip" id="ctip">Tap a day for details · all time '+esc(fmtBytes(t.total))+'</div></div>';
+}
+async function loadMedia(){
+  let d;try{d=await api('/api/media')}catch(e){d={configured:true,online:false,error:e.message}}
+  $('mediawrap').classList.toggle('hidden',!d.configured);if(!d.configured)return;
+  $('mediatitle').textContent=(d.type||'MEDIA SERVER').toUpperCase();
+  if(!d.online){$('mediabox').innerHTML='<div class="card status error" style="margin:0 0 12px">'+esc(d.error||'Offline')+'</div>';return}
+  const ss=d.sessions||[],rec=d.recent||[];
+  let h=ss.length?ss.map(s=>'<div class="mrow"><div class="row" style="align-items:flex-start"><div style="min-width:0"><div class="t">'+esc(s.title)+'</div>'+(s.sub?'<div class="m">'+esc(s.sub)+'</div>':'')+'</div><span class="tag '+(s.paused?'warn':'ok')+'" style="flex:none">'+(s.paused?'PAUSED':'PLAYING')+'</span></div><div class="bar thin"><span style="width:'+clampPct(s.pct)+'%"></span></div><div class="m" style="margin-top:6px">'+esc(s.user+' · '+s.device+' · '+s.method+' · '+fmtTime(s.time)+' / '+fmtTime(s.total))+'</div></div>').join(''):'<div class="card hint" style="margin-bottom:8px">Nobody is streaming right now.</div>';
+  if(rec.length)h+='<div class="card" style="padding:4px 14px"><div class="kode" style="padding:10px 0 4px">RECENTLY ADDED</div>'+rec.map(r=>'<div class="eprow"><div class="info"><div class="t">'+esc(r.title)+'</div>'+(r.sub?'<div class="m">'+esc(r.sub)+'</div>':'')+'</div></div>').join('')+'</div>';
+  $('mediabox').innerHTML=h;
+}
+function savedRow(x){
+  const when=x.last_run?'checked '+relAge(x.last_run):'not checked yet';
+  const meta=[x.indexer_name,x.category?'category '+x.category:'',when,x.last_count!=null&&x.last_run?x.last_count+' result(s)':''].filter(Boolean).join(' · ');
+  const news=(x.new||[]).length?'<div class="newlist">'+x.new.slice(0,6).map(n=>'<div>🆕 '+esc(n.title)+' <span style="color:var(--muted)">· '+esc(n.size)+' · '+esc(n.indexer)+'</span></div>').join('')+(x.new.length>6?'<div style="color:var(--muted)">…and '+(x.new.length-6)+' more</div>':'')+'</div>':'';
+  return '<div class="mrow" data-saved="'+esc(x.id)+'"><div class="row" style="align-items:flex-start"><div style="min-width:0"><div class="t">'+esc(x.query)+((x.new||[]).length?' <span class="badge up">'+x.new.length+' new</span>':'')+'</div><div class="m">'+esc(meta)+'</div>'+(x.last_error?'<div class="m" style="color:var(--red)">'+esc(x.last_error)+'</div>':'')+'</div></div>'+news+
+    '<div class="row" style="margin-top:10px"><button class="btn sm" data-sact="open">Search</button><button class="btn ghost sm" data-sact="run">Check now</button>'+((x.new||[]).length?'<button class="btn ghost sm" data-sact="clear">Mark seen</button>':'')+'<button class="icon-btn red" style="flex:none" data-sact="delete" aria-label="Delete saved search">'+ICON.trash+'</button></div></div>';
+}
+let savedList=[];
+function renderSaved(d){
+  savedList=d.searches||[];setMoreBadge(savedList.reduce((a,x)=>a+(x.new||[]).length,0));
+  $('savedbox').innerHTML=savedList.map(savedRow).join('')+'<p class="hint" style="margin:4px 4px 12px">'+(savedList.length?'Checked every '+d.interval_hours+' h on the PC. ':'Use “Save search” on the Search tab to watch for a title. ')+(d.alerts?'New matches also send a phone alert.':'Set up phone alerts below to hear about new matches.')+'</p>';
+}
+async function loadSaved(){try{renderSaved(await api('/api/saved'))}catch(e){$('savedbox').innerHTML='<div class="card status error">'+esc(e.message)+'</div>'}}
+async function savedAction(id,act,btn){
+  if(act==='open'){const x=savedList.find(s=>s.id===id);if(!x)return;if([...$('indexer').options].some(o=>o.value===x.indexer)){$('indexer').value=x.indexer;fillSearchCategories(x.category)}goSearch(x.query,{category:x.category});return}
+  if(act==='delete'&&!confirm('Delete this saved search?'))return;
+  if(btn){btn.disabled=true;if(act==='run')btn.textContent='Checking…'}
+  try{const d=await api('/api/saved',{action:act,id});renderSaved(d);if(act==='run'){const x=savedList.find(s=>s.id===id);toast(x&&x.last_error?x.last_error:'Checked — '+((x&&x.new.length)||0)+' new',!!(x&&x.last_error))}}
+  catch(e){toast(e.message,true);if(btn){btn.disabled=false;if(act==='run')btn.textContent='Check now'}}
+}
+async function saveCurrentSearch(){
+  const query=$('query').value.trim();if(!query){toast('Type what to look for first.',true);return}
+  try{await api('/api/saved',{action:'add',query,indexer:$('indexer').value,category:$('category').value});toast('Saved. The PC checks it regularly — see More.')}catch(e){toast(e.message,true)}
+}
+function renderSettings(s){
+  $('ntfyurl').value=s.ntfy_url||'';$('ntfytoken').value='';$('ntfytoken').placeholder=s.ntfy_token_set?'Saved — type a new one to replace it':'Only for a protected topic';
+  $('ntokclearrow').classList.toggle('hidden',!s.ntfy_token_set);$('ntokclear').checked=false;
+  $('ncomplete').checked=!!s.notify_complete;$('nfailed').checked=!!s.notify_failed;$('nsaved').checked=!!s.notify_saved;$('savedint').value=String(s.saved_interval_hours);
+  const auto=s.autostart===null?'':(s.autostart?'<br>Starts automatically when you log in to Windows. To stop that, run <b>python mobile_server.py --remove-autostart</b> on the PC.':'<br>To start it automatically when you log in to Windows, run <b>python mobile_server.py --install-autostart</b> on the PC.');
+  $('aboutbox').innerHTML='NZB Command Center phone app v'+esc(s.version)+auto;
+}
+async function loadSettings(){try{renderSettings(await api('/api/settings'))}catch(e){toast(e.message,true)}}
+async function saveSettings(){
+  const b=$('setsave');b.disabled=true;
+  try{renderSettings(await api('/api/settings',{ntfy_url:$('ntfyurl').value.trim(),ntfy_token:$('ntfytoken').value.trim(),clear_token:$('ntokclear').checked,notify_complete:$('ncomplete').checked,notify_failed:$('nfailed').checked,notify_saved:$('nsaved').checked,saved_interval_hours:Number($('savedint').value)}));toast('Settings saved');loadSaved()}
+  catch(e){toast(e.message,true)}finally{b.disabled=false}
+}
+async function testAlert(){const b=$('settest');b.disabled=true;try{await api('/api/settings/test',{});toast('Test alert sent — check your phone')}catch(e){toast(e.message,true)}finally{b.disabled=false}}
 async function kodiScan(){
   const b=$('kodiscan');b.disabled=true;
   try{await api('/api/kodi/scan',{});kodiMovies=null;toast('Library scan started on Kodi')}catch(e){toast(e.message,true)}finally{b.disabled=false}
 }
 
 async function retryItem(id){try{await api('/api/history/retry',{id});toast('Retry requested');await refreshHistory()}catch(e){toast(e.message,true)}}
+async function deleteHistory(id){if(!confirm('Remove this entry from the history? Downloaded files are kept.'))return;try{await api('/api/history/delete',{id});await refreshHistory()}catch(e){toast(e.message,true)}}
 
 let seenHistory=null;
 async function watchFinished(){
@@ -1840,11 +2839,33 @@ function bind(){
   $('homedl').addEventListener('click',async e=>{const b=e.target.closest('[data-hact]');if(!b)return;b.disabled=true;await queueAll(b.dataset.hact);refreshHome()});
   $('kodilist').addEventListener('click',e=>{const b=e.target.closest('[data-play]');if(b)playMovie(b.dataset.play,b.dataset.resume==='1')});
   document.addEventListener('click',e=>{const b=e.target.closest('[data-detail]');if(b&&!e.target.closest('#sheet'))openDetail(b.dataset.detail)});
+  document.addEventListener('click',e=>{const b=e.target.closest('[data-show]');if(b&&!e.target.closest('#sheet'))openShow(b.dataset.show)});
+  document.addEventListener('click',e=>{const b=e.target.closest('[data-ep]');if(!b)return;playEpisode(b.dataset.ep,b.dataset.resume==='1');if(e.target.closest('#sheet'))closeSheet()});
+  document.addEventListener('click',e=>{const b=e.target.closest('[data-tvsearch]');if(!b)return;if(e.target.closest('#sheet'))closeSheet();goSearch(b.dataset.tvsearch,{category:'5000'})});
   $('sheet').addEventListener('click',e=>{
     if(e.target===$('sheet')||e.target.closest('[data-close]'))return closeSheet();
     const v=e.target.closest('[data-view]');if(v&&v.dataset.view)return openViewer(v.dataset.view);
-    const p=e.target.closest('[data-dplay]');if(p){playMovie(p.dataset.dplay,p.dataset.resume==='1');closeSheet()}
+    const p=e.target.closest('[data-dplay]');if(p){playMovie(p.dataset.dplay,p.dataset.resume==='1');closeSheet();return}
+    if(e.target.closest('[data-better]')&&detailMovie){
+      const d=detailMovie;upgradeFrom={q:d.quality,hdr:d.hdr};closeSheet();
+      goSearch(d.title+(d.year?' '+d.year:''),{imdbid:d.imdb_id||'',category:'2000',keepUpgrade:true});return;
+    }
+    const qp=e.target.closest('[data-qprio]');if(qp)return queueItemChange('priority',qp.dataset.qprio);
+    if(e.target.closest('[data-qcat]'))return queueItemChange('category',$('qcat').value);
+    if(e.target.closest('[data-qtop]'))return queueItemChange('top');
   });
+  $('kodiseg').addEventListener('click',e=>{const b=e.target.closest('[data-kmode]');if(b)setKodiMode(b.dataset.kmode)});
+  let tvTimer=null;$('tvfilter').addEventListener('input',()=>{clearTimeout(tvTimer);tvTimer=setTimeout(()=>renderShows(true),200)});
+  $('tvview').value=LS.get('nzb_mobile_tvview','all');if(!$('tvview').value)$('tvview').value='all';
+  $('tvview').addEventListener('change',()=>{LS.set('nzb_mobile_tvview',$('tvview').value);window.scrollTo(0,0);renderShows(true)});
+  $('tvmore').addEventListener('click',()=>{tvShown+=TV_PAGE;renderShows()});
+  $('savesearch').addEventListener('click',saveCurrentSearch);
+  $('setsave').addEventListener('click',saveSettings);
+  $('settest').addEventListener('click',testAlert);
+  $('savedbox').addEventListener('click',e=>{const row=e.target.closest('[data-saved]'),b=e.target.closest('[data-sact]');if(row&&b)savedAction(row.dataset.saved,b.dataset.sact,b)});
+  const showTip=e=>{const c=e.target.closest('.chart .col');if(c&&$('ctip'))$('ctip').textContent=c.dataset.tip};
+  $('statsbox').addEventListener('click',showTip);$('statsbox').addEventListener('mouseover',showTip);$('statsbox').addEventListener('focusin',showTip);
+  setInterval(()=>{if(!document.hidden&&activeTab==='more'&&!$('app').classList.contains('hidden'))loadMedia()},15000);
   $('viewer').addEventListener('click',()=>$('viewer').classList.add('hidden'));
   window.addEventListener('popstate',()=>{if(!$('viewer').classList.contains('hidden'))$('viewer').classList.add('hidden');closeSheet(true)});
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(!$('viewer').classList.contains('hidden'))$('viewer').classList.add('hidden');else closeSheet()}});
@@ -1864,7 +2885,7 @@ function bind(){
   $('results').addEventListener('click',e=>{const card=e.target.closest('.result'),b=e.target.closest('[data-act="add"]');if(card&&b)addResult(card.dataset.id,b)});
   $('results').addEventListener('change',e=>{const card=e.target.closest('.result');if(!card||e.target.dataset.act!=='sel')return;const id=card.dataset.id;if(e.target.checked){if(selected.size>=10){e.target.checked=false;toast('Select no more than 10 NZBs at a time.',true);return}selected.add(id)}else selected.delete(id);updateBatchButton()});
   $('queueitems').addEventListener('click',e=>{const row=e.target.closest('.queueitem'),b=e.target.closest('[data-act]');if(row&&b)itemAction(row.dataset.id,b.dataset.act)});
-  $('historyitems').addEventListener('click',e=>{const row=e.target.closest('.queueitem'),b=e.target.closest('[data-act="retry"]');if(row&&b)retryItem(row.dataset.id)});
+  $('historyitems').addEventListener('click',e=>{const row=e.target.closest('.queueitem'),b=e.target.closest('[data-act]');if(!row||!b)return;if(b.dataset.act==='retry')retryItem(row.dataset.id);else if(b.dataset.act==='hdel')deleteHistory(row.dataset.id)});
   $('qresume').addEventListener('click',()=>queueAll('resume'));
   $('qpause').addEventListener('click',()=>queueAll('pause'));
   $('speedset').addEventListener('click',setSpeed);
@@ -2029,7 +3050,25 @@ class MobileHandler(BaseHTTPRequestHandler):
         elif path == "/api/kodi":
             self.send_json(200, self._kodi_overview())
         elif path == "/api/kodi/now":
-            self.send_json(200, {"playing": kodi_now_playing() if kodi_configured() else None})
+            playing = kodi_now_playing() if kodi_configured() else None
+            self.send_json(200, {"playing": playing, "volume": kodi_volume() if kodi_configured() else None})
+        elif path == "/api/kodi/shows":
+            self.send_json(200, {"shows": kodi_all_shows()})
+        elif path == "/api/kodi/show":
+            show_id = to_int(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
+            if show_id <= 0:
+                raise ValueError("Invalid show.")
+            self.send_json(200, kodi_show_details(show_id))
+        elif path == "/api/kodi/missing":
+            self.send_json(200, {"missing": kodi_missing_episodes()})
+        elif path == "/api/media":
+            self.send_json(200, media_overview())
+        elif path == "/api/stats":
+            self.send_json(200, sab_stats())
+        elif path == "/api/saved":
+            self.send_json(200, self._saved_view())
+        elif path == "/api/settings":
+            self.send_json(200, self._settings_view())
         elif path == "/api/kodi/art":
             ref = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("u", [""])[0]
             raw, ctype = kodi_art(ref)
@@ -2058,7 +3097,7 @@ class MobileHandler(BaseHTTPRequestHandler):
                 "slots": [{
                     "id": str(x.get("nzo_id", "")), "name": x.get("filename", "Unnamed"), "status": x.get("status", ""),
                     "percentage": to_float(x.get("percentage")), "size": x.get("size", ""), "sizeleft": x.get("sizeleft", ""),
-                    "eta": x.get("timeleft", ""), "cat": x.get("cat", ""),
+                    "eta": x.get("timeleft", ""), "cat": x.get("cat", ""), "priority": str(x.get("priority") or ""),
                 } for x in slots],
             })
         elif path == "/api/history":
@@ -2100,18 +3139,31 @@ class MobileHandler(BaseHTTPRequestHandler):
             sab_request("retry", {"value": nzo_id})
             log.info("retry %s ip=%s", nzo_id, self.ip)
             self.send_json(200, {"ok": True})
+        elif path == "/api/history/delete":
+            nzo_id = str(body.get("id") or "")
+            if not NZB_ID_RE.match(nzo_id):
+                raise ValueError("Invalid item id.")
+            sab_request("history", {"name": "delete", "value": nzo_id})  # removes the entry; downloaded files stay
+            log.info("history delete %s ip=%s", nzo_id, self.ip)
+            self.send_json(200, {"ok": True})
         elif path == "/api/kodi/play":
-            movieid = to_int(body.get("movieid"))
-            if movieid <= 0:
-                raise ValueError("Invalid movie.")
-            kodi_call("Player.Open", {"item": {"movieid": movieid}, "options": {"resume": bool(body.get("resume"))}})
-            log.info("kodi play movie=%d resume=%s ip=%s", movieid, bool(body.get("resume")), self.ip)
+            movieid, episodeid = to_int(body.get("movieid")), to_int(body.get("episodeid"))
+            if (movieid > 0) == (episodeid > 0):
+                raise ValueError("Invalid movie or episode.")
+            item = {"movieid": movieid} if movieid > 0 else {"episodeid": episodeid}
+            kodi_call("Player.Open", {"item": item, "options": {"resume": bool(body.get("resume"))}})
+            log.info("kodi play %s resume=%s ip=%s", item, bool(body.get("resume")), self.ip)
             self.send_json(200, {"ok": True})
         elif path == "/api/kodi/control":
-            action, pid = str(body.get("action") or ""), to_int(body.get("playerid"), -1)
-            if action not in ("playpause", "stop") or not 0 <= pid <= 10:
-                raise ValueError("Invalid player action.")
-            kodi_call("Player.PlayPause" if action == "playpause" else "Player.Stop", {"playerid": pid})
+            kodi_control(str(body.get("action") or ""), to_int(body.get("playerid"), -1), body.get("value"))
+            self.send_json(200, {"ok": True})
+        elif path == "/api/saved":
+            self._post_saved(body)
+        elif path == "/api/settings":
+            self._post_settings(body)
+        elif path == "/api/settings/test":
+            if not send_notification("NZB Command Center", "Test alert from your phone app — alerts are working.", tags=("bell",)):
+                raise ValueError("Save an ntfy topic URL first.")
             self.send_json(200, {"ok": True})
         elif path == "/api/kodi/scan":
             kodi_call("VideoLibrary.Scan", {"showdialogs": False})
@@ -2154,6 +3206,10 @@ class MobileHandler(BaseHTTPRequestHandler):
         except (UpstreamError, ConfigError) as exc:
             out.update({"sab_ok": False, "sab_error": redact(exc), "state": "Offline", "speed": "", "total": 0})
         out["kodi"] = self._kodi_brief()
+        media = media_overview(with_recent=False)
+        out["media"] = {"configured": media.get("configured", False), "type": media.get("type", ""),
+                        "streams": len(media.get("sessions") or [])}
+        out["saved_new"] = sum(len(x.get("new") or []) for x in load_settings()["saved_searches"])
         return out
 
     def _kodi_brief(self) -> dict:
@@ -2171,14 +3227,20 @@ class MobileHandler(BaseHTTPRequestHandler):
         lim = {"limits": {"start": 0, "end": 1}}
         try:
             info["counts"] = {
-                "movies": to_int(((kodi_call("VideoLibrary.GetMovies", lim) or {}).get("limits") or {}).get("total")),
-                "episodes": to_int(((kodi_call("VideoLibrary.GetEpisodes", lim) or {}).get("limits") or {}).get("total")),
+                "movies": to_int((_kdict(kodi_call("VideoLibrary.GetMovies", lim)).get("limits") or {}).get("total")),
+                "episodes": to_int((_kdict(kodi_call("VideoLibrary.GetEpisodes", lim)).get("limits") or {}).get("total")),
             }
-            recent = (kodi_call("VideoLibrary.GetRecentlyAddedMovies", {"properties": KODI_MOVIE_PROPS,
-                      "limits": {"start": 0, "end": 12}}) or {}).get("movies", [])
+            recent = _kdict(kodi_call("VideoLibrary.GetRecentlyAddedMovies", {"properties": KODI_MOVIE_PROPS,
+                      "limits": {"start": 0, "end": 12}})).get("movies", [])
             info["recent"] = [_kodi_movie(x) for x in recent]
+            info["counts"]["shows"] = to_int(_kdict(_kdict(kodi_call("VideoLibrary.GetTVShows", lim)).get("limits")).get("total"))
         except UpstreamError as exc:
             info.update(online=False, error=str(exc))
+            return info
+        try:
+            info["continue"] = kodi_continue_watching()
+        except UpstreamError:
+            info["continue"] = []
         return info
 
     def _post_search(self, body: dict) -> None:
@@ -2186,37 +3248,98 @@ class MobileHandler(BaseHTTPRequestHandler):
             return
         query = str(body.get("query") or "").strip()[:180]
         category = str(body.get("category") or "").strip()
-        if category and not CATEGORY_RE.match(category):
-            raise ValueError("Category must be numeric Newznab IDs, e.g. 2000 or 5030,5040.")
-        chosen = str(body.get("indexer") or "*")
-        indexers = get_config()["indexers"]
-        if not indexers:
-            raise ValueError("No enabled indexers were found in the desktop configuration.")
-        selected = indexers if chosen == "*" else [x for x in indexers if x["id"] == chosen]
-        if not selected:
-            raise ValueError("Selected indexer does not exist.")
-
-        combined: list[dict] = []
-        errors: list[str] = []
-        with ThreadPoolExecutor(max_workers=min(6, len(selected))) as pool:
-            futures = {pool.submit(search_one, ix, query, category, MAX_RESULTS_PER_INDEXER): ix for ix in selected}
-            for future in as_completed(futures):
-                ix = futures[future]
-                try:
-                    combined.extend(future.result())
-                except UpstreamError as exc:
-                    errors.append(f"{ix['name']}: {exc}")
-                except Exception:
-                    log.exception("Unexpected error searching %s", ix["name"])
-                    errors.append(f"{ix['name']}: unexpected error (see mobile_server.log)")
-        merged = merge_duplicate_results(combined)
-        merged.sort(key=lambda x: (x["pub_ts"], x["size_bytes"]), reverse=True)  # newest survive the cap
-        output = cache_results(merged[:MAX_TOTAL_RESULTS])
+        imdbid = str(body.get("imdbid") or "").strip()
+        merged, errors, searched = run_search(query, str(body.get("indexer") or "*"), category, imdbid)
+        output = cache_results(merged)
         lib = kodi_library_index(background=True)
         for item in output:
             item["in_library"] = library_match(item.get("title", ""), lib)
-        log.info("search ip=%s indexers=%d q=%r cat=%s results=%d errors=%d", self.ip, len(selected), query, category or "-", len(output), len(errors))
-        self.send_json(200, {"results": output, "errors": errors})
+        plan = search_plan(query, imdbid)
+        log.info("search ip=%s indexers=%d q=%r cat=%s mode=%s results=%d errors=%d", self.ip, searched, query,
+                 category or "-", (plan or {}).get("t", "search"), len(output), len(errors))
+        self.send_json(200, {"results": output, "errors": errors, "mode": (plan or {}).get("t", "search")})
+
+    # ---- saved searches & phone settings ---------------------------------------
+    def _saved_view(self) -> dict:
+        settings = load_settings()
+        names = {ix["id"]: ix["name"] for ix in get_config()["indexers"]}
+        return {"interval_hours": settings["saved_interval_hours"], "alerts": bool(settings["ntfy_url"]),
+                "searches": [{
+                    "id": x["id"], "query": x.get("query", ""), "indexer": x.get("indexer", "*"),
+                    "indexer_name": "All indexers" if x.get("indexer", "*") == "*" else names.get(x.get("indexer"), "Removed indexer"),
+                    "category": x.get("category", ""), "created": x.get("created", 0), "last_run": x.get("last_run", 0),
+                    "last_error": x.get("last_error", ""), "last_count": x.get("last_count"), "new": x.get("new") or [],
+                } for x in settings["saved_searches"]]}
+
+    def _post_saved(self, body: dict) -> None:
+        action, sid = str(body.get("action") or ""), str(body.get("id") or "")
+        if action == "add":
+            query = str(body.get("query") or "").strip()[:180]
+            indexer, category = str(body.get("indexer") or "*"), str(body.get("category") or "").strip()
+            if len(query) < 2:
+                raise ValueError("Type what to look for before saving the search.")
+            if category and not CATEGORY_RE.match(category):
+                raise ValueError("Invalid category.")
+            if indexer != "*" and indexer not in {ix["id"] for ix in get_config()["indexers"]}:
+                raise ValueError("Selected indexer does not exist.")
+
+            def add(st: dict) -> None:
+                if any(x.get("query", "").lower() == query.lower() and x.get("indexer") == indexer and x.get("category") == category
+                       for x in st["saved_searches"]):
+                    raise ValueError("That search is already saved.")
+                if len(st["saved_searches"]) >= MAX_SAVED_SEARCHES:
+                    raise ValueError(f"You can save up to {MAX_SAVED_SEARCHES} searches.")
+                st["saved_searches"].append({"id": secrets.token_hex(6), "query": query, "indexer": indexer, "category": category,
+                                             "created": int(time.time()), "last_run": 0, "baselined": False, "seen": [], "new": []})
+            update_settings(add)
+            log.info("saved search added q=%r ip=%s", query, self.ip)
+        elif action in ("delete", "clear"):
+            def change(st: dict) -> None:
+                entry = next((x for x in st["saved_searches"] if x.get("id") == sid), None)
+                if entry is None:
+                    raise ValueError("That saved search no longer exists.")
+                if action == "delete":
+                    st["saved_searches"].remove(entry)
+                else:
+                    entry["new"] = []
+            update_settings(change)
+        elif action == "run":
+            if self._limited(SEARCH_LIMITER, "search"):
+                return
+            run_saved_search(sid, notify=False)
+        else:
+            raise ValueError("Invalid action.")
+        self.send_json(200, self._saved_view())
+
+    def _settings_view(self) -> dict:
+        s = load_settings()
+        return {"ntfy_url": s["ntfy_url"], "ntfy_token_set": bool(s["ntfy_token"]),
+                "notify_complete": s["notify_complete"], "notify_failed": s["notify_failed"], "notify_saved": s["notify_saved"],
+                "saved_interval_hours": s["saved_interval_hours"], "intervals": list(SAVED_INTERVALS),
+                "autostart": autostart_enabled(), "version": VERSION}
+
+    def _post_settings(self, body: dict) -> None:
+        url = validate_ntfy_url(body.get("ntfy_url", ""))
+        token = str(body.get("ntfy_token") or "").strip()
+        if len(token) > 200 or any(ch.isspace() for ch in token):
+            raise ValueError("That access token doesn't look right.")
+        hours = to_int(body.get("saved_interval_hours"), 6)
+        if hours not in SAVED_INTERVALS:
+            raise ValueError("Invalid check interval.")
+
+        def change(st: dict) -> None:
+            st["ntfy_url"] = url
+            if token:
+                st["ntfy_token"] = _dpapi_protect(token)
+            elif body.get("clear_token") or not url:
+                st["ntfy_token"] = ""
+            for key in ("notify_complete", "notify_failed", "notify_saved"):
+                if key in body:
+                    st[key] = bool(body[key])
+            st["saved_interval_hours"] = hours
+        update_settings(change)
+        log.info("phone settings saved (alerts %s) ip=%s", "on" if url else "off", self.ip)
+        self.send_json(200, self._settings_view())
 
     def _add_one(self, result_id: str, category: str, priority: str) -> dict:
         item = get_cached_result(result_id)
@@ -2272,8 +3395,22 @@ class MobileHandler(BaseHTTPRequestHandler):
         nzo_id, action = str(body.get("id") or ""), str(body.get("action") or "")
         if not NZB_ID_RE.match(nzo_id):
             raise ValueError("Invalid item id.")
-        if action not in ("pause", "resume", "delete", "top"):
+        if action not in ("pause", "resume", "delete", "top", "category", "priority"):
             raise ValueError("Invalid action.")
+        if action == "category":
+            category, _ = parse_add_options({"category": body.get("value")})
+            sab_request("change_cat", {"value": nzo_id, "value2": category or "*"})
+            log.info("queue item %s category=%s ip=%s", nzo_id, category or "*", self.ip)
+            self.send_json(200, {"ok": True})
+            return
+        if action == "priority":
+            priority = str(body.get("value") or "").strip()
+            if priority not in ("-1", "0", "1", "2"):
+                raise ValueError("Invalid priority.")
+            sab_request("queue", {"name": "priority", "value": nzo_id, "value2": priority})
+            log.info("queue item %s priority=%s ip=%s", nzo_id, priority, self.ip)
+            self.send_json(200, {"ok": True})
+            return
         if action == "top":
             sab_request("switch", {"value": nzo_id, "value2": 0})
             log.info("queue item top %s ip=%s", nzo_id, self.ip)
@@ -2318,12 +3455,41 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--allow-cidr", action="append", default=[], metavar="CIDR", help="also accept this network (repeatable)")
     p.add_argument("--allow-any-client", action="store_true", help="accept connections from ANY address (not recommended)")
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--install-autostart", action="store_true", help="start this server hidden whenever you log in to Windows")
+    p.add_argument("--remove-autostart", action="store_true", help="stop starting it at login")
     return p.parse_args(argv)
+
+
+def _autostart_args(args: argparse.Namespace) -> list[str]:
+    """The options to repeat when Windows starts the server at login."""
+    out = ["--port", str(args.port)]
+    if args.host != DEFAULT_HOST:
+        out += ["--host", args.host]
+    if args.config:
+        out += ["--config", str(args.config.resolve())]
+    for cidr in args.allow_cidr:
+        out += ["--allow-cidr", cidr]
+    if args.allow_any_client:
+        out.append("--allow-any-client")
+    return out
 
 
 def main(argv=None) -> None:
     global CONFIG_FILE, ALLOW_ANY_CLIENT
+    # Started windowless (pythonw / the login launcher): there is no console to print to.
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = sys.stdout
     args = parse_args(argv)
+    if args.install_autostart or args.remove_autostart:
+        if args.remove_autostart:
+            print("Removed: the server will no longer start at login." if remove_autostart() else "It wasn't set to start at login.")
+        else:
+            path = install_autostart(_autostart_args(args))
+            print(f"Done: the server will start hidden when you log in.\nLauncher: {path}\n"
+                  f"Your access code stays in {ACCESS_KEY_FILE.name}; the log is {LOG_FILE.name}.")
+        return
     if args.config:
         CONFIG_FILE = args.config.resolve()
     ALLOW_ANY_CLIENT = args.allow_any_client
@@ -2337,6 +3503,8 @@ def main(argv=None) -> None:
     kodi_library_index(background=True)  # warm up so the first search can already show "Already in Kodi"
 
     server = ThreadingHTTPServer((args.host, args.port), MobileHandler)
+    worker = BackgroundWorker()
+    worker.start()
     server.daemon_threads = True
     token = _token_bytes.decode("utf-8")
     local_ip = get_local_ip()
@@ -2363,6 +3531,8 @@ def main(argv=None) -> None:
         print(" Only devices on your local network (and Tailscale) are accepted.")
     print(f" Key file: {ACCESS_KEY_FILE}   Log: {LOG_FILE}")
     print(" To rotate the code: stop the server, delete mobile_access_key.txt, restart.")
+    if autostart_enabled() is False:
+        print(" To start it automatically at login: python mobile_server.py --install-autostart")
     print()
     print(" Keep this window open while using the phone app. Ctrl+C stops the server.")
     print("=" * 66)
@@ -2371,6 +3541,7 @@ def main(argv=None) -> None:
     except KeyboardInterrupt:
         print("\nStopping mobile server...")
     finally:
+        worker.stop()
         server.server_close()
 
 
@@ -2378,6 +3549,7 @@ if __name__ == "__main__":
     try:
         main()
     except (ConfigError, OSError, ValueError) as exc:
+        log.error("Startup error: %s", redact(exc))  # reaches the log file even when started windowless
         print(f"\nSTARTUP ERROR: {redact(exc)}")
         print("Check that mobile_server.py is beside nzb_manager_config.json and that the desktop app's config is valid.")
         if sys.stdin and sys.stdin.isatty():

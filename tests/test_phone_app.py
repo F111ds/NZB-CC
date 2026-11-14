@@ -94,7 +94,7 @@ assert home["kodi"]["playing"]["time"] == 4360 and home["kodi"]["playing"]["tota
 assert "kodipass99" in m._KNOWN_SECRETS and "kodipass99" not in json.dumps(home)
 
 st, k = api("/api/kodi")
-assert st == 200 and k["counts"] == {"movies": 412, "episodes": 3001}, k
+assert st == 200 and k["counts"] == {"movies": 412, "episodes": 3001, "shows": 0}, k
 assert k["recent"][0] == {"id": 9, "title": "Oppenheimer", "year": 2023, "runtime": 10800, "resume": 2472, "watched": False, "added": "2026-11-13 21:04:11", "poster": "", "imdb": None, "tmdb": None, "mpaa": "", "genres": []}
 with urllib.request.urlopen(base + "/manifest.webmanifest", timeout=5) as r:
     man = json.loads(r.read()); assert man["display"] == "standalone" and man["start_url"] == "/"

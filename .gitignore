@@ -1,8 +1,9 @@
 # --- Secrets: never commit ---
 # SABnzbd / indexer / Kodi / media server keys
 nzb_manager_config.json
-# Mobile companion pairing code
+# Mobile companion pairing code, alert settings (ntfy token) and saved searches
 mobile_access_key.txt
+mobile_settings.json
 # Half-written config/cache files
 *.tmp
 
