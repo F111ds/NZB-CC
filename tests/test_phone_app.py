@@ -39,7 +39,7 @@ class FakeKodi(BaseHTTPRequestHandler):
                                      "totaltime": {"hours": 2, "minutes": 24, "seconds": 0}, "speed": 1},
             "VideoLibrary.GetMovies": {"limits": {"total": 412}, "movies": [{"movieid": 7, "title": "Arrival", "year": 2016, "runtime": 6960, "playcount": 1, "resume": {"position": 0}}]},
             "VideoLibrary.GetEpisodes": {"limits": {"total": 3001}},
-            "VideoLibrary.GetRecentlyAddedMovies": {"movies": [{"movieid": 9, "title": "Oppenheimer", "year": 2023, "runtime": 10800, "playcount": 0, "resume": {"position": 2472.5}}]},
+            "VideoLibrary.GetRecentlyAddedMovies": {"movies": [{"movieid": 9, "title": "Oppenheimer", "year": 2023, "runtime": 10800, "playcount": 0, "resume": {"position": 2472.5}, "dateadded": "2026-11-13 21:04:11"}]},
         }.get(meth, "OK")
         b = json.dumps({"jsonrpc": "2.0", "id": 1, "result": res}).encode()
         self.send_response(200); self.end_headers(); self.wfile.write(b)
@@ -78,7 +78,9 @@ assert "kodipass99" in m._KNOWN_SECRETS and "kodipass99" not in json.dumps(home)
 
 st, k = api("/api/kodi")
 assert st == 200 and k["counts"] == {"movies": 412, "episodes": 3001}, k
-assert k["recent"][0] == {"id": 9, "title": "Oppenheimer", "year": 2023, "runtime": 10800, "resume": 2472, "watched": False}
+assert k["recent"][0] == {"id": 9, "title": "Oppenheimer", "year": 2023, "runtime": 10800, "resume": 2472, "watched": False, "added": "2026-11-13 21:04:11"}
+with urllib.request.urlopen(base + "/manifest.webmanifest", timeout=5) as r:
+    man = json.loads(r.read()); assert man["display"] == "standalone" and man["start_url"] == "/"
 st, mv = api("/api/kodi/movies"); assert mv["movies"][0]["title"] == "Arrival" and mv["movies"][0]["watched"]
 
 calls.clear()

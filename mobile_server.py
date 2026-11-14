@@ -59,7 +59,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.0"
+VERSION = "3.1"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -696,10 +696,10 @@ def _kodi_movie(mv: dict) -> dict:
     resume = mv.get("resume") or {}
     return {"id": to_int(mv.get("movieid")), "title": str(mv.get("title") or "Untitled"), "year": to_int(mv.get("year")) or None,
             "runtime": to_int(mv.get("runtime")), "resume": int(to_float(resume.get("position"))),
-            "watched": to_int(mv.get("playcount")) > 0}
+            "watched": to_int(mv.get("playcount")) > 0, "added": str(mv.get("dateadded") or "")[:19]}
 
 
-KODI_MOVIE_PROPS = ["title", "year", "runtime", "playcount", "resume"]
+KODI_MOVIE_PROPS = ["title", "year", "runtime", "playcount", "resume", "dateadded"]
 
 
 # ==============================================================================
@@ -1130,7 +1130,7 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="theme-color" content="#060D10">
 <title>NZB Command Center</title>
-<link rel="icon" type="image/png" href="/icon.png"><link rel="apple-touch-icon" href="/icon.png">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" type="image/png" href="/icon.png"><link rel="apple-touch-icon" href="/icon.png">
 <style>
 :root{color-scheme:dark;--bg:#060D10;--side:#08141A;--card:#0E1C23;--hover:#13262F;--deep:#08141A;--line:#1A3440;--teal:#2DD4BF;--teal2:#5EEAD4;--ink:#041016;--white:#F0FDFA;--text:#C9DDE2;--soft:#A7C1C8;--muted:#7F9DA6;--red:#F87171;--amber:#FBBF24;--green:#34D399;--sky:#38BDF8;--purple:#C4B5FD;--mono:ui-monospace,"SF Mono","Cascadia Mono",Consolas,monospace}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -1240,8 +1240,10 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;backgroun
 <div id="kodinow"></div>
 <div id="kodilib" class="hidden">
 <label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="kodifilter" placeholder="Find a movie" autocomplete="off" enterkeyhint="search" aria-label="Find a movie"></label>
+<div class="row" style="margin:4px 0 8px"><select id="kodiview" class="field" style="margin:0" aria-label="Show"><option value="recent">Recently added</option><option value="all">All movies (A–Z)</option><option value="newest">All, newest added first</option><option value="year">All, by release year</option><option value="unwatched">Unwatched</option><option value="progress">In progress</option></select></div>
 <div class="section" id="kodilisttitle">RECENTLY ADDED</div>
 <div id="kodilist"></div>
+<button class="btn ghost full hidden" id="kodimore" style="margin-top:4px">Show more</button>
 </div>
 </section>
 </div></main>
@@ -1477,17 +1479,28 @@ function movieRow(mv){
     (mv.resume?'<button class="btn ghost sm" style="flex:none" data-play="'+esc(mv.id)+'" data-resume="1">Resume</button>':'')+
     '<button class="icon-btn play" data-play="'+esc(mv.id)+'" aria-label="Play '+esc(mv.title)+(mv.resume?' from the start':'')+'">'+ICON.play+'</button></div>';
 }
-async function renderKodiList(){
-  const q=$('kodifilter').value.trim().toLowerCase(),title=$('kodilisttitle'),list=$('kodilist');
-  if(!q){title.textContent='RECENTLY ADDED';list.innerHTML=kodiRecent.map(movieRow).join('')||empty('No movies yet','Run a library scan once something finishes downloading.');return}
+const KODI_PAGE=100;let kodiShown=KODI_PAGE;
+const KODI_VIEWS={recent:'RECENTLY ADDED',all:'ALL MOVIES',newest:'NEWEST ADDED',year:'BY RELEASE YEAR',unwatched:'UNWATCHED',progress:'IN PROGRESS'};
+async function renderKodiList(resetPage){
+  if(resetPage)kodiShown=KODI_PAGE;
+  const q=$('kodifilter').value.trim().toLowerCase(),view=$('kodiview').value,title=$('kodilisttitle'),list=$('kodilist'),more=$('kodimore');
+  more.classList.add('hidden');
+  if(!q&&view==='recent'){title.textContent='RECENTLY ADDED';list.innerHTML=kodiRecent.map(movieRow).join('')||empty('No movies yet','Run a library scan once something finishes downloading.');return}
   if(kodiMovies===null){
     if(kodiLoading)return;kodiLoading=true;title.textContent='LOADING LIBRARY…';
     try{kodiMovies=(await api('/api/kodi/movies')).movies||[]}catch(e){title.textContent='';list.innerHTML=empty('Couldn\'t load the library',e.message);return}finally{kodiLoading=false}
     return renderKodiList();
   }
-  const hits=kodiMovies.filter(m=>m.title.toLowerCase().includes(q));
-  title.textContent=hits.length+' MATCH'+(hits.length===1?'':'ES');
-  list.innerHTML=hits.slice(0,100).map(movieRow).join('')||empty('No matches','Try part of the title.');
+  let a=kodiMovies.slice();
+  if(view==='unwatched')a=a.filter(m=>!m.watched);
+  if(view==='progress')a=a.filter(m=>m.resume>0);
+  if(q)a=a.filter(m=>m.title.toLowerCase().includes(q));
+  if(view==='newest'||view==='recent')a.sort((x,y)=>(y.added||'').localeCompare(x.added||''));
+  if(view==='year')a.sort((x,y)=>(y.year||0)-(x.year||0)||x.title.localeCompare(y.title));
+  const label=q?'MATCH'+(a.length===1?'':'ES'):(view==='all'?'MOVIES':KODI_VIEWS[view]);
+  title.textContent=a.length+' '+label+(q&&view!=='all'&&view!=='recent'?' · '+KODI_VIEWS[view]:'');
+  list.innerHTML=a.slice(0,kodiShown).map(movieRow).join('')||empty(q?'No matches':'Nothing here',q?'Try part of the title.':'No movies fit this view.');
+  if(a.length>kodiShown){more.textContent='Show more ('+(a.length-kodiShown)+' left)';more.classList.remove('hidden')}
 }
 async function refreshKodi(){
   const st=$('kodistatus');
@@ -1498,7 +1511,7 @@ async function refreshKodi(){
     if(!d.online){st.className='lede status error';st.textContent=d.error||'Kodi is offline.';$('kodinow').innerHTML='';$('kodilib').classList.add('hidden');return}
     const c=d.counts||{};st.className='lede';st.textContent=(c.movies||0)+' movies · '+(c.episodes||0)+' episodes';
     $('kodinow').innerHTML=nowCard(d.playing,false);
-    kodiRecent=d.recent||[];$('kodilib').classList.remove('hidden');renderKodiList();
+    kodiRecent=d.recent||[];kodiMovies=null;$('kodilib').classList.remove('hidden');renderKodiList(true);
   }catch(e){st.className='lede status error';st.textContent=e.message}
 }
 async function refreshKodiNow(){try{const d=await api('/api/kodi/now');$('kodinow').innerHTML=nowCard(d.playing,false)}catch{}}
@@ -1522,7 +1535,10 @@ function bind(){
   document.addEventListener('click',e=>{const b=e.target.closest('[data-kact]');if(b)kodiControl(b.dataset.kact,b.dataset.pid)});
   $('homedl').addEventListener('click',async e=>{const b=e.target.closest('[data-hact]');if(!b)return;b.disabled=true;await queueAll(b.dataset.hact);refreshHome()});
   $('kodilist').addEventListener('click',e=>{const b=e.target.closest('[data-play]');if(b)playMovie(b.dataset.play,b.dataset.resume==='1')});
-  let kodiTimer=null;$('kodifilter').addEventListener('input',()=>{clearTimeout(kodiTimer);kodiTimer=setTimeout(renderKodiList,200)});
+  let kodiTimer=null;$('kodifilter').addEventListener('input',()=>{clearTimeout(kodiTimer);kodiTimer=setTimeout(()=>renderKodiList(true),200)});
+  $('kodiview').value=LS.get('nzb_mobile_kodiview','recent');if(!$('kodiview').value)$('kodiview').value='recent';
+  $('kodiview').addEventListener('change',()=>{LS.set('nzb_mobile_kodiview',$('kodiview').value);window.scrollTo(0,0);renderKodiList(true)});
+  $('kodimore').addEventListener('click',()=>{kodiShown+=KODI_PAGE;renderKodiList()});
   $('kodiscan').addEventListener('click',kodiScan);
   $('searchbtn').addEventListener('click',search);
   $('query').addEventListener('keydown',e=>{if(e.key==='Enter')search()});
@@ -1564,6 +1580,14 @@ SECURITY_HEADERS = {
         "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     ),
 }
+
+
+# Lets Android "Add to Home screen" / "Install app" open the page full-screen like an app.
+MANIFEST = json.dumps({
+    "name": "NZB Command Center", "short_name": "NZB Center", "start_url": "/", "scope": "/",
+    "display": "standalone", "background_color": "#060D10", "theme_color": "#060D10",
+    "icons": [{"src": "/icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any"}],
+}).encode("utf-8")
 
 
 class MobileHandler(BaseHTTPRequestHandler):
@@ -1659,6 +1683,9 @@ class MobileHandler(BaseHTTPRequestHandler):
             return
         if path in ("/", "/index.html"):
             self._send(200, PAGE.replace("__VERSION__", VERSION).encode("utf-8"), "text/html; charset=utf-8")
+            return
+        if path == "/manifest.webmanifest":
+            self._send(200, MANIFEST, "application/manifest+json", {"Cache-Control": "public, max-age=86400"})
             return
         if path in ("/icon.png", "/favicon.ico", "/apple-touch-icon.png"):
             self._send(200, ICON_PNG, "image/png", {"Cache-Control": "public, max-age=86400"})
