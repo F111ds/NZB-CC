@@ -15,3 +15,6 @@ media_inspector_cache.json
 # --- Python ---
 __pycache__/
 *.py[cod]
+
+# Review screenshots
+screenshots/

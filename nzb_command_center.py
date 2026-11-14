@@ -161,6 +161,81 @@ COLORS = {
 _SYS = platform.system()
 UI_FONT = "Segoe UI" if _SYS == "Windows" else ("SF Pro Text" if _SYS == "Darwin" else "DejaVu Sans")
 MONO_FONT = "Consolas" if _SYS == "Windows" else ("SF Mono" if _SYS == "Darwin" else "DejaVu Sans Mono")
+UI_FONT_SEMIBOLD = "Segoe UI Semibold" if _SYS == "Windows" else UI_FONT
+
+
+def _tint(hex_color: str, amount: float = 0.16, base: str = "#0F1E25") -> str:
+    """Blends a colour into a dark base: subtle tinted backgrounds for pills and badges."""
+    def rgb(h: str) -> tuple[int, int, int]:
+        h = h.lstrip("#")
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    try:
+        c, b = rgb(hex_color), rgb(base)
+    except (ValueError, IndexError):
+        return base
+    mixed = tuple(round(b[i] + (c[i] - b[i]) * amount) for i in range(3))
+    return "#%02X%02X%02X" % mixed
+
+
+def apply_app_theme() -> None:
+    """One visual system for every widget that doesn't set its own style.
+
+    CustomTkinter's stock theme uses the "Roboto" font (not installed on Windows, so Tk falls
+    back to a different face and size) plus blue/grey widgets. Setting the defaults here makes
+    buttons, dropdowns, entries, checkboxes, scrollbars and tabs consistent across the main
+    window and the Media Inspector, Kodi and Media Server panels.
+    Must run before the first widget is created.
+    """
+    C = COLORS
+    t = ctk.ThemeManager.theme
+
+    def pair(color: str) -> list[str]:
+        return [color, color]  # [light, dark]: the app always runs in dark mode
+
+    t["CTkFont"].update(family=UI_FONT, size=12, weight="normal")
+    t["CTk"]["fg_color"] = pair(C["bg_root"])
+    t["CTkToplevel"]["fg_color"] = pair(C["bg_root"])
+    t["CTkFrame"].update(fg_color=pair(C["bg_panel"]), top_fg_color=pair(C["bg_card"]), border_color=pair(C["border"]))
+    t["CTkLabel"]["text_color"] = pair(C["text_primary"])
+    t["CTkButton"].update(
+        corner_radius=8, border_width=0, fg_color=pair(C["bg_card_alt"]), hover_color=pair("#1C3542"),
+        border_color=pair(C["border"]), text_color=pair(C["text_primary"]), text_color_disabled=pair(C["text_muted"]),
+    )
+    t["CTkEntry"].update(
+        corner_radius=8, border_width=1, fg_color=pair(C["bg_card"]), border_color=pair(C["border"]),
+        text_color=pair(C["text_primary"]), placeholder_text_color=pair(C["text_muted"]),
+    )
+    t["CTkOptionMenu"].update(
+        corner_radius=8, fg_color=pair(C["bg_card"]), button_color=pair(C["bg_card_alt"]),
+        button_hover_color=pair(C["border"]), text_color=pair(C["text_primary"]), text_color_disabled=pair(C["text_muted"]),
+    )
+    t["CTkComboBox"].update(
+        corner_radius=8, border_width=1, fg_color=pair(C["bg_card"]), border_color=pair(C["border"]),
+        button_color=pair(C["bg_card_alt"]), button_hover_color=pair(C["border"]), text_color=pair(C["text_primary"]),
+    )
+    t["DropdownMenu"].update(fg_color=pair(C["bg_card_alt"]), hover_color=pair(C["border"]), text_color=pair(C["text_primary"]))
+    t["CTkCheckBox"].update(
+        corner_radius=5, border_width=2, fg_color=pair(C["accent"]), border_color=pair(C["text_muted"]),
+        hover_color=pair(C["accent_hover"]), checkmark_color=pair(C["bg_root"]), text_color=pair(C["text_primary"]),
+    )
+    t["CTkSwitch"].update(fg_color=pair(C["border"]), progress_color=pair(C["accent"]), button_color=pair(C["text_primary"]),
+                          button_hover_color=pair("#FFFFFF"), text_color=pair(C["text_primary"]))
+    t["CTkRadioButton"].update(fg_color=pair(C["accent"]), border_color=pair(C["text_muted"]),
+                               hover_color=pair(C["accent_hover"]), text_color=pair(C["text_primary"]))
+    t["CTkProgressBar"].update(fg_color=pair(C["bg_card"]), progress_color=pair(C["accent"]))
+    t["CTkSlider"].update(fg_color=pair(C["border"]), progress_color=pair(C["accent"]),
+                          button_color=pair(C["accent"]), button_hover_color=pair(C["accent_hover"]))
+    t["CTkScrollbar"].update(button_color=pair(C["border"]), button_hover_color=pair("#24505F"))
+    t["CTkSegmentedButton"].update(
+        corner_radius=8, border_width=3, fg_color=pair(C["bg_panel"]), selected_color=pair(C["accent"]),
+        selected_hover_color=pair(C["accent_hover"]), unselected_color=pair(C["bg_panel"]),
+        unselected_hover_color=pair(C["bg_card_alt"]), text_color=pair(C["text_primary"]),
+    )
+    t["CTkTextbox"].update(
+        corner_radius=8, fg_color=pair(C["bg_card"]), border_color=pair(C["border"]), text_color=pair(C["text_primary"]),
+        scrollbar_button_color=pair(C["border"]), scrollbar_button_hover_color=pair("#24505F"),
+    )
+    t["CTkScrollableFrame"]["label_fg_color"] = pair(C["bg_card"])
 
 
 def get_status_style(status_text: str) -> tuple[str, str]:
@@ -1395,7 +1470,7 @@ class SpeedChartWidget(ctk.CTkFrame):
         self.peak_lbl = ctk.CTkLabel(
             top,
             text="Peak: 0.0 MB/s",
-            font=ctk.CTkFont(family=MONO_FONT, size=10),
+            font=ctk.CTkFont(family=UI_FONT, size=10),
             text_color=COLORS["accent"],
         )
         self.peak_lbl.pack(side="right")
@@ -1581,8 +1656,8 @@ class SettingsDialog(ctk.CTkToplevel):
             footer,
             text="Save & Connect",
             width=142,
-            fg_color=COLORS["green"],
-            hover_color="#059669",
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_hover"],
             text_color="#041016",
             font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
             command=self._save,
@@ -2051,8 +2126,9 @@ class SettingsDialog(ctk.CTkToplevel):
 
 class NzbManagerApp(ctk.CTk):
     def __init__(self):
-        super().__init__()
         ctk.set_appearance_mode("dark")
+        apply_app_theme()  # before any widget exists, including this window
+        super().__init__()
 
         self.title("John's NZB Command Center — Operations Center")
         self.geometry("1360x900")
@@ -2563,102 +2639,101 @@ class NzbManagerApp(ctk.CTk):
         self.grid_rowconfigure(3, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        header = ctk.CTkFrame(self, height=58, fg_color=COLORS["bg_panel"], corner_radius=0)
+        header = ctk.CTkFrame(self, height=64, fg_color=COLORS["bg_panel"], corner_radius=0)
         header.grid(row=0, column=0, sticky="ew")
         header.grid_propagate(False)
+        header.pack_propagate(False)
 
-        header_border = ctk.CTkFrame(header, height=1, fg_color=COLORS["border"])
+        header_border = ctk.CTkFrame(header, height=1, fg_color=COLORS["border"], corner_radius=0)
         header_border.place(relx=0, rely=1.0, relwidth=1.0, anchor="sw")
 
         left = ctk.CTkFrame(header, fg_color="transparent")
-        left.pack(side="left", padx=20)
+        left.pack(side="left", padx=(18, 0), fill="y")
+
+        # Brand mark + title block
         ctk.CTkLabel(
             left,
+            text="N",
+            width=34,
+            height=34,
+            corner_radius=9,
+            fg_color=COLORS["accent"],
+            text_color="#041016",
+            font=ctk.CTkFont(family=UI_FONT, size=18, weight="bold"),
+        ).pack(side="left", pady=15)
+
+        title_block = ctk.CTkFrame(left, fg_color="transparent")
+        title_block.pack(side="left", padx=(11, 18))
+        ctk.CTkLabel(
+            title_block,
             text="John's NZB Command Center",
-            font=ctk.CTkFont(family=UI_FONT, size=17, weight="bold"),
+            height=20,
+            anchor="w",
+            font=ctk.CTkFont(family=UI_FONT, size=15, weight="bold"),
             text_color=COLORS["text_primary"],
-        ).pack(side="left")
-
-        self.sab_status_pill = ctk.CTkLabel(
-            left,
-            text="●  SABnzbd: Connecting",
-            fg_color=COLORS["bg_card"],
-            corner_radius=8,
-            padx=10,
-            pady=4,
-            font=ctk.CTkFont(family=MONO_FONT, size=11, weight="bold"),
-            text_color=COLORS["amber"],
-        )
-        self.sab_status_pill.pack(side="left", padx=(14, 6))
-
-        self.indexer_status_pill = ctk.CTkLabel(
-            left,
-            text="●  Indexers: Ready",
-            fg_color=COLORS["bg_card"],
-            corner_radius=8,
-            padx=10,
-            pady=4,
-            font=ctk.CTkFont(family=MONO_FONT, size=11, weight="bold"),
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            title_block,
+            text="OPERATIONS CENTER",
+            height=14,
+            anchor="w",
+            font=ctk.CTkFont(family=UI_FONT, size=9, weight="bold"),
             text_color=COLORS["accent"],
-        )
-        self.indexer_status_pill.pack(side="left", padx=(0, 6))
+        ).pack(anchor="w")
 
-        self.kodi_status_pill = ctk.CTkLabel(
-            left,
-            text="●  Kodi: Not Configured",
-            fg_color=COLORS["bg_card"],
-            corner_radius=8,
-            padx=10,
-            pady=4,
-            font=ctk.CTkFont(family=MONO_FONT, size=11, weight="bold"),
-            text_color=COLORS["text_muted"],
-        )
-        self.kodi_status_pill.pack(side="left", padx=(0, 6))
+        # Thin divider between the brand and the live status pills
+        ctk.CTkFrame(left, width=1, height=30, fg_color=COLORS["border"], corner_radius=0).pack(side="left", padx=(0, 14))
 
-        self.media_server_status_pill = ctk.CTkLabel(
-            left,
-            text="●  Media Server: Not Configured",
-            fg_color=COLORS["bg_card"],
-            corner_radius=8,
-            padx=10,
-            pady=4,
-            font=ctk.CTkFont(family=MONO_FONT, size=11, weight="bold"),
-            text_color=COLORS["text_muted"],
-        )
-        self.media_server_status_pill.pack(side="left")
+        def status_pill(text: str, color: str, last: bool = False) -> ctk.CTkLabel:
+            pill = ctk.CTkLabel(
+                left,
+                text=text,
+                height=26,
+                fg_color=COLORS["bg_card"],
+                corner_radius=13,
+                padx=11,
+                font=ctk.CTkFont(family=UI_FONT_SEMIBOLD, size=11),
+                text_color=color,
+            )
+            pill.pack(side="left", padx=(0, 0 if last else 6))
+            return pill
+
+        self.sab_status_pill = status_pill("●  SABnzbd: Connecting", COLORS["amber"])
+        self.indexer_status_pill = status_pill("●  Indexers: Ready", COLORS["accent"])
+        self.kodi_status_pill = status_pill("●  Kodi: Not Configured", COLORS["text_muted"])
+        self.media_server_status_pill = status_pill("●  Media Server: Not Configured", COLORS["text_muted"], last=True)
 
         right = ctk.CTkFrame(header, fg_color="transparent")
-        right.pack(side="right", padx=20)
-
-        self.pause_all_btn = ctk.CTkButton(
-            right,
-            text="Pause Queue",
-            width=110,
-            height=32,
-            corner_radius=8,
-            fg_color=COLORS["bg_card"],
-            hover_color=COLORS["bg_card_alt"],
-            border_width=1,
-            border_color=COLORS["border"],
-            command=self._toggle_pause_all,
-        )
-        self.pause_all_btn.pack(side="left", padx=6)
+        right.pack(side="right", padx=18, fill="y")
 
         ctk.CTkButton(
             right,
             text="Settings",
-            width=92,
-            height=32,
-            corner_radius=8,
+            width=96,
+            height=34,
             fg_color=COLORS["accent"],
             hover_color=COLORS["accent_hover"],
             text_color="#041016",
             font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
             command=self._open_settings,
-        ).pack(side="left")
+        ).pack(side="right", pady=15)
+
+        self.pause_all_btn = ctk.CTkButton(
+            right,
+            text="Pause Queue",
+            width=116,
+            height=34,
+            fg_color="transparent",
+            hover_color=COLORS["bg_card_alt"],
+            border_width=1,
+            border_color=COLORS["border"],
+            font=ctk.CTkFont(family=UI_FONT_SEMIBOLD, size=12),
+            command=self._toggle_pause_all,
+        )
+        self.pause_all_btn.pack(side="right", padx=(0, 8), pady=15)
 
         telemetry = ctk.CTkFrame(self, fg_color="transparent")
-        telemetry.grid(row=1, column=0, sticky="ew", padx=16, pady=(10, 6))
+        telemetry.grid(row=1, column=0, sticky="ew", padx=16, pady=(14, 8))
         for col in range(4):
             telemetry.grid_columnconfigure(col, weight=1, uniform="metric")
 
@@ -2673,17 +2748,17 @@ class NzbManagerApp(ctk.CTk):
             telemetry, 2, "DRIVE SPACE", "Checking...", "Download volume", COLORS["green"], return_card=True
         )
         self.drive_bar = ctk.CTkProgressBar(
-            drive_card, height=5, fg_color=COLORS["bg_root"], progress_color=COLORS["green"]
+            drive_card, height=4, fg_color=COLORS["bg_card"], progress_color=COLORS["green"]
         )
         self.drive_bar.set(0)
-        self.drive_bar.pack(fill="x", padx=14, pady=(0, 8))
+        self.drive_bar.pack(fill="x", padx=16, pady=(2, 10))
 
         self.card_nzbs_val, self.card_nzbs_sub = self._metric_card(
             telemetry, 3, "NZBs TODAY", str(self.daily_stats["count"]), "Sent or saved today", COLORS["amber"]
         )
 
         ops_row = ctk.CTkFrame(self, fg_color="transparent")
-        ops_row.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 6))
+        ops_row.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
         ops_row.grid_columnconfigure(0, weight=3)
         ops_row.grid_columnconfigure(1, weight=2)
 
@@ -2694,19 +2769,19 @@ class NzbManagerApp(ctk.CTk):
             border_color=COLORS["border"],
             corner_radius=10,
         )
-        now_card.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        now_card.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
 
         now_hdr = ctk.CTkFrame(now_card, fg_color="transparent")
-        now_hdr.pack(fill="x", padx=14, pady=(10, 4))
+        now_hdr.pack(fill="x", padx=16, pady=(12, 2))
 
         self.now_dl_badge = ctk.CTkLabel(
             now_hdr,
             text="IDLE",
+            height=22,
             fg_color=COLORS["bg_card"],
-            corner_radius=6,
-            padx=9,
-            pady=2,
-            font=ctk.CTkFont(family=MONO_FONT, size=10, weight="bold"),
+            corner_radius=11,
+            padx=10,
+            font=ctk.CTkFont(family=UI_FONT, size=10, weight="bold"),
             text_color=COLORS["text_muted"],
         )
         self.now_dl_badge.pack(side="left", padx=(0, 10))
@@ -2721,7 +2796,7 @@ class NzbManagerApp(ctk.CTk):
         self.now_dl_stats = ctk.CTkLabel(
             now_hdr,
             text="0%  •  0 B left  •  ETA 0:00:00  •  0 B/s",
-            font=ctk.CTkFont(family=MONO_FONT, size=11),
+            font=ctk.CTkFont(family=UI_FONT_SEMIBOLD, size=11),
             text_color=COLORS["text_secondary"],
         )
         self.now_dl_stats.pack(side="right")
@@ -2730,16 +2805,16 @@ class NzbManagerApp(ctk.CTk):
             now_card,
             text="No active download in SABnzbd",
             anchor="w",
-            font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
+            font=ctk.CTkFont(family=UI_FONT, size=14, weight="bold"),
             text_color=COLORS["text_primary"],
         )
-        self.now_dl_name.pack(fill="x", padx=14, pady=(4, 8))
+        self.now_dl_name.pack(fill="x", padx=16, pady=(6, 8))
 
         self.now_dl_bar = ctk.CTkProgressBar(
-            now_card, height=7, fg_color=COLORS["bg_root"], progress_color=COLORS["accent"]
+            now_card, height=6, fg_color=COLORS["bg_card"], progress_color=COLORS["accent"]
         )
         self.now_dl_bar.set(0)
-        self.now_dl_bar.pack(fill="x", padx=14, pady=(0, 12))
+        self.now_dl_bar.pack(fill="x", padx=16, pady=(0, 14))
 
         self.speed_chart = SpeedChartWidget(ops_row, height=74)
         self.speed_chart.grid(row=0, column=1, sticky="nsew")
@@ -2751,10 +2826,17 @@ class NzbManagerApp(ctk.CTk):
             segmented_button_selected_color=COLORS["accent"],
             segmented_button_selected_hover_color=COLORS["accent_hover"],
             segmented_button_unselected_color=COLORS["bg_panel"],
-            text_color=COLORS["text_primary"],
+            segmented_button_unselected_hover_color=COLORS["bg_card_alt"],
+            segmented_button_font=ctk.CTkFont(family=UI_FONT_SEMIBOLD, size=12),
+            text_color=COLORS["text_secondary"],
             corner_radius=10,
+            anchor="w",
         )
-        self.tabs.grid(row=3, column=0, sticky="nsew", padx=16, pady=(2, 4))
+        self.tabs.grid(row=3, column=0, sticky="nsew", padx=12, pady=(0, 4))
+        try:  # taller tab buttons (private attr: harmless to skip on other CustomTkinter versions)
+            self.tabs._segmented_button.configure(height=34, text_color=COLORS["text_primary"])
+        except Exception:
+            pass
 
         self.tab_search = self.tabs.add("Indexer Search")
         self.tab_local = self.tabs.add("Local NZB Files")
@@ -2772,14 +2854,26 @@ class NzbManagerApp(ctk.CTk):
         self._build_media_server_tab()
         self._build_log_tab()
 
+        footer = ctk.CTkFrame(self, height=30, fg_color=COLORS["bg_panel"], corner_radius=0)
+        footer.grid(row=4, column=0, sticky="ew")
+        footer.pack_propagate(False)
+        ctk.CTkFrame(footer, height=1, fg_color=COLORS["border"], corner_radius=0).place(relx=0, rely=0, relwidth=1.0)
+
+        ctk.CTkLabel(
+            footer,
+            text="Ctrl+F  Search     F5  Refresh SAB     Ctrl+,  Settings",
+            font=ctk.CTkFont(family=UI_FONT, size=10),
+            text_color=COLORS["text_muted"],
+        ).pack(side="right", padx=18)
+
         self.status_bar = ctk.CTkLabel(
-            self,
-            text="Ready. Shortcuts: Ctrl+F Search • F5 Refresh SAB • Ctrl+, Settings",
+            footer,
+            text="Ready.",
             anchor="w",
             font=ctk.CTkFont(family=UI_FONT, size=11),
             text_color=COLORS["text_secondary"],
         )
-        self.status_bar.grid(row=4, column=0, sticky="ew", padx=20, pady=(2, 8))
+        self.status_bar.pack(side="left", fill="x", expand=True, padx=18)
 
     def _metric_card(self, parent, col: int, title: str, value: str, sub: str, accent: str, return_card: bool = False):
         card = ctk.CTkFrame(
@@ -2789,38 +2883,73 @@ class NzbManagerApp(ctk.CTk):
             border_color=COLORS["border"],
             corner_radius=10,
         )
-        pad_r = 0 if col == 3 else 10
+        pad_r = 0 if col == 3 else 12
         card.grid(row=0, column=col, sticky="nsew", padx=(0, pad_r))
+
+        # Slim accent stripe on the left edge ties each card to its colour.
+        ctk.CTkFrame(card, width=3, fg_color=accent, corner_radius=2).place(x=0, rely=0.22, relheight=0.56)
 
         ctk.CTkLabel(
             card,
             text=title,
             anchor="w",
+            height=16,
             font=ctk.CTkFont(family=UI_FONT, size=10, weight="bold"),
             text_color=COLORS["text_muted"],
-        ).pack(fill="x", padx=14, pady=(10, 2))
+        ).pack(fill="x", padx=16, pady=(11, 0))
 
         val_lbl = ctk.CTkLabel(
             card,
             text=value,
             anchor="w",
-            font=ctk.CTkFont(family=MONO_FONT, size=15, weight="bold"),
+            height=30,
+            font=ctk.CTkFont(family=UI_FONT, size=20, weight="bold"),
             text_color=accent,
         )
-        val_lbl.pack(fill="x", padx=14)
+        val_lbl.pack(fill="x", padx=16)
 
         sub_lbl = ctk.CTkLabel(
             card,
             text=sub,
             anchor="w",
+            height=16,
             font=ctk.CTkFont(family=UI_FONT, size=11),
             text_color=COLORS["text_secondary"],
         )
-        sub_lbl.pack(fill="x", padx=14, pady=(2, 6 if return_card else 10))
+        sub_lbl.pack(fill="x", padx=16, pady=(0, 6 if return_card else 11))
 
         if return_card:
             return card, val_lbl, sub_lbl
         return val_lbl, sub_lbl
+
+    @staticmethod
+    def _pill(parent, text: str, color: str, strong: bool = False) -> ctk.CTkLabel:
+        """Small rounded tag with a tinted background in its own colour."""
+        return ctk.CTkLabel(
+            parent,
+            text=text,
+            height=22,
+            corner_radius=11,
+            padx=9,
+            fg_color=_tint(color, 0.22 if strong else 0.14),
+            text_color=color,
+            font=ctk.CTkFont(family=UI_FONT, size=10, weight="bold"),
+        )
+
+    @staticmethod
+    def _empty_state(parent, title: str, hint: str) -> None:
+        """Centered title + hint used wherever a list has nothing to show."""
+        box = ctk.CTkFrame(parent, fg_color="transparent")
+        box.pack(pady=(56, 40))
+        ctk.CTkLabel(
+            box, text="◇", font=ctk.CTkFont(family=UI_FONT, size=26), text_color=COLORS["border_accent"]
+        ).pack()
+        ctk.CTkLabel(
+            box, text=title, font=ctk.CTkFont(family=UI_FONT, size=14, weight="bold"), text_color=COLORS["text_primary"]
+        ).pack(pady=(4, 2))
+        ctk.CTkLabel(
+            box, text=hint, font=ctk.CTkFont(family=UI_FONT, size=12), text_color=COLORS["text_muted"]
+        ).pack()
 
     def _build_media_tab(self) -> None:
         self.tab_media.grid_rowconfigure(0, weight=1)
@@ -2904,16 +3033,24 @@ class NzbManagerApp(ctk.CTk):
         self.tab_search.grid_rowconfigure(4, weight=1)
         self.tab_search.grid_columnconfigure(0, weight=1)
 
-        bar = ctk.CTkFrame(self.tab_search, fg_color=COLORS["bg_panel"], border_width=1, border_color=COLORS["border"], corner_radius=10)
-        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(6, 4))
+        # One toolbar card (search / filters / batch actions) instead of three stacked boxes.
+        toolbar = ctk.CTkFrame(self.tab_search, fg_color=COLORS["bg_panel"], border_width=1, border_color=COLORS["border"], corner_radius=12)
+        toolbar.grid(row=0, column=0, sticky="ew", padx=4, pady=(8, 6))
+
+        def divider() -> None:
+            ctk.CTkFrame(toolbar, height=1, fg_color=COLORS["border"], corner_radius=0).pack(fill="x", padx=12)
+
+        bar = ctk.CTkFrame(toolbar, fg_color="transparent")
+        bar.pack(fill="x", padx=2, pady=(4, 2))
         bar.grid_columnconfigure(0, weight=1)
 
         self.search_entry = ctk.CTkEntry(
             bar,
-            height=36,
+            height=38,
             fg_color=COLORS["bg_card"],
             border_color=COLORS["border"],
-            placeholder_text="Search indexer(s) (or leave blank to browse selected subcategory)...",
+            font=ctk.CTkFont(family=UI_FONT, size=13),
+            placeholder_text="Search your indexers…  (leave blank to browse the selected category)",
         )
         self.search_entry.grid(row=0, column=0, sticky="ew", padx=(12, 8), pady=8)
         self.search_entry.bind("<Return>", lambda _e: self._on_search_button())
@@ -2923,7 +3060,8 @@ class NzbManagerApp(ctk.CTk):
             bar,
             variable=self.indexer_select_var,
             values=["All Enabled"],
-            width=145,
+            width=150,
+            height=34,
             fg_color=COLORS["bg_card"],
             button_color=COLORS["border"],
             command=lambda _v: self._apply_cached_caps_for_selection(),
@@ -2935,7 +3073,8 @@ class NzbManagerApp(ctk.CTk):
             bar,
             variable=self.indexer_cat_var,
             values=[label for label, _cid in FALLBACK_INDEXER_CATEGORIES],
-            width=225,
+            width=230,
+            height=34,
             fg_color=COLORS["bg_card"],
             button_color=COLORS["border"],
         )
@@ -2944,8 +3083,8 @@ class NzbManagerApp(ctk.CTk):
         ctk.CTkButton(
             bar,
             text="↻ Cats",
-            width=64,
-            height=32,
+            width=70,
+            height=34,
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_card_alt"],
             command=lambda: self._refresh_indexer_categories(force=True),
@@ -2954,8 +3093,8 @@ class NzbManagerApp(ctk.CTk):
         self.search_btn = ctk.CTkButton(
             bar,
             text="Search",
-            width=96,
-            height=36,
+            width=104,
+            height=38,
             fg_color=COLORS["accent"],
             hover_color=COLORS["accent_hover"],
             text_color="#041016",
@@ -2964,13 +3103,14 @@ class NzbManagerApp(ctk.CTk):
         )
         self.search_btn.grid(row=0, column=4, padx=(6, 12), pady=8)
 
-        filters = ctk.CTkFrame(self.tab_search, fg_color=COLORS["bg_panel"], border_width=1, border_color=COLORS["border"], corner_radius=10)
-        filters.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 4))
+        divider()
+        filters = ctk.CTkFrame(toolbar, fg_color="transparent")
+        filters.pack(fill="x", padx=2, pady=2)
 
         self.local_filter_entry = ctk.CTkEntry(
             filters,
             width=165,
-            height=28,
+            height=30,
             fg_color=COLORS["bg_card"],
             border_color=COLORS["border"],
             placeholder_text="Filter results locally...",
@@ -2985,7 +3125,7 @@ class NzbManagerApp(ctk.CTk):
             variable=self.sort_var,
             values=SORT_OPTIONS,
             width=142,
-            height=28,
+            height=30,
             fg_color=COLORS["bg_card"],
             button_color=COLORS["border"],
             command=lambda _v: self._apply_filters_and_render(reset_page=True),
@@ -2997,7 +3137,7 @@ class NzbManagerApp(ctk.CTk):
             variable=self.quality_var,
             values=QUALITY_FILTER_OPTIONS,
             width=110,
-            height=28,
+            height=30,
             fg_color=COLORS["bg_card"],
             button_color=COLORS["border"],
             command=lambda _v: self._apply_filters_and_render(reset_page=True),
@@ -3009,7 +3149,7 @@ class NzbManagerApp(ctk.CTk):
             variable=self.size_filter_var,
             values=SIZE_FILTER_OPTIONS,
             width=108,
-            height=28,
+            height=30,
             fg_color=COLORS["bg_card"],
             button_color=COLORS["border"],
             command=lambda _v: self._apply_filters_and_render(reset_page=True),
@@ -3021,7 +3161,7 @@ class NzbManagerApp(ctk.CTk):
             variable=self.lang_var,
             values=LANGUAGE_FILTER_OPTIONS,
             width=116,
-            height=28,
+            height=30,
             fg_color=COLORS["bg_card"],
             button_color=COLORS["border"],
             command=lambda _v: self._apply_filters_and_render(reset_page=True),
@@ -3043,7 +3183,7 @@ class NzbManagerApp(ctk.CTk):
             filters,
             text="Reset",
             width=54,
-            height=26,
+            height=30,
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_card_alt"],
             command=self._reset_search_filters,
@@ -3055,7 +3195,7 @@ class NzbManagerApp(ctk.CTk):
             variable=self.search_cat_var,
             values=self._sab_cat_menu_values(),
             width=126,
-            height=28,
+            height=30,
             fg_color=COLORS["bg_card"],
             button_color=COLORS["border"],
         )
@@ -3068,14 +3208,15 @@ class NzbManagerApp(ctk.CTk):
             text_color=COLORS["text_secondary"],
         ).pack(side="right", padx=(6, 4), pady=7)
 
-        batch_bar = ctk.CTkFrame(self.tab_search, fg_color=COLORS["bg_panel"], border_width=1, border_color=COLORS["border"], corner_radius=10)
-        batch_bar.grid(row=2, column=0, sticky="ew", padx=4, pady=(0, 4))
+        divider()
+        batch_bar = ctk.CTkFrame(toolbar, fg_color="transparent")
+        batch_bar.pack(fill="x", padx=2, pady=(2, 4))
 
         ctk.CTkButton(
             batch_bar,
             text="Select Page",
             width=92,
-            height=26,
+            height=30,
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_card_alt"],
             command=self._select_current_search_page,
@@ -3085,7 +3226,7 @@ class NzbManagerApp(ctk.CTk):
             batch_bar,
             text="Clear Sel",
             width=78,
-            height=26,
+            height=30,
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_card_alt"],
             command=self._clear_search_selection,
@@ -3095,9 +3236,9 @@ class NzbManagerApp(ctk.CTk):
             batch_bar,
             text="Send Selected (0)",
             width=142,
-            height=26,
-            fg_color=COLORS["green"],
-            hover_color="#059669",
+            height=30,
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_hover"],
             text_color="#041016",
             font=ctk.CTkFont(family=UI_FONT, size=11, weight="bold"),
             command=self._send_selected_search_to_sab,
@@ -3110,7 +3251,7 @@ class NzbManagerApp(ctk.CTk):
             variable=self.lib_filter_var,
             values=LIBRARY_FILTER_OPTIONS,
             width=126,
-            height=26,
+            height=30,
             fg_color=COLORS["bg_card"],
             button_color=COLORS["border"],
             command=lambda _v: self._apply_filters_and_render(reset_page=True),
@@ -3119,7 +3260,11 @@ class NzbManagerApp(ctk.CTk):
         self.lib_index_badge = ctk.CTkLabel(
             batch_bar,
             text="Lib: Not scanned",
-            font=ctk.CTkFont(family=MONO_FONT, size=10),
+            height=24,
+            corner_radius=12,
+            padx=10,
+            fg_color=COLORS["bg_card"],
+            font=ctk.CTkFont(family=UI_FONT_SEMIBOLD, size=11),
             text_color=COLORS["text_muted"],
         )
         self.lib_index_badge.pack(side="left", padx=4, pady=6)
@@ -3128,7 +3273,7 @@ class NzbManagerApp(ctk.CTk):
             batch_bar,
             text="Next ▶",
             width=72,
-            height=26,
+            height=30,
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_card_alt"],
             command=lambda: self._change_search_page(1),
@@ -3138,7 +3283,7 @@ class NzbManagerApp(ctk.CTk):
         self.page_label = ctk.CTkLabel(
             batch_bar,
             text="Page 1 / 1",
-            font=ctk.CTkFont(family=MONO_FONT, size=11),
+            font=ctk.CTkFont(family=UI_FONT_SEMIBOLD, size=11),
             text_color=COLORS["text_secondary"],
         )
         self.page_label.pack(side="right", padx=8, pady=6)
@@ -3147,7 +3292,7 @@ class NzbManagerApp(ctk.CTk):
             batch_bar,
             text="◀ Prev",
             width=72,
-            height=26,
+            height=30,
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_card_alt"],
             command=lambda: self._change_search_page(-1),
@@ -3171,15 +3316,15 @@ class NzbManagerApp(ctk.CTk):
         )
 
         self.search_results_frame = ctk.CTkScrollableFrame(
-            self.tab_search, fg_color=COLORS["bg_panel"], border_width=1, border_color=COLORS["border"], corner_radius=10
+            self.tab_search, fg_color=COLORS["bg_panel"], border_width=1, border_color=COLORS["border"], corner_radius=12
         )
-        self.search_results_frame.grid(row=4, column=0, sticky="nsew", padx=4, pady=(4, 4))
+        self.search_results_frame.grid(row=4, column=0, sticky="nsew", padx=4, pady=(0, 4))
 
-        ctk.CTkLabel(
+        self._empty_state(
             self.search_results_frame,
-            text="Enter a query or pick a subcategory above, then click Search.",
-            text_color=COLORS["text_muted"],
-        ).pack(pady=36)
+            "Search your indexers",
+            "Type a title above and press Enter, or pick a category and click Search to browse.",
+        )
 
     def _build_local_tab(self) -> None:
         self.tab_local.grid_rowconfigure(1, weight=1)
@@ -3241,8 +3386,8 @@ class NzbManagerApp(ctk.CTk):
             text="Send Selected (0)",
             width=130,
             height=26,
-            fg_color=COLORS["green"],
-            hover_color="#059669",
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_hover"],
             text_color="#041016",
             font=ctk.CTkFont(family=UI_FONT, size=11, weight="bold"),
             command=self._upload_selected_batch_nzbs,
@@ -3302,8 +3447,8 @@ class NzbManagerApp(ctk.CTk):
         ctk.CTkButton(
             actions,
             text="Send to SABnzbd",
-            fg_color=COLORS["green"],
-            hover_color="#059669",
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_hover"],
             text_color="#041016",
             font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
             command=self._upload_selected_nzb,
@@ -3338,7 +3483,7 @@ class NzbManagerApp(ctk.CTk):
         self.sab_summary_label = ctk.CTkLabel(
             ctrl,
             text="ACTIVE QUEUE  •  0 B left  •  ETA 0:00:00  •  0 B/s",
-            font=ctk.CTkFont(family=MONO_FONT, size=12, weight="bold"),
+            font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
             text_color=COLORS["accent"],
         )
         self.sab_summary_label.pack(side="left", padx=14, pady=10)
@@ -3396,7 +3541,7 @@ class NzbManagerApp(ctk.CTk):
             corner_radius=6,
             padx=8,
             pady=3,
-            font=ctk.CTkFont(family=MONO_FONT, size=10),
+            font=ctk.CTkFont(family=UI_FONT, size=10),
             text_color=COLORS["text_secondary"],
         )
         self.speed_limit_badge.pack(side="right", padx=6, pady=10)
@@ -3963,24 +4108,30 @@ class NzbManagerApp(ctk.CTk):
         self._set_scroll_y(self.search_results_frame, 0.0)
 
         if not items:
-            ctk.CTkLabel(
+            self._empty_state(
                 self.search_results_frame,
-                text="No results matched your query / filters.",
-                text_color=COLORS["text_muted"],
-            ).pack(pady=36)
+                "No matching releases",
+                "Try a different search, or loosen the filters above (Reset clears them).",
+            )
             return
 
         for item in items:
+            is_selected = item["uid"] in self.selected_search_uids
             card = ctk.CTkFrame(
                 self.search_results_frame,
                 fg_color=COLORS["bg_card"],
                 corner_radius=10,
                 border_width=1,
-                border_color=COLORS["border"],
+                border_color=COLORS["border_accent"] if is_selected else COLORS["border"],
             )
-            card.pack(fill="x", padx=10, pady=5)
+            card.pack(fill="x", padx=10, pady=(8, 0))
 
-            sel_var = ctk.BooleanVar(value=item["uid"] in self.selected_search_uids)
+            sel_var = ctk.BooleanVar(value=is_selected)
+
+            def on_toggle(u=item["uid"], v=sel_var, c=card):
+                self._toggle_search_selection(u, v.get())
+                c.configure(border_color=COLORS["border_accent"] if v.get() else COLORS["border"])
+
             ctk.CTkCheckBox(
                 card,
                 text="",
@@ -3988,18 +4139,11 @@ class NzbManagerApp(ctk.CTk):
                 checkbox_width=18,
                 checkbox_height=18,
                 variable=sel_var,
-                fg_color=COLORS["accent"],
-                command=lambda u=item["uid"], v=sel_var: self._toggle_search_selection(u, v.get()),
-            ).pack(side="left", padx=(10, 2))
+                command=on_toggle,
+            ).pack(side="left", padx=(14, 2))
 
-            art_frame = ctk.CTkFrame(
-                card,
-                fg_color=COLORS["bg_panel"],
-                border_width=1,
-                border_color=COLORS["border"],
-                corner_radius=7,
-            )
-            art_frame.pack(side="left", padx=(6, 6), pady=10)
+            art_frame = ctk.CTkFrame(card, fg_color=COLORS["bg_panel"], corner_radius=8)
+            art_frame.pack(side="left", padx=(6, 4), pady=10)
 
             poster_lbl = ctk.CTkLabel(
                 art_frame,
@@ -4007,78 +4151,86 @@ class NzbManagerApp(ctk.CTk):
                 width=58,
                 height=84,
                 fg_color="transparent",
-                font=ctk.CTkFont(family=MONO_FONT, size=9),
+                font=ctk.CTkFont(family=UI_FONT, size=9, weight="bold"),
                 text_color=COLORS["text_muted"],
             )
-            poster_lbl.pack(padx=2, pady=2)
+            poster_lbl.pack(padx=0, pady=0)
 
             def apply_art(ctk_img, lbl=poster_lbl):
                 self._post_ui(lambda: lbl.winfo_exists() and lbl.configure(image=ctk_img, text=""))
 
             self.artwork.get_or_fetch(item, apply_art)
 
+            # Actions: primary "Send to SAB", quieter secondary actions.
             btns = ctk.CTkFrame(card, fg_color="transparent")
-            btns.pack(side="right", padx=12)
+            btns.pack(side="right", padx=14)
 
-            ctk.CTkButton(
-                btns,
-                text="View NZB",
-                width=82,
+            ghost = dict(
                 height=32,
-                fg_color=COLORS["bg_panel"],
-                hover_color=COLORS["border"],
-                command=lambda it=item: self._view_indexer_nzb(it),
-            ).pack(side="left", padx=3)
-
+                fg_color="transparent",
+                hover_color=COLORS["bg_card_alt"],
+                border_width=1,
+                border_color=COLORS["border"],
+                text_color=COLORS["text_secondary"],
+            )
             ctk.CTkButton(
-                btns,
-                text="Save .nzb",
-                width=82,
-                height=32,
-                fg_color=COLORS["bg_card_alt"],
-                hover_color=COLORS["border"],
-                command=lambda it=item: self._save_indexer_nzb(it),
-            ).pack(side="left", padx=3)
-
+                btns, text="View", width=64, command=lambda it=item: self._view_indexer_nzb(it), **ghost
+            ).pack(side="left", padx=(0, 6))
+            ctk.CTkButton(
+                btns, text="Save", width=64, command=lambda it=item: self._save_indexer_nzb(it), **ghost
+            ).pack(side="left", padx=(0, 6))
             ctk.CTkButton(
                 btns,
                 text="Send to SAB",
-                width=98,
+                width=110,
                 height=32,
-                fg_color=COLORS["green"],
-                hover_color="#059669",
+                fg_color=COLORS["accent"],
+                hover_color=COLORS["accent_hover"],
                 text_color="#041016",
-                font=ctk.CTkFont(family=UI_FONT, size=11, weight="bold"),
+                font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
                 command=lambda it=item: self._send_url_to_sab(it, self.search_cat_var.get()),
-            ).pack(side="left", padx=3)
+            ).pack(side="left")
 
             info = ctk.CTkFrame(card, fg_color="transparent")
-            info.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+            info.pack(side="left", fill="both", expand=True, padx=(10, 6), pady=12)
 
             ctk.CTkLabel(
                 info,
                 text=item["title"],
                 anchor="w",
                 justify="left",
-                wraplength=520,
+                wraplength=560,
                 font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
                 text_color=COLORS["text_primary"],
             ).pack(fill="x")
 
-            badges = ctk.CTkFrame(info, fg_color="transparent")
-            badges.pack(fill="x", pady=(6, 0))
+            # Line 2: plain facts (indexer · size · age · category · grabs · files)
+            meta = ctk.CTkFrame(info, fg_color="transparent")
+            meta.pack(fill="x", pady=(3, 0))
+            ctk.CTkLabel(
+                meta,
+                text=item.get("indexer_name", "Indexer"),
+                font=ctk.CTkFont(family=UI_FONT_SEMIBOLD, size=11),
+                text_color=COLORS["accent"],
+            ).pack(side="left")
+            facts = [item["size_human"], item["age"], item["category"]]
+            if item["grabs"]:
+                facts.append(f"{item['grabs']} grabs")
+            if item.get("files_count"):
+                facts.append(f"{item['files_count']} files")
+            ctk.CTkLabel(
+                meta,
+                text="   ·   " + "   ·   ".join(f for f in facts if f),
+                font=ctk.CTkFont(family=UI_FONT, size=11),
+                text_color=COLORS["text_secondary"],
+            ).pack(side="left")
 
-            badge_items: list[tuple[str, str, str]] = [
-                (item.get("indexer_name", "Indexer"), COLORS["green"], ""),
-                (item["size_human"], COLORS["accent"], ""),
-                (item["language"], COLORS["sky"], ""),
-                (item["category"], COLORS["text_secondary"], ""),
-                (item["age"], COLORS["text_muted"], ""),
-            ]
-
+            # Line 3: tags that matter for choosing a release
+            badge_items: list[tuple[str, str, str]] = []
             for tag_txt, tag_col in item.get("tags", []):
                 badge_items.append((tag_txt, tag_col, ""))
-
+            if item["language"] not in ("English", "English / Untagged"):
+                badge_items.append((item["language"], COLORS["sky"], ""))
             if item.get("passworded"):
                 badge_items.append(("PASSWORDED", COLORS["red"], ""))
 
@@ -4099,33 +4251,18 @@ class NzbManagerApp(ctk.CTk):
             if item.get("mirror_count", 0) > 0:
                 badge_items.append((f"+{item['mirror_count']} mirror", COLORS["purple"], ""))
 
-            for txt, col, tip_summary in badge_items:
-                pill = ctk.CTkLabel(
-                    badges,
-                    text=txt,
-                    fg_color=COLORS["bg_panel"],
-                    corner_radius=5,
-                    padx=7,
-                    pady=2,
-                    font=ctk.CTkFont(family=MONO_FONT, size=10, weight="bold" if tip_summary else "normal"),
-                    text_color=col,
-                )
-                pill.pack(side="left", padx=(0, 5))
-                if tip_summary:
-                    pill.bind("<Button-1>", lambda _e, s=tip_summary: self._set_status(s))
+            if badge_items:
+                badges = ctk.CTkFrame(info, fg_color="transparent")
+                badges.pack(fill="x", pady=(7, 0))
+                for txt, col, tip_summary in badge_items:
+                    pill = self._pill(badges, txt, col, strong=bool(tip_summary) or col == COLORS["red"])
+                    pill.pack(side="left", padx=(0, 5))
+                    if tip_summary:
+                        pill.configure(cursor="hand2")
+                        pill.bind("<Button-1>", lambda _e, s=tip_summary: self._set_status(s))
 
-            extra_meta = []
-            if item["grabs"]:
-                extra_meta.append(f"{item['grabs']} grabs")
-            if item.get("files_count"):
-                extra_meta.append(f"{item['files_count']} files")
-            if extra_meta:
-                ctk.CTkLabel(
-                    badges,
-                    text=" • ".join(extra_meta),
-                    font=ctk.CTkFont(family=UI_FONT, size=11),
-                    text_color=COLORS["text_muted"],
-                ).pack(side="left", padx=4)
+        # breathing room under the last card
+        ctk.CTkFrame(self.search_results_frame, height=8, fg_color="transparent").pack()
 
     def _view_indexer_nzb(self, item: dict) -> None:
         self._set_status(f"Fetching NZB preview for '{item['title']}'...")
@@ -4529,7 +4666,7 @@ class NzbManagerApp(ctk.CTk):
 
         if downloading_slot:
             pct = safe_float(downloading_slot.get("percentage"))
-            self.now_dl_badge.configure(text="DOWNLOADING", text_color=COLORS["green"])
+            self.now_dl_badge.configure(text="DOWNLOADING", text_color=COLORS["green"], fg_color=_tint(COLORS["green"]))
             self.now_dl_name.configure(text=downloading_slot.get("filename", "Unknown"))
             self.now_dl_stats.configure(
                 text=f"{pct:.0f}%  •  {downloading_slot.get('sizeleft', '?')} left  •  ETA {downloading_slot.get('timeleft', '?')}  •  {speed}"
@@ -4539,7 +4676,7 @@ class NzbManagerApp(ctk.CTk):
         elif slots and self.sab_paused:
             first = slots[0]
             pct = safe_float(first.get("percentage"))
-            self.now_dl_badge.configure(text="PAUSED", text_color=COLORS["amber"])
+            self.now_dl_badge.configure(text="PAUSED", text_color=COLORS["amber"], fg_color=_tint(COLORS["amber"]))
             self.now_dl_name.configure(text=first.get("filename", "Unknown"))
             self.now_dl_stats.configure(text=f"{pct:.0f}%  •  {first.get('sizeleft', '?')} left  •  Paused")
             self.now_dl_bar.set(min(max(pct / 100.0, 0.0), 1.0))
@@ -4547,13 +4684,13 @@ class NzbManagerApp(ctk.CTk):
         elif slots:
             first = slots[0]
             pct = safe_float(first.get("percentage"))
-            self.now_dl_badge.configure(text="QUEUED", text_color=COLORS["sky"])
+            self.now_dl_badge.configure(text="QUEUED", text_color=COLORS["sky"], fg_color=_tint(COLORS["sky"]))
             self.now_dl_name.configure(text=f"Next in queue: {first.get('filename', 'Unknown')}")
             self.now_dl_stats.configure(text=f"{len(slots)} queued  •  {size_left} left  •  {speed}")
             self.now_dl_bar.set(min(max(pct / 100.0, 0.0), 1.0))
             self.now_dl_bar.configure(progress_color=COLORS["sky"])
         else:
-            self.now_dl_badge.configure(text="IDLE", text_color=COLORS["text_muted"])
+            self.now_dl_badge.configure(text="IDLE", text_color=COLORS["text_muted"], fg_color=_tint(COLORS["text_muted"]))
             self.now_dl_name.configure(text="No active download in SABnzbd")
             self.now_dl_stats.configure(text=f"0%  •  0 B left  •  ETA 0:00:00  •  {speed}")
             self.now_dl_bar.set(0)
@@ -4654,11 +4791,11 @@ class NzbManagerApp(ctk.CTk):
             ctk.CTkLabel(
                 top,
                 text=status_label,
-                fg_color=COLORS["bg_panel"],
-                corner_radius=6,
+                fg_color=_tint(status_color),
+                corner_radius=11,
                 padx=8,
                 pady=2,
-                font=ctk.CTkFont(family=MONO_FONT, size=10, weight="bold"),
+                font=ctk.CTkFont(family=UI_FONT, size=10, weight="bold"),
                 text_color=status_color,
             ).pack(side="left", padx=(0, 8))
 
@@ -4673,7 +4810,7 @@ class NzbManagerApp(ctk.CTk):
                 fg_color=COLORS["bg_panel"],
                 button_color=COLORS["border"],
                 text_color=COLORS["accent"],
-                font=ctk.CTkFont(family=MONO_FONT, size=11),
+                font=ctk.CTkFont(family=UI_FONT, size=11),
                 command=lambda choice, nid=nzo_id, nm=name: self._run_bg(
                     lambda: self.sab.change_category(nid, choice),
                     on_ok=lambda _r: (
@@ -4687,7 +4824,7 @@ class NzbManagerApp(ctk.CTk):
             ctk.CTkLabel(
                 top,
                 text=f"{size_info}  •  ETA {eta}",
-                font=ctk.CTkFont(family=MONO_FONT, size=11),
+                font=ctk.CTkFont(family=UI_FONT, size=11),
                 text_color=COLORS["text_secondary"],
             ).pack(side="right", padx=(8, 0))
 
@@ -4707,7 +4844,7 @@ class NzbManagerApp(ctk.CTk):
                 text=f"{pct:>3.0f}%",
                 width=40,
                 anchor="w",
-                font=ctk.CTkFont(family=MONO_FONT, size=11, weight="bold"),
+                font=ctk.CTkFont(family=UI_FONT, size=11, weight="bold"),
                 text_color=status_color,
             ).pack(side="left", padx=(0, 6))
 
@@ -4853,10 +4990,10 @@ class NzbManagerApp(ctk.CTk):
                 row,
                 text=label,
                 width=92,
-                fg_color=COLORS["bg_panel"],
-                corner_radius=6,
+                fg_color=_tint(color),
+                corner_radius=11,
                 pady=2,
-                font=ctk.CTkFont(family=MONO_FONT, size=10, weight="bold"),
+                font=ctk.CTkFont(family=UI_FONT, size=10, weight="bold"),
                 text_color=color,
             ).pack(side="left", padx=(10, 8), pady=7)
 
