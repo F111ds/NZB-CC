@@ -88,7 +88,7 @@ assert "kodipass99" in m._KNOWN_SECRETS and "kodipass99" not in json.dumps(home)
 
 st, k = api("/api/kodi")
 assert st == 200 and k["counts"] == {"movies": 412, "episodes": 3001}, k
-assert k["recent"][0] == {"id": 9, "title": "Oppenheimer", "year": 2023, "runtime": 10800, "resume": 2472, "watched": False, "added": "2026-11-13 21:04:11", "poster": ""}
+assert k["recent"][0] == {"id": 9, "title": "Oppenheimer", "year": 2023, "runtime": 10800, "resume": 2472, "watched": False, "added": "2026-11-13 21:04:11", "poster": "", "imdb": None, "tmdb": None, "mpaa": "", "genres": []}
 with urllib.request.urlopen(base + "/manifest.webmanifest", timeout=5) as r:
     man = json.loads(r.read()); assert man["display"] == "standalone" and man["start_url"] == "/"
 st, mv = api("/api/kodi/movies"); assert mv["movies"][0]["title"] == "Arrival" and mv["movies"][0]["watched"]
@@ -96,6 +96,7 @@ st, mv = api("/api/kodi/movies"); assert mv["movies"][0]["title"] == "Arrival" a
 assert home["kodi"]["playing"]["poster"] == "image://p5.jpg/" and home["kodi"]["playing"]["movieid"] == 5
 st, d = api("/api/kodi/movie?id=5")
 assert st == 200 and d["plot"] == "Stranded." and d["fanart"] == "image://f5.jpg/" and d["mpaa"] == "PG-13", d
+assert d["imdb"] == 8.0 and d["tmdb"] == 7.7 and d["genres"] == ["Sci-Fi"]
 assert d["imdb_rating"] == 8.0 and d["imdb_url"] == "https://www.imdb.com/title/tt3659388/" and len(d["cast"]) == 8
 assert api("/api/kodi/movie?id=0")[0] == 400
 def raw(path):

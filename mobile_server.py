@@ -59,7 +59,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.2"
+VERSION = "3.3"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -760,10 +760,22 @@ def _kodi_movie(mv: dict) -> dict:
     return {"id": to_int(mv.get("movieid")), "title": str(mv.get("title") or "Untitled"), "year": to_int(mv.get("year")) or None,
             "runtime": to_int(mv.get("runtime")), "resume": int(to_float(resume.get("position"))),
             "watched": to_int(mv.get("playcount")) > 0, "added": str(mv.get("dateadded") or "")[:19],
-            "poster": _art_ref(art.get("poster") or mv.get("thumbnail"))}
+            "poster": _art_ref(art.get("poster") or mv.get("thumbnail")),
+            "imdb": _rating_of(mv, "imdb"), "tmdb": _rating_of(mv, "themoviedb", "tmdb"),
+            "mpaa": re.sub(r"^Rated\s+", "", str(mv.get("mpaa") or "")).strip()[:12],
+            "genres": [str(g) for g in (mv.get("genre") or [])][:5]}
 
 
-KODI_MOVIE_PROPS = ["title", "year", "runtime", "playcount", "resume", "dateadded", "art", "thumbnail"]
+def _rating_of(mv: dict, *sources: str):
+    ratings = mv.get("ratings") or {}
+    for src in sources:
+        r = to_float((ratings.get(src) or {}).get("rating"))
+        if r > 0:
+            return round(r, 1)
+    return None
+
+
+KODI_MOVIE_PROPS = ["title", "year", "runtime", "playcount", "resume", "dateadded", "art", "thumbnail", "ratings", "mpaa", "genre"]
 
 
 # ==============================================================================
@@ -1256,6 +1268,8 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;backgroun
 .round{width:48px;height:48px;border-radius:24px;border:0;background:var(--hover);color:var(--white);display:inline-flex;align-items:center;justify-content:center;flex:none}.round.main{background:var(--teal);color:var(--ink)}
 .kidle{display:flex;align-items:center;gap:12px;width:100%;border:0;text-align:left;color:var(--soft);font-size:14px}.kidle svg{color:var(--teal);flex:none}
 .icon-btn.play{color:var(--teal2)}
+.rl{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:5px;font-size:12px;color:var(--soft)}
+.rc{font:700 11px var(--mono);padding:2px 6px;border-radius:5px;background:var(--hover);color:var(--text)}.rc.imdb{background:#F5C518;color:#000}.rc.tmdb{background:#0B2A3A;color:#7DD3FC}
 .pthumb{width:46px;height:69px;border-radius:6px;border:0;padding:0;background:var(--hover);overflow:hidden;flex:none;cursor:pointer}
 .qrow .info.tap,.nowrow .info.tap{cursor:pointer}
 img.art{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transition:opacity .25s}img.art.loaded{opacity:1}
@@ -1318,8 +1332,8 @@ img.art{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transiti
 <div class="row" style="align-items:flex-end"><div><h1>Kodi</h1><p class="lede" id="kodistatus">Loading…</p></div><button class="btn ghost sm" id="kodiscan" style="flex:none;margin-bottom:14px">Scan library</button></div>
 <div id="kodinow"></div>
 <div id="kodilib" class="hidden">
-<label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="kodifilter" placeholder="Find a movie" autocomplete="off" enterkeyhint="search" aria-label="Find a movie"></label>
-<div class="row" style="margin:4px 0 8px"><select id="kodiview" class="field" style="margin:0" aria-label="Show"><option value="recent">Recently added</option><option value="all">All movies (A–Z)</option><option value="newest">All, newest added first</option><option value="year">All, by release year</option><option value="unwatched">Unwatched</option><option value="progress">In progress</option></select></div>
+<label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="kodifilter" placeholder="Find a movie or genre" autocomplete="off" enterkeyhint="search" aria-label="Find a movie"></label>
+<div class="row" style="margin:4px 0 8px"><select id="kodiview" class="field" style="margin:0" aria-label="Show"><option value="recent">Recently added</option><option value="all">All movies (A–Z)</option><option value="newest">All, newest added first</option><option value="year">All, by release year</option><option value="rated">Highest rated</option><option value="unwatched">Unwatched</option><option value="progress">In progress</option></select></div>
 <div class="section" id="kodilisttitle">RECENTLY ADDED</div>
 <div id="kodilist"></div>
 <button class="btn ghost full hidden" id="kodimore" style="margin-top:4px">Show more</button>
@@ -1584,8 +1598,9 @@ async function openDetail(id){
   let d;try{d=await api('/api/kodi/movie?id='+encodeURIComponent(id))}catch(e){panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button>'+empty('Couldn\'t load this movie',e.message);return}
   const meta=[d.year,runtimeText(d.runtime),d.watched?'watched':''].filter(Boolean).join(' · ');
   const chips=[];
-  if(d.imdb_rating)chips.push(d.imdb_url?'<a class="chip imdb" href="'+esc(d.imdb_url)+'" target="_blank" rel="noopener">IMDb '+esc(d.imdb_rating)+'</a>':'<span class="chip imdb">IMDb '+esc(d.imdb_rating)+'</span>');
-  else if(d.rating)chips.push('<span class="chip">★ '+esc(d.rating)+(d.rating_source?' '+esc(d.rating_source.replace('themoviedb','TMDb')):'')+'</span>');
+  if(d.imdb_rating)chips.push(d.imdb_url?'<a class="chip imdb" href="'+esc(d.imdb_url)+'" target="_blank" rel="noopener">IMDb '+esc(Number(d.imdb_rating).toFixed(1))+'</a>':'<span class="chip imdb">IMDb '+esc(Number(d.imdb_rating).toFixed(1))+'</span>');
+  if(d.tmdb)chips.push('<span class="chip" style="background:#0B2A3A;color:#7DD3FC">TMDb '+esc(Number(d.tmdb).toFixed(1))+'</span>');
+  else if(!d.imdb_rating&&d.rating)chips.push('<span class="chip">★ '+esc(d.rating)+(d.rating_source?' '+esc(d.rating_source.replace('themoviedb','TMDb')):'')+'</span>');
   if(!d.imdb_rating&&d.imdb_url)chips.push('<a class="chip imdb" href="'+esc(d.imdb_url)+'" target="_blank" rel="noopener">IMDb</a>');
   if(d.mpaa)chips.push('<span class="chip">'+esc(d.mpaa)+'</span>');
   d.genres.forEach(g=>chips.push('<span class="chip">'+esc(g)+'</span>'));
@@ -1608,13 +1623,15 @@ async function openDetail(id){
 let kodiRecent=[],kodiMovies=null,kodiLoading=false;
 function runtimeText(sec){if(!sec)return '';const m=Math.round(sec/60);return m>=60?Math.floor(m/60)+'h '+(m%60)+'m':m+'m'}
 function movieRow(mv){
-  const meta=[mv.year,runtimeText(mv.runtime),mv.resume?'resume at '+fmtTime(mv.resume):(mv.watched?'watched':'')].filter(Boolean).join(' · ');
-  return '<div class="qrow"><button class="pthumb" data-detail="'+esc(mv.id)+'" aria-label="Details for '+esc(mv.title)+'">'+artTag(mv.poster)+'</button><div class="info tap" data-detail="'+esc(mv.id)+'"><div class="t">'+esc(mv.title)+'</div><div class="m">'+esc(meta)+'</div></div>'+
+  const meta=[mv.year,runtimeText(mv.runtime),mv.mpaa,mv.resume?'resume at '+fmtTime(mv.resume):(mv.watched?'watched':'')].filter(Boolean).join(' · ');
+  const rl=(mv.imdb?'<span class="rc imdb">IMDb '+Number(mv.imdb).toFixed(1)+'</span>':'')+(mv.tmdb?'<span class="rc tmdb">TMDb '+Number(mv.tmdb).toFixed(1)+'</span>':'')+
+    ((mv.genres||[]).length?'<span>'+esc(mv.genres.slice(0,2).join(', '))+'</span>':'');
+  return '<div class="qrow"><button class="pthumb" data-detail="'+esc(mv.id)+'" aria-label="Details for '+esc(mv.title)+'">'+artTag(mv.poster)+'</button><div class="info tap" data-detail="'+esc(mv.id)+'"><div class="t">'+esc(mv.title)+'</div><div class="m">'+esc(meta)+'</div>'+(rl?'<div class="rl">'+rl+'</div>':'')+'</div>'+
     (mv.resume?'<button class="btn ghost sm" style="flex:none" data-play="'+esc(mv.id)+'" data-resume="1">Resume</button>':'')+
     '<button class="icon-btn play" data-play="'+esc(mv.id)+'" aria-label="Play '+esc(mv.title)+(mv.resume?' from the start':'')+'">'+ICON.play+'</button></div>';
 }
 const KODI_PAGE=100;let kodiShown=KODI_PAGE;
-const KODI_VIEWS={recent:'RECENTLY ADDED',all:'ALL MOVIES',newest:'NEWEST ADDED',year:'BY RELEASE YEAR',unwatched:'UNWATCHED',progress:'IN PROGRESS'};
+const KODI_VIEWS={recent:'RECENTLY ADDED',all:'ALL MOVIES',newest:'NEWEST ADDED',year:'BY RELEASE YEAR',rated:'HIGHEST RATED',unwatched:'UNWATCHED',progress:'IN PROGRESS'};
 async function renderKodiList(resetPage){
   if(resetPage)kodiShown=KODI_PAGE;
   const q=$('kodifilter').value.trim().toLowerCase(),view=$('kodiview').value,title=$('kodilisttitle'),list=$('kodilist'),more=$('kodimore');
@@ -1628,8 +1645,9 @@ async function renderKodiList(resetPage){
   let a=kodiMovies.slice();
   if(view==='unwatched')a=a.filter(m=>!m.watched);
   if(view==='progress')a=a.filter(m=>m.resume>0);
-  if(q)a=a.filter(m=>m.title.toLowerCase().includes(q));
+  if(q)a=a.filter(m=>m.title.toLowerCase().includes(q)||(m.genres||[]).some(g=>g.toLowerCase().includes(q)));
   if(view==='newest'||view==='recent')a.sort((x,y)=>(y.added||'').localeCompare(x.added||''));
+  if(view==='rated')a.sort((x,y)=>((y.imdb||y.tmdb||0)-(x.imdb||x.tmdb||0))||x.title.localeCompare(y.title));
   if(view==='year')a.sort((x,y)=>(y.year||0)-(x.year||0)||x.title.localeCompare(y.title));
   const label=q?'MATCH'+(a.length===1?'':'ES'):(view==='all'?'MOVIES':KODI_VIEWS[view]);
   title.textContent=a.length+' '+label+(q&&view!=='all'&&view!=='recent'?' · '+KODI_VIEWS[view]:'');
