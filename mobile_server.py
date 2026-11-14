@@ -59,7 +59,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.4"
+VERSION = "3.4.1"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -726,8 +726,10 @@ def kodi_art(ref: str) -> tuple[bytes, str]:
 
 
 def kodi_movie_details(movieid: int) -> dict:
-    res = kodi_call("VideoLibrary.GetMovieDetails", {"movieid": movieid, "properties": KODI_MOVIE_PROPS + [
-        "plot", "tagline", "genre", "director", "mpaa", "rating", "ratings", "votes", "imdbnumber", "cast", "studio", "premiered"]}) or {}
+    # Kodi rejects a request that names the same property twice ("Invalid params"), so de-duplicate.
+    props = list(dict.fromkeys(KODI_MOVIE_PROPS + [
+        "plot", "tagline", "genre", "director", "mpaa", "rating", "ratings", "votes", "imdbnumber", "cast", "studio", "premiered"]))
+    res = kodi_call("VideoLibrary.GetMovieDetails", {"movieid": movieid, "properties": props}) or {}
     mv = res.get("moviedetails") or {}
     if not mv:
         raise ValueError("That movie isn't in Kodi's library any more.")

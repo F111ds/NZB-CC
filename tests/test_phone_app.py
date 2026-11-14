@@ -41,6 +41,10 @@ class FakeKodi(BaseHTTPRequestHandler):
         req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         calls.append((req["method"], req.get("params"), self.headers.get("Authorization")))
         meth = req["method"]
+        props = (req.get("params") or {}).get("properties")
+        if props and len(props) != len(set(props)):  # real Kodi: duplicate properties -> Invalid params
+            b = json.dumps({"jsonrpc": "2.0", "id": 1, "error": {"code": -32602, "message": "Invalid params."}}).encode()
+            self.send_response(200); self.end_headers(); self.wfile.write(b); return
         res = {
             "Player.GetActivePlayers": [{"playerid": 1, "type": "video"}],
             "Player.GetItem": {"item": {"title": "The Martian", "year": 2015, "type": "movie", "id": 5, "art": {"poster": "image://p5.jpg/"}}},
