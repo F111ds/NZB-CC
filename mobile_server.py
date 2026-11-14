@@ -55,7 +55,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 VERSION = "2.0"
-BASE_DIR = Path(__file__).resolve().parent
+# When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
+# so settings and caches go next to the .exe instead.
+if getattr(sys, "frozen", False):
+    BASE_DIR = Path(sys.executable).resolve().parent
+else:
+    BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "nzb_manager_config.json"
 ACCESS_KEY_FILE = BASE_DIR / "mobile_access_key.txt"
 LOG_FILE = BASE_DIR / "mobile_server.log"
@@ -87,6 +92,129 @@ EXTRA_ALLOWED_NETS: list = []
 ALLOW_ANY_CLIENT = False
 
 log = logging.getLogger("mobile")
+
+APP_ICON_PNG_B64 = (
+    "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"
+)
+ICON_PNG = base64.b64decode("".join(APP_ICON_PNG_B64))
 
 
 # ==============================================================================
@@ -837,54 +965,104 @@ PAGE = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="theme-color" content="#061014">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="theme-color" content="#060D10">
 <title>NZB Command Center</title>
+<link rel="icon" type="image/png" href="/icon.png"><link rel="apple-touch-icon" href="/icon.png">
 <style>
-:root{color-scheme:dark;--bg:#061014;--panel:#0d1d24;--card:#132831;--line:#21404b;--teal:#2dd4bf;--muted:#91aeb7;--white:#effdfa;--red:#f87171;--amber:#fbbf24;--green:#4ade80}
-*{box-sizing:border-box}body{margin:0;background:linear-gradient(160deg,#07151a,#050b0e 65%);color:var(--white);font:15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-text-size-adjust:100%}
-header{padding:calc(18px + env(safe-area-inset-top)) 18px 13px;background:#09171d;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:3}
-h1{font-size:21px;margin:0 0 5px;letter-spacing:.2px}.sub{font-size:12px;color:var(--muted)}
-main{max-width:760px;margin:auto;padding:15px 13px calc(42px + env(safe-area-inset-bottom))}.tabs{display:flex;gap:8px;margin-bottom:14px}.tab{flex:1;background:var(--panel);border:1px solid var(--line);color:var(--muted);padding:12px 6px;border-radius:11px;font-weight:700}.tab.active{color:#06201d;background:var(--teal);border-color:var(--teal)}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:14px;margin-bottom:13px}
-label{display:block;color:var(--muted);font-size:12px;margin:0 0 6px}input,select{width:100%;background:#071318;border:1px solid var(--line);border-radius:10px;padding:13px;color:var(--white);font-size:16px;margin-bottom:11px}
-button{border:0;border-radius:10px;background:var(--teal);color:#04221e;font-weight:800;padding:12px 15px;font-size:14px}button.secondary{background:#1b3540;color:var(--white);border:1px solid var(--line)}button.danger{background:#4b2026;color:#fecaca}
-button:disabled{opacity:.45}.full{width:100%}.row{display:flex;gap:8px;align-items:center}.row>*{flex:1}.muted{color:var(--muted);font-size:12px}.status{font-size:13px;color:var(--teal);margin:8px 0;white-space:pre-wrap}.error{color:var(--red)}
-.result{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:13px;margin:10px 0}.result h3{font-size:15px;line-height:1.35;margin:0 0 9px;overflow-wrap:anywhere}.meta{display:flex;flex-wrap:wrap;gap:7px;color:var(--muted);font-size:12px;margin-bottom:11px}.pill{background:#203a43;border-radius:20px;padding:4px 8px}.result>button{width:100%}.sel{display:flex;align-items:center;margin-bottom:8px}.sel input{width:auto;margin:0 7px 0 0}
-.queueitem{padding:12px 0;border-bottom:1px solid var(--line)}.queueitem:last-child{border:0}.qtitle{font-weight:700;overflow-wrap:anywhere;margin-bottom:5px}.bar{height:6px;background:#233b43;border-radius:6px;margin:8px 0}.bar span{display:block;height:6px;background:var(--teal);border-radius:6px}
-.hidden{display:none}.hint{font-size:12px;color:var(--muted);line-height:1.5}.smallbtn{padding:8px 10px;font-size:12px}.ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}
-.toast{position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));background:#10303a;border:1px solid var(--teal);border-radius:12px;padding:13px 15px;z-index:9;white-space:pre-wrap;font-size:14px;max-width:736px;margin:auto}.toast.err{border-color:var(--red);background:#2b1519}
+:root{color-scheme:dark;--bg:#060D10;--side:#08141A;--card:#0E1C23;--hover:#13262F;--deep:#08141A;--line:#1A3440;--teal:#2DD4BF;--teal2:#5EEAD4;--ink:#041016;--white:#F0FDFA;--text:#C9DDE2;--soft:#A7C1C8;--muted:#7F9DA6;--red:#F87171;--amber:#FBBF24;--green:#34D399;--sky:#38BDF8;--purple:#C4B5FD;--mono:ui-monospace,"SF Mono","Cascadia Mono",Consolas,monospace}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--white);font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI Variable","Segoe UI",Roboto,Inter,sans-serif;-webkit-text-size-adjust:100%}
+button,input,select{font:inherit;color:inherit}
+header{position:sticky;top:0;z-index:5;background:rgba(6,13,16,.92);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);padding:calc(14px + env(safe-area-inset-top)) 18px 12px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px;letter-spacing:-.01em}.brand img{width:30px;height:30px;border-radius:8px}
+.statusbar{display:flex;gap:8px;margin-top:10px}.spill{display:inline-flex;align-items:center;gap:7px;background:var(--card);border-radius:20px;padding:6px 12px;font:600 12px var(--mono);color:var(--muted)}
+.spill i{width:8px;height:8px;border-radius:4px;background:currentColor;display:inline-block}.spill.ok{color:var(--green)}.spill.warn{color:var(--amber)}.spill.bad{color:var(--red)}.spill.busy{color:var(--teal)}
+main{max-width:720px;margin:auto;padding:4px 14px calc(150px + env(safe-area-inset-bottom))}
+h1{font-size:26px;letter-spacing:-.02em;margin:10px 4px 2px}.lede{color:var(--soft);font-size:13px;margin:0 4px 14px}
+.card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:12px}
+.label{display:block;font-size:12px;color:var(--soft);margin:0 0 6px}
+.section{font-size:11px;font-weight:600;letter-spacing:.08em;color:var(--muted);margin:18px 4px 8px}
+.field{width:100%;background:var(--deep);border:1px solid transparent;border-radius:10px;padding:12px 13px;font-size:16px;margin-bottom:10px;outline:none}.field:focus{border-color:var(--teal)}
+.search{display:flex;align-items:center;gap:10px;background:var(--deep);border-radius:12px;padding:0 14px;min-height:50px;margin-bottom:10px;border:1px solid transparent}.search:focus-within{border-color:var(--teal)}
+.search input{flex:1;background:transparent;border:0;outline:none;font-size:16px;min-width:0}
+.row{display:flex;gap:10px;align-items:center}.row>*{flex:1;min-width:0}
+.btn{border:0;border-radius:12px;background:var(--teal);color:var(--ink);font-weight:700;padding:13px 16px;font-size:15px;min-height:48px;cursor:pointer}
+.btn.ghost{background:transparent;color:var(--white);border:1px solid var(--line);font-weight:600}
+.btn.danger{background:transparent;color:var(--red);border:1px solid #5B2328;font-weight:600}
+.btn.sm{min-height:40px;padding:8px 13px;font-size:13px;border-radius:10px}
+.btn:disabled{opacity:.45}.btn:active:not(:disabled){transform:scale(.98)}.full{width:100%}
+.icon-btn{width:44px;height:44px;border-radius:12px;border:0;background:var(--hover);color:var(--text);display:inline-flex;align-items:center;justify-content:center;flex:none}.icon-btn.red{color:var(--red)}
+details.opts{background:var(--card);border-radius:14px;margin-bottom:12px}details.opts summary{list-style:none;cursor:pointer;padding:14px;display:flex;align-items:center;gap:10px;font-weight:600;font-size:14px}
+details.opts summary::-webkit-details-marker{display:none}details.opts summary .chev{margin-left:auto;transition:transform .2s;color:var(--muted)}details.opts[open] summary .chev{transform:rotate(180deg)}
+details.opts .body{padding:0 14px 14px}
+.status{font-size:13px;color:var(--soft);margin:2px 4px 10px;white-space:pre-wrap}.status.error{color:var(--red)}
+.result{background:var(--card);border-radius:14px;padding:14px;margin-bottom:10px;position:relative}
+.result h3{font-size:15px;line-height:1.35;margin:0 40px 6px 0;overflow-wrap:anywhere;font-weight:600}
+.details{color:var(--soft);font-size:13px;margin-bottom:10px;overflow-wrap:anywhere}
+.badges{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}.badge{font:600 11px var(--mono);padding:4px 8px;border-radius:6px;background:var(--deep);color:var(--text)}.badge.purple{background:#22183A;color:var(--purple)}
+.check{position:absolute;top:10px;right:10px;width:40px;height:40px;display:flex;align-items:center;justify-content:center}.check input{width:22px;height:22px;accent-color:var(--teal)}
+.result .btn.added{background:#0B2A22;color:var(--green)}
+.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.tile{background:var(--card);border-radius:14px;padding:12px}.tile .k{font-size:11px;color:var(--soft)}.tile .v{font:600 19px var(--mono);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tile .v small{font-size:12px;color:var(--soft)}
+.hero{background:var(--card);border-radius:16px;padding:16px;margin-bottom:12px}
+.tag{font:600 11px var(--mono);padding:4px 8px;border-radius:6px;letter-spacing:.03em}.tag.ok{background:#0B2A22;color:var(--green)}.tag.warn{background:#2E2410;color:var(--amber)}.tag.busy{background:#0B2230;color:var(--sky)}
+.hero .name{font-weight:600;font-size:16px;margin:10px 0 4px;overflow-wrap:anywhere}.hero .sub{font:500 12px var(--mono);color:var(--soft)}
+.bar{height:10px;background:var(--deep);border-radius:5px;overflow:hidden;margin:12px 0 10px}.bar span{display:block;height:100%;background:var(--teal);border-radius:5px;transition:width .6s ease}
+.bar.thin{height:4px;margin:8px 0 0}.bar.thin span{background:var(--sky)}
+.qrow{display:flex;align-items:center;gap:10px;background:var(--card);border-radius:12px;padding:12px;margin-bottom:8px}
+.qrow .info{flex:1;min-width:0}.qrow .t{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.qrow .m{font:500 11px var(--mono);color:var(--soft);margin-top:3px}
+.hrow{display:flex;align-items:flex-start;gap:12px;background:#0A171D;border-radius:12px;padding:12px;margin-bottom:8px}
+.dot{width:9px;height:9px;border-radius:5px;margin-top:6px;flex:none}.hrow .info{flex:1;min-width:0}.hrow .t{font-size:14px;overflow-wrap:anywhere}.hrow .m{font-size:12px;color:var(--soft);margin-top:3px}.hrow .m.bad{color:var(--red)}
+.empty{text-align:center;color:var(--soft);padding:34px 14px;font-size:13px}.empty svg{color:var(--teal);opacity:.7;margin-bottom:8px}.empty b{display:block;color:var(--white);font-size:16px;margin-bottom:4px}
+.hidden{display:none!important}.hint{font-size:12px;color:var(--muted);line-height:1.5}
+nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;background:rgba(8,20,26,.96);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-top:1px solid #10242C;padding:6px 8px calc(6px + env(safe-area-inset-bottom))}
+.tab{flex:1;background:transparent;border:0;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 0;font-size:11px;font-weight:600;position:relative;min-height:52px}
+.tab.active{color:var(--teal)}.tab .count{position:absolute;top:2px;left:calc(50% + 6px);background:var(--teal);color:var(--ink);font:700 10px var(--mono);padding:1px 6px;border-radius:9px}
+.batch{position:fixed;left:12px;right:12px;bottom:calc(74px + env(safe-area-inset-bottom));z-index:7;max-width:696px;margin:auto;display:flex;align-items:center;gap:10px;background:var(--hover);border:1px solid var(--line);border-radius:16px;padding:10px 10px 10px 16px;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.batch span{flex:1;font-weight:600;font-size:14px}
+.toast{position:fixed;left:12px;right:12px;bottom:calc(82px + env(safe-area-inset-bottom));max-width:696px;margin:auto;background:var(--hover);border:1px solid var(--teal);border-radius:14px;padding:13px 15px;z-index:9;white-space:pre-wrap;font-size:14px;box-shadow:0 10px 30px rgba(0,0,0,.45)}.toast.err{border-color:var(--red)}
+.pair{max-width:440px;margin:40px auto 0}.pair h1{margin-top:0}
 </style></head><body>
-<header><h1>NZB Command Center</h1><div class="sub">Mobile control • Home network • v__VERSION__</div></header>
+<header><div class="brand"><img src="/icon.png" alt="">NZB Command Center</div><div id="statusbar" class="statusbar hidden"><span id="sabpill" class="spill"><i></i>SABnzbd</span></div></header>
 <main>
-<div id="pair" class="panel"><label>Mobile access code</label><input id="token" type="password" placeholder="Enter code shown on your PC" autocomplete="off" autocapitalize="off" autocorrect="off"><button class="full" id="pairbtn">Connect</button><div id="pairmsg" class="hint" style="margin-top:9px">The access code is shown in the PowerShell window running the server. Tip: open the “Pairing link” it prints and this step is automatic.</div></div>
+<div id="pair" class="pair card"><h1>Connect</h1><p class="lede" style="margin-left:0">Mobile control for your PC · v__VERSION__</p><label class="label" for="token">Access code</label><input id="token" class="field" type="password" placeholder="Code shown on your PC" autocomplete="off" autocapitalize="off" autocorrect="off"><button class="btn full" id="pairbtn">Connect</button><div id="pairmsg" class="hint" style="margin-top:10px">The code is in the window running NZB Mobile Server. Opening its pairing link on this phone connects automatically.</div></div>
 <div id="app" class="hidden">
-<div class="tabs"><button id="tabsearch" class="tab active" data-tab="search">Search</button><button id="tabqueue" class="tab" data-tab="queue">Queue</button><button id="tabhistory" class="tab" data-tab="history">History</button></div>
 <section id="search">
-<div class="panel">
-<label>Search indexer</label><select id="indexer"><option value="*">All enabled indexers</option></select>
-<label>Search title / keyword (blank = latest releases)</label><input id="query" placeholder="Movie, series, release..." enterkeyhint="search" autocomplete="off">
-<label>Newznab category ID (optional)</label><input id="category" placeholder="e.g. 2000 for Movies, 5000 for TV" inputmode="numeric">
-<button class="full" id="searchbtn">Search indexers</button><div id="searchstatus" class="status"></div>
+<h1>Search</h1><p class="lede">Your indexers, from anywhere at home.</p>
+<div class="card">
+<label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="query" placeholder="Movie, show or release" enterkeyhint="search" autocomplete="off" aria-label="Search"></label>
+<div class="row"><select id="indexer" class="field" aria-label="Indexer"><option value="*">All indexers</option></select><input id="category" class="field" placeholder="Category #" inputmode="numeric" aria-label="Newznab category"></div>
+<button class="btn full" id="searchbtn">Search</button>
 </div>
-<div class="panel" id="resulttools" style="display:none">
-<label>Sort results</label><select id="sort"><option value="date_desc">Newest first</option><option value="size_desc">Largest first</option><option value="size_asc">Smallest first</option><option value="date_asc">Oldest first</option><option value="grabs_desc">Most grabs</option><option value="title_asc">Title A–Z</option><option value="title_desc">Title Z–A</option></select>
-<div class="row"><div><label>Minimum size (MB)</label><input id="minsize" type="number" min="0" placeholder="No minimum"></div><div><label>Maximum size (MB)</label><input id="maxsize" type="number" min="0" placeholder="No maximum"></div></div>
-<label>Minimum grabs</label><input id="mingrabs" type="number" min="0" placeholder="No minimum">
-<div class="row"><div><label>SABnzbd category</label><select id="sabcat"><option value="">Default</option></select></div><div><label>Priority</label><select id="prio"><option value="">Default</option><option value="-1">Low</option><option value="0">Normal</option><option value="1">High</option><option value="2">Force</option></select></div></div>
-<div class="row"><button class="secondary" id="selvisible">Select visible</button><button class="secondary" id="selnone">Clear selection</button></div>
-<button id="batchbtn" class="full" style="margin-top:9px">Add selected to SABnzbd (0)</button>
-<div class="hint" style="margin-top:7px">Batch limit: 10 NZBs per request. Duplicate titles found on several indexers are grouped, and a failed download falls back to the other indexer automatically.</div>
-</div><div id="results"></div>
+<div id="searchstatus" class="status"></div>
+<details class="opts" id="resulttools" style="display:none"><summary><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>Sort, filter &amp; send options<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></summary><div class="body">
+<label class="label" for="sort">Sort</label><select id="sort" class="field"><option value="date_desc">Newest first</option><option value="size_desc">Largest first</option><option value="size_asc">Smallest first</option><option value="date_asc">Oldest first</option><option value="grabs_desc">Most grabs</option><option value="title_asc">Title A–Z</option><option value="title_desc">Title Z–A</option></select>
+<div class="row"><div><label class="label" for="minsize">Min size (MB)</label><input id="minsize" class="field" type="number" min="0" placeholder="Any"></div><div><label class="label" for="maxsize">Max size (MB)</label><input id="maxsize" class="field" type="number" min="0" placeholder="Any"></div></div>
+<label class="label" for="mingrabs">Min grabs</label><input id="mingrabs" class="field" type="number" min="0" placeholder="Any">
+<div class="row"><div><label class="label" for="sabcat">SABnzbd category</label><select id="sabcat" class="field"><option value="">Default</option></select></div><div><label class="label" for="prio">Priority</label><select id="prio" class="field"><option value="">Default</option><option value="-1">Low</option><option value="0">Normal</option><option value="1">High</option><option value="2">Force</option></select></div></div>
+<div class="row"><button class="btn ghost sm" id="selvisible">Select visible</button><button class="btn ghost sm" id="selnone">Clear selection</button></div>
+<p class="hint" style="margin:10px 0 0">Up to 10 at a time. Releases found on several indexers are grouped, and a failed download falls back to the other indexer automatically.</p>
+</div></details>
+<div id="results"></div>
 </section>
 <section id="queue" class="hidden">
-<div class="panel"><div class="row"><button id="qresume" class="full">Resume all</button><button id="qpause" class="secondary full">Pause all</button></div>
-<div class="row" style="margin-top:9px"><input id="speedmb" type="number" min="0" step="0.5" placeholder="Limit MB/s (0 = none)" style="margin:0"><button id="speedset" class="secondary">Set limit</button></div>
-<div id="queuestatus" class="status"></div></div><div id="queueitems" class="panel"></div>
+<h1>Queue</h1><p class="lede" id="queuestatus">Loading…</p>
+<div id="queueitems"></div>
+<div class="section">CONTROLS</div>
+<div class="card"><div class="row"><button id="qresume" class="btn sm">Resume all</button><button id="qpause" class="btn ghost sm">Pause all</button></div>
+<div class="row" style="margin-top:10px"><input id="speedmb" class="field" style="margin:0" type="number" min="0" step="0.5" placeholder="Limit in MB/s (0 = none)" aria-label="Speed limit in MB/s"><button id="speedset" class="btn ghost sm" style="flex:none">Set limit</button></div></div>
 </section>
 <section id="history" class="hidden">
-<div class="panel"><button class="secondary full" id="histrefresh">Refresh history</button><div id="histstatus" class="status"></div></div><div id="historyitems" class="panel"></div>
+<div class="row" style="align-items:flex-end"><div><h1>History</h1><p class="lede" id="histstatus">Recent downloads</p></div><button class="icon-btn" id="histrefresh" aria-label="Refresh history" style="flex:none;margin-bottom:14px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button></div>
+<div id="historyitems"></div>
 </section>
 </div></main>
+<div id="batchbar" class="batch hidden"><span id="batchcount">0 selected</span><button id="batchbtn" class="btn sm">Add to SABnzbd</button></div>
+<nav class="tabs hidden" id="tabbar" aria-label="Sections">
+<button id="tabsearch" class="tab active" data-tab="search"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search</button>
+<button id="tabqueue" class="tab" data-tab="queue"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>Queue<span id="queuecount" class="count hidden"></span></button>
+<button id="tabhistory" class="tab" data-tab="history"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>History</button>
+</nav>
 <div id="toast" class="toast hidden" role="status"></div>
 <script>
 'use strict';
@@ -892,13 +1070,15 @@ const LS={get:(k,d='')=>{try{const v=localStorage.getItem(k);return v===null?d:v
 const $=id=>document.getElementById(id);
 let token=LS.get('nzb_mobile_token');
 let results=[],selected=new Set(),added=new Set(),activeTab='search',queueBusy=false,toastTimer=null;
+const ICON={pause:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>',play:'<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l12 7-12 7z"/></svg>',trash:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',retry:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>'};
+const EMPTY_ICON='<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>';
 
 (function pairFromLink(){const m=(location.hash||'').match(/^#k=([A-Za-z0-9_-]+)$/);if(m){token=m[1];LS.set('nzb_mobile_token',token);try{history.replaceState(null,'',location.pathname)}catch{}}})();
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function fmtBytes(n){n=Number(n)||0;const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return (i?n.toFixed(1):String(Math.round(n)))+' '+u[i]}
 function clampPct(v){return Math.max(0,Math.min(100,Number(v)||0))}
 function toast(msg,isErr){const t=$('toast');t.textContent=msg;t.className='toast'+(isErr?' err':'');clearTimeout(toastTimer);toastTimer=setTimeout(()=>{t.className='toast hidden'},isErr?6000:3500)}
+function empty(title,hint){return '<div class="empty">'+EMPTY_ICON+'<b>'+esc(title)+'</b>'+esc(hint)+'</div>'}
 
 const API_TIMEOUTS={'/api/search':90000,'/api/add':120000,'/api/add-batch':300000};
 async function api(path,body){
@@ -906,29 +1086,29 @@ async function api(path,body){
   if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body)}
   // Without a timeout a dropped Wi-Fi connection left buttons stuck on "Searching…"/"Adding…" forever.
   const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),API_TIMEOUTS[path]||30000);opt.signal=ctl.signal;
-  let r;try{r=await fetch(path,opt)}catch(e){clearTimeout(timer);throw new Error(e&&e.name==='AbortError'?'The server took too long to answer. Check the queue before retrying an add.':'Cannot reach the server. Is the PC on and the mobile server running?')}
+  let r;try{r=await fetch(path,opt)}catch(e){clearTimeout(timer);throw new Error(e&&e.name==='AbortError'?'The server took too long to answer. Check the queue before retrying an add.':'Cannot reach the server. Is the PC on and NZB Mobile Server running?')}
   clearTimeout(timer);
   let d={};try{d=await r.json()}catch{}
   if(r.status===401){showPair(d.error||'The access code was not accepted.');throw new Error(d.error||'Unauthorized')}
   if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
   return d;
 }
-function showPair(msg){$('app').classList.add('hidden');$('pair').classList.remove('hidden');$('token').value='';if(msg)$('pairmsg').textContent=msg}
+function showPair(msg){$('app').classList.add('hidden');$('tabbar').classList.add('hidden');$('batchbar').classList.add('hidden');$('pair').classList.remove('hidden');$('token').value='';if(msg)$('pairmsg').textContent=msg}
 function pair(){const v=$('token').value.trim();if(!v)return;token=v;LS.set('nzb_mobile_token',token);connect()}
 
 async function connect(){
   try{
     const d=await api('/api/status');
-    $('pair').classList.add('hidden');$('app').classList.remove('hidden');
-    const sel=$('indexer');sel.innerHTML='<option value="*">All enabled indexers</option>'+d.indexers.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join('');
+    $('pair').classList.add('hidden');$('app').classList.remove('hidden');$('tabbar').classList.remove('hidden');
+    const sel=$('indexer');sel.innerHTML='<option value="*">All indexers</option>'+d.indexers.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join('');
     loadPrefs();
     api('/api/sab/info').then(i=>fillCategories(i.categories||[])).catch(()=>{});
-    showTab(activeTab);
+    showTab(activeTab);pollStatus();
   }catch(e){if($('app').classList.contains('hidden'))$('pairmsg').textContent=e.message}
 }
 function fillCategories(cats){const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(cats.includes(keep))sel.value=keep}
 
-function showTab(t){activeTab=t;for(const n of ['search','queue','history']){$(n).classList.toggle('hidden',n!==t);$('tab'+n).classList.toggle('active',n===t)}if(t==='queue')refreshQueue();if(t==='history')refreshHistory()}
+function showTab(t){activeTab=t;for(const n of ['search','queue','history']){$(n).classList.toggle('hidden',n!==t);$('tab'+n).classList.toggle('active',n===t)}updateBatchButton();window.scrollTo(0,0);if(t==='queue')refreshQueue();if(t==='history')refreshHistory()}
 
 function savePrefs(){LS.set('nzb_mobile_prefs',JSON.stringify({sort:$('sort').value,minsize:$('minsize').value,maxsize:$('maxsize').value,mingrabs:$('mingrabs').value,indexer:$('indexer').value,prio:$('prio').value}));LS.set('nzb_mobile_cat',$('sabcat').value)}
 function loadPrefs(){try{const p=JSON.parse(LS.get('nzb_mobile_prefs','{}'));if(p.sort)$('sort').value=p.sort;if(p.prio!==undefined)$('prio').value=p.prio;if(p.indexer&&[...$('indexer').options].some(o=>o.value===p.indexer))$('indexer').value=p.indexer;['minsize','maxsize','mingrabs'].forEach(k=>{if(p[k]!==undefined)$(k).value=p[k]})}catch{}}
@@ -941,40 +1121,45 @@ function filterSort(list,f){
 }
 function currentFilter(){return {min:$('minsize').value,max:$('maxsize').value,grabs:$('mingrabs').value,mode:$('sort').value}}
 function addOptions(){return {category:$('sabcat').value,priority:$('prio').value}}
-function updateBatchButton(){const n=selected.size,b=$('batchbtn');b.textContent='Add selected to SABnzbd ('+n+')';b.disabled=n===0||n>10}
+function updateBatchButton(){const n=selected.size;$('batchcount').textContent=n+' selected'+(n>10?' (max 10)':'');$('batchbtn').disabled=n===0||n>10;$('batchbar').classList.toggle('hidden',n===0||activeTab!=='search')}
 
+function relAge(ts){if(!ts)return '';const s=Date.now()/1000-ts;if(s<3600)return Math.max(1,Math.round(s/60))+'m ago';if(s<86400)return Math.round(s/3600)+'h ago';if(s<86400*30)return Math.round(s/86400)+'d ago';return new Date(ts*1000).toLocaleDateString()}
+function qualityTags(title){const t=String(title),out=[];const q=t.match(/\b(2160p|1080p|720p)\b/i);if(q)out.push(q[1].toLowerCase());if(/\b(dv|dovi|dolby.?vision)\b/i.test(t))out.push('DV');else if(/\bhdr/i.test(t))out.push('HDR');if(/\b(x265|h\.?265|hevc)\b/i.test(t))out.push('HEVC');else if(/\b(x264|h\.?264)\b/i.test(t))out.push('x264');if(/\bremux\b/i.test(t))out.push('REMUX');else if(/\b(bluray|bdrip)\b/i.test(t))out.push('BluRay');else if(/\bweb/i.test(t))out.push('WEB');return out.slice(0,4)}
 function resultCard(x){
   const done=added.has(x.id);
-  const other=(x.also_found&&x.also_found.length)?'<span class="pill">Also: '+esc(x.also_found.join(', '))+'</span>':'';
-  return '<article class="result" data-id="'+esc(x.id)+'"><label class="sel"><input type="checkbox" data-act="sel"'+(selected.has(x.id)?' checked':'')+(done?' disabled':'')+'>Select</label><h3>'+esc(x.title)+'</h3><div class="meta"><span class="pill">'+esc(x.indexer)+'</span>'+other+'<span>'+esc(x.size)+'</span><span>'+esc(x.grabs||0)+' grabs</span><span>'+esc(x.category)+'</span><span>'+esc(x.date||'Date unavailable')+'</span></div><button data-act="add"'+(done?' disabled':'')+'>'+(done?'Added ✓':'Add to SABnzbd')+'</button></article>';
+  const details=[x.indexer,x.size,(x.grabs||0)+' grabs',relAge(x.pub_ts)||x.date].filter(Boolean).map(esc).join(' · ');
+  let badges=qualityTags(x.title).map(t=>'<span class="badge">'+esc(t)+'</span>').join('');
+  if(x.also_found&&x.also_found.length)badges+='<span class="badge purple">Also on '+esc(x.also_found.join(', '))+'</span>';
+  return '<article class="result" data-id="'+esc(x.id)+'"><label class="check" aria-label="Select"><input type="checkbox" data-act="sel"'+(selected.has(x.id)?' checked':'')+(done?' disabled':'')+'></label><h3>'+esc(x.title)+'</h3><div class="details">'+details+'</div>'+(badges?'<div class="badges">'+badges+'</div>':'')+'<button class="btn full'+(done?' added':'')+'" data-act="add"'+(done?' disabled':'')+'>'+(done?'Added ✓':'Add to SABnzbd')+'</button></article>';
 }
 function renderResults(){
   $('resulttools').style.display=results.length?'block':'none';
   const a=filterSort(results,currentFilter());
-  if(results.length)$('searchstatus').textContent='Showing '+a.length+' of '+results.length+' results';
-  $('results').innerHTML=a.map(resultCard).join('')||'<div class="panel muted">No results match these filters.</div>';
+  if(results.length)$('searchstatus').textContent='Showing '+a.length+' of '+results.length+' result(s)';
+  $('results').innerHTML=a.map(resultCard).join('')||(results.length?empty('Nothing matches these filters','Clear the size or grabs limits to see all '+results.length+' result(s).'):'');
   updateBatchButton();
 }
 async function search(){
-  const st=$('searchstatus');st.className='status';st.textContent='Searching...';$('results').innerHTML='';results=[];selected.clear();added.clear();updateBatchButton();
-  $('searchbtn').disabled=true;
+  const st=$('searchstatus');st.className='status';st.textContent='Searching…';$('results').innerHTML='';results=[];selected.clear();added.clear();updateBatchButton();
+  $('searchbtn').disabled=true;$('query').blur();
   try{
     const d=await api('/api/search',{query:$('query').value.trim(),indexer:$('indexer').value,category:$('category').value.trim()});
     results=d.results||[];
-    let msg=results.length+' unique result(s)';if(d.errors&&d.errors.length)msg+=' • '+d.errors.length+' indexer error(s)\n'+d.errors.join('\n');
+    let msg=results.length+' unique result(s)';if(d.errors&&d.errors.length)msg+=' · '+d.errors.length+' indexer error(s)\n'+d.errors.join('\n');
     st.textContent=msg;if(d.errors&&d.errors.length&&!results.length)st.className='status error';
     renderResults();
+    if(!results.length&&!(d.errors&&d.errors.length))$('results').innerHTML=empty('No releases found','Try a shorter title or a different category.');
   }catch(e){st.textContent=e.message;st.className='status error'}
   finally{$('searchbtn').disabled=false}
 }
 async function addResult(id,btn){
-  btn.disabled=true;btn.textContent='Adding...';
+  btn.disabled=true;btn.textContent='Adding…';
   try{const d=await api('/api/add',Object.assign({id},addOptions()));added.add(id);selected.delete(id);toast('Added to SABnzbd'+(d.indexer?' (from '+d.indexer+')':''));renderResults();refreshQueue(true)}
   catch(e){btn.disabled=false;btn.textContent='Add to SABnzbd';toast(e.message,true)}
 }
 async function addSelected(){
   const ids=[...selected];if(!ids.length||ids.length>10)return;
-  const b=$('batchbtn');b.disabled=true;b.textContent='Adding NZBs...';
+  const b=$('batchbtn');b.disabled=true;b.textContent='Adding…';
   try{
     const d=await api('/api/add-batch',Object.assign({ids},addOptions()));
     (d.added||[]).forEach(x=>{added.add(x.id);selected.delete(x.id)});
@@ -982,24 +1167,48 @@ async function addSelected(){
     if(d.errors&&d.errors.length)msg+='\n'+d.errors.map(x=>(x.title||x.id)+': '+x.error).join('\n');
     toast(msg,!!(d.errors&&d.errors.length));renderResults();refreshQueue(true);
   }catch(e){toast(e.message,true)}
-  finally{updateBatchButton()}
+  finally{b.textContent='Add to SABnzbd';updateBatchButton()}
 }
 
+function stateTag(status){const s=String(status||'').toLowerCase();const cls=s==='downloading'?'ok':(s==='paused'?'warn':'busy');return '<span class="tag '+cls+'">'+esc(String(status||'Queued').toUpperCase())+'</span>'}
+function heroCard(x){
+  const p=clampPct(x.percentage),paused=String(x.status).toLowerCase()==='paused';
+  return '<div class="hero queueitem" data-id="'+esc(x.id)+'">'+stateTag(x.status)+'<div class="name">'+esc(x.name)+'</div><div class="sub">'+esc(x.sizeleft)+' of '+esc(x.size)+' left · ETA '+esc(x.eta||'—')+(x.cat&&x.cat!=='*'?' · '+esc(x.cat):'')+'</div><div class="bar"><span style="width:'+p+'%"></span></div><div class="row"><span style="flex:1;font:600 14px var(--mono);color:var(--teal)">'+p.toFixed(0)+'%</span><button class="btn ghost sm" style="flex:none" data-act="'+(paused?'resume':'pause')+'">'+(paused?'Resume':'Pause')+'</button><button class="btn danger sm" style="flex:none" data-act="delete">Delete</button></div></div>';
+}
 function queueRow(x){
   const p=clampPct(x.percentage),paused=String(x.status).toLowerCase()==='paused';
-  return '<div class="queueitem" data-id="'+esc(x.id)+'"><div class="qtitle">'+esc(x.name)+'</div><div class="meta"><span>'+esc(x.status)+'</span><span>'+esc(x.sizeleft)+' left of '+esc(x.size)+'</span><span>'+p.toFixed(1)+'%</span><span>ETA '+esc(x.eta||'—')+'</span>'+(x.cat&&x.cat!=='*'?'<span class="pill">'+esc(x.cat)+'</span>':'')+'</div><div class="bar"><span style="width:'+p+'%"></span></div><div class="row"><button class="secondary smallbtn" data-act="'+(paused?'resume':'pause')+'">'+(paused?'Resume':'Pause')+'</button><button class="danger smallbtn" data-act="delete">Delete</button></div></div>';
+  return '<div class="qrow queueitem" data-id="'+esc(x.id)+'"><div class="info"><div class="t">'+esc(x.name)+'</div><div class="m">'+esc(String(x.status||'').toUpperCase())+' · '+esc(x.size)+(x.eta?' · '+esc(x.eta):'')+(x.cat&&x.cat!=='*'?' · '+esc(x.cat):'')+'</div><div class="bar thin"><span style="width:'+p+'%"></span></div></div><button class="icon-btn" data-act="'+(paused?'resume':'pause')+'" aria-label="'+(paused?'Resume':'Pause')+'">'+(paused?ICON.play:ICON.pause)+'</button><button class="icon-btn red" data-act="delete" aria-label="Delete">'+ICON.trash+'</button></div>';
 }
 async function refreshQueue(silent){
   if(queueBusy)return;queueBusy=true;const st=$('queuestatus');
   try{
     const d=await api('/api/queue');
-    st.className='status';
-    let line=(d.state||'SABnzbd')+' • '+(d.speed||'0 B/s')+' • '+d.total+' queued';if(d.disk_free_gb!=null)line+=' • '+Number(d.disk_free_gb).toFixed(1)+' GB free';if(d.speed_limit)line+='\nSpeed limit: '+d.speed_limit;
-    st.textContent=line;
-    $('queueitems').innerHTML=d.slots.map(queueRow).join('')||'<div class="muted">Queue is empty.</div>';
-  }catch(e){if(!silent||activeTab==='queue'){st.textContent=e.message;st.className='status error'}}
+    st.className='lede';
+    st.textContent=(d.total?d.total+' in queue':'Queue is empty')+(d.speed_limit?' · limit '+d.speed_limit:'');
+    updateStatus(d);
+    const slots=d.slots||[];
+    const free=d.disk_free_gb!=null&&d.disk_free_gb>=0?Number(d.disk_free_gb).toFixed(0):'—';
+    const sp=String(d.speed||'0 B/s').split(' ');
+    let html='<div class="tiles"><div class="tile"><div class="k">Speed</div><div class="v" style="color:var(--teal)">'+esc(sp[0])+' <small>'+esc(sp.slice(1).join(' '))+'</small></div></div><div class="tile"><div class="k">Queued</div><div class="v">'+esc(d.total||0)+'</div></div><div class="tile"><div class="k">Free space</div><div class="v">'+esc(free)+' <small>GB</small></div></div></div>';
+    if(!slots.length){html+=empty('Nothing downloading','Search for something and add it to SABnzbd.')}
+    else{
+      const hi=Math.max(0,slots.findIndex(s=>String(s.status).toLowerCase()==='downloading'));
+      html+=heroCard(slots[hi]);
+      const rest=slots.filter((_,i)=>i!==hi);
+      if(rest.length)html+='<div class="section">UP NEXT</div>'+rest.map(queueRow).join('');
+    }
+    $('queueitems').innerHTML=html;
+  }catch(e){if(!silent||activeTab==='queue'){st.textContent=e.message;st.className='lede status error'}}
   finally{queueBusy=false}
 }
+function updateStatus(d){
+  const pill=$('sabpill'),state=String(d.state||'Idle'),low=state.toLowerCase();
+  pill.className='spill '+(low==='paused'?'warn':(low==='downloading'?'ok':(d.total?'busy':'')));
+  pill.innerHTML='<i></i>'+esc(state)+' · '+esc(d.speed||'0 B/s')+(d.total?' · '+esc(d.total)+' queued':'');
+  $('statusbar').classList.remove('hidden');
+  const c=$('queuecount');c.textContent=d.total||'';c.classList.toggle('hidden',!d.total);
+}
+async function pollStatus(){if(document.hidden||$('app').classList.contains('hidden')||activeTab==='queue')return;try{updateStatus(await api('/api/queue'))}catch{const p=$('sabpill');p.className='spill bad';p.innerHTML='<i></i>SABnzbd offline'}}
 async function itemAction(id,action){
   if(action==='delete'&&!confirm('Remove this item from the queue and delete its partial files?'))return;
   try{await api('/api/queue/item',{id,action});await refreshQueue(true)}catch(e){toast(e.message,true)}
@@ -1011,13 +1220,16 @@ async function setSpeed(){
 }
 
 function historyRow(x){
-  const cls=x.status==='Completed'?'ok':(x.status==='Failed'?'bad':'warn');
-  return '<div class="queueitem" data-id="'+esc(x.id)+'"><div class="qtitle">'+esc(x.name)+'</div><div class="meta"><span class="'+cls+'">'+esc(x.status)+'</span><span>'+esc(x.size)+'</span>'+(x.cat&&x.cat!=='*'?'<span class="pill">'+esc(x.cat)+'</span>':'')+(x.completed?'<span>'+esc(new Date(x.completed*1000).toLocaleString())+'</span>':'')+'</div>'+(x.fail_message?'<div class="hint bad">'+esc(x.fail_message)+'</div>':'')+(x.status==='Failed'?'<div class="row" style="margin-top:8px"><button class="secondary smallbtn" data-act="retry">Retry</button></div>':'')+'</div>';
+  const ok=x.status==='Completed',bad=x.status==='Failed';
+  const color=ok?'var(--green)':(bad?'var(--red)':'var(--amber)');
+  const when=x.completed?relAge(x.completed):'';
+  const note=bad&&x.fail_message?x.fail_message:[x.status,x.size,x.cat&&x.cat!=='*'?x.cat:''].filter(Boolean).join(' · ');
+  return '<div class="hrow queueitem" data-id="'+esc(x.id)+'"><span class="dot" style="background:'+color+'"></span><div class="info"><div class="t">'+esc(x.name)+'</div><div class="m'+(bad?' bad':'')+'">'+esc(note)+(when?' · '+esc(when):'')+'</div></div>'+(bad?'<button class="icon-btn" data-act="retry" aria-label="Retry">'+ICON.retry+'</button>':'')+'</div>';
 }
 async function refreshHistory(){
   const st=$('histstatus');
-  try{const d=await api('/api/history');st.className='status';st.textContent=d.slots.length+' recent item(s)';$('historyitems').innerHTML=d.slots.map(historyRow).join('')||'<div class="muted">No history yet.</div>'}
-  catch(e){st.textContent=e.message;st.className='status error'}
+  try{const d=await api('/api/history');st.className='lede';st.textContent=d.slots.length+' recent download(s)';$('historyitems').innerHTML=d.slots.map(historyRow).join('')||empty('No history yet','Finished and failed downloads show up here.')}
+  catch(e){st.textContent=e.message;st.className='lede status error'}
 }
 async function retryItem(id){try{await api('/api/history/retry',{id});toast('Retry requested');await refreshHistory()}catch(e){toast(e.message,true)}}
 
@@ -1032,15 +1244,16 @@ function bind(){
   $('selvisible').addEventListener('click',()=>{filterSort(results,currentFilter()).forEach(x=>{if(!added.has(x.id)&&selected.size<10)selected.add(x.id)});renderResults()});
   $('selnone').addEventListener('click',()=>{selected.clear();renderResults()});
   $('batchbtn').addEventListener('click',addSelected);
-  $('results').addEventListener('click',e=>{const card=e.target.closest('.result');if(card&&e.target.dataset.act==='add')addResult(card.dataset.id,e.target)});
+  $('results').addEventListener('click',e=>{const card=e.target.closest('.result'),b=e.target.closest('[data-act="add"]');if(card&&b)addResult(card.dataset.id,b)});
   $('results').addEventListener('change',e=>{const card=e.target.closest('.result');if(!card||e.target.dataset.act!=='sel')return;const id=card.dataset.id;if(e.target.checked){if(selected.size>=10){e.target.checked=false;toast('Select no more than 10 NZBs at a time.',true);return}selected.add(id)}else selected.delete(id);updateBatchButton()});
-  $('queueitems').addEventListener('click',e=>{const row=e.target.closest('.queueitem'),act=e.target.dataset.act;if(row&&act)itemAction(row.dataset.id,act)});
-  $('historyitems').addEventListener('click',e=>{const row=e.target.closest('.queueitem');if(row&&e.target.dataset.act==='retry')retryItem(row.dataset.id)});
+  $('queueitems').addEventListener('click',e=>{const row=e.target.closest('.queueitem'),b=e.target.closest('[data-act]');if(row&&b)itemAction(row.dataset.id,b.dataset.act)});
+  $('historyitems').addEventListener('click',e=>{const row=e.target.closest('.queueitem'),b=e.target.closest('[data-act="retry"]');if(row&&b)retryItem(row.dataset.id)});
   $('qresume').addEventListener('click',()=>queueAll('resume'));
   $('qpause').addEventListener('click',()=>queueAll('pause'));
   $('speedset').addEventListener('click',setSpeed);
   $('histrefresh').addEventListener('click',refreshHistory);
   setInterval(()=>{if(!document.hidden&&activeTab==='queue'&&!$('app').classList.contains('hidden'))refreshQueue(true)},4000);
+  setInterval(pollStatus,10000);
 }
 bind();
 if(token)connect();
@@ -1058,7 +1271,7 @@ SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "Content-Security-Policy": (
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; "
         "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     ),
 }
@@ -1158,8 +1371,8 @@ class MobileHandler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             self._send(200, PAGE.replace("__VERSION__", VERSION).encode("utf-8"), "text/html; charset=utf-8")
             return
-        if path == "/favicon.ico":
-            self._send(204, b"", "image/x-icon")
+        if path in ("/icon.png", "/favicon.ico", "/apple-touch-icon.png"):
+            self._send(200, ICON_PNG, "image/png", {"Cache-Control": "public, max-age=86400"})
             return
         if not path.startswith("/api/"):
             self.send_json(404, {"error": "Not found."})
