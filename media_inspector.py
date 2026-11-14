@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import queue
+import functools
 import re
 import shutil
 import subprocess
@@ -171,8 +172,8 @@ def parse_release_identity(
     stem = (raw_name or "").strip()
     parent_low = [p.lower() for p in folder_parts]
 
-    se_match = re.search(r"\bS(\d{1,2})[\s._-]?E(\d{1,2})\b", stem, re.I)
-    alt_ep_match = re.search(r"\b(\d{1,2})x(\d{2})\b", stem, re.I) if not se_match else None
+    se_match = re.search(r"\bS(\d{1,2})[\s._-]?E(\d{1,3})(?:[\s._-]?E\d{1,3})*\b", stem, re.I)
+    alt_ep_match = re.search(r"\b(\d{1,2})x(\d{2,3})\b", stem, re.I) if not se_match else None
     season_only_match = (
         re.search(r"\b(?:S(\d{1,2})|Season[\s._-]?(\d{1,2}))\b", stem, re.I)
         if not (se_match or alt_ep_match)
@@ -202,14 +203,14 @@ def parse_release_identity(
             season_num = int(se_match.group(1))
             ep_num = int(se_match.group(2))
             ep_label = f"S{season_num:02d}E{ep_num:02d}"
-            m_clean = re.search(r"\bS\d{1,2}[\s._-]?E\d{1,2}\b", cleaned, re.I)
+            m_clean = re.search(r"\bS\d{1,2}[\s._-]?E\d{1,3}(?:[\s._-]?E\d{1,3})*\b", cleaned, re.I)
             if m_clean:
                 cut_pos = m_clean.start()
         elif alt_ep_match:
             season_num = int(alt_ep_match.group(1))
             ep_num = int(alt_ep_match.group(2))
             ep_label = f"S{season_num:02d}E{ep_num:02d}"
-            m_clean = re.search(r"\b\d{1,2}x\d{2}\b", cleaned, re.I)
+            m_clean = re.search(r"\b\d{1,2}x\d{2,3}\b", cleaned, re.I)
             if m_clean:
                 cut_pos = m_clean.start()
         elif season_only_match:
@@ -310,13 +311,25 @@ def _classify_and_parse_name(file_path: Path) -> dict:
     )
 
 
+@functools.lru_cache(maxsize=4096)
+def _subtitle_files_in(folder: str) -> tuple[str, ...]:
+    """Subtitle file names in a folder. Cached per scan (cleared when a scan starts): a folder
+    with 2,000 videos used to be listed 2,000 times, once per video."""
+    try:
+        return tuple(
+            e.name for e in os.scandir(folder)
+            if e.is_file() and os.path.splitext(e.name)[1].lower() in SUBTITLE_EXTENSIONS
+        )
+    except OSError:
+        return ()
+
+
 def _find_external_subtitles(video_path: Path) -> list[dict]:
     subs: list[dict] = []
     stem_low = video_path.stem.lower()
     try:
-        for entry in video_path.parent.iterdir():
-            if not entry.is_file():
-                continue
+        for name in _subtitle_files_in(str(video_path.parent)):
+            entry = video_path.parent / name
             ext = entry.suffix.lower()
             if ext not in SUBTITLE_EXTENSIONS:
                 continue
@@ -894,13 +907,24 @@ def probe_media_file(file_path: Path, ffprobe_exe: str, cache_entry: dict | None
     return _apply_parsed_identity(item, parsed), cache_payload
 
 
+def duplicate_key(it: "MediaItem") -> str:
+    """Identity used for duplicate detection: movie title+year(+part), or show+SxxExx."""
+    if it.media_type == "Movie":
+        return it.movie_key
+    if it.media_type == "TV":
+        return it.tv_ep_key
+    return ""
+
+
 def annotate_duplicate_movies(items: list[MediaItem]) -> dict[str, list[MediaItem]]:
+    """Marks duplicate movies AND duplicate TV episodes (name kept for compatibility)."""
     groups: dict[str, list[MediaItem]] = defaultdict(list)
     for it in items:
         it.is_duplicate = False
         it.duplicate_count = 0
-        if it.media_type == "Movie" and it.movie_key:
-            groups[it.movie_key].append(it)
+        key = duplicate_key(it)
+        if key:
+            groups[key].append(it)
 
     dup_groups: dict[str, list[MediaItem]] = {}
     for key, bucket in groups.items():
@@ -1195,8 +1219,11 @@ class MediaInspectorPanel(ctk.CTkFrame):
                 fn = self._ui_queue.get_nowait()
                 try:
                     fn()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    try:
+                        self._emit_status(f"Media Inspector internal error: {exc!r}", log=True, level="ERROR")
+                    except Exception:
+                        pass
         except queue.Empty:
             pass
         self._drain_after_id = self.after(50, self._drain_ui_queue)
@@ -1211,6 +1238,23 @@ class MediaInspectorPanel(ctk.CTkFrame):
             except Exception:
                 pass
         return {}
+
+    def _prune_cache(self, roots: list[Path], discovered: list[Path]) -> int:
+        """Drops cached probe results for files under the scanned folders that no longer exist,
+        so the cache (and the startup library index built from it) doesn't grow forever."""
+        def norm(p: str) -> str:
+            p = p.replace("\\", "/").rstrip("/")
+            return p.lower() if _SYS == "Windows" else p
+
+        root_keys = [norm(str(r)) + "/" for r in roots]
+        found = {norm(str(p)) for p in discovered}
+        stale = [
+            k for k in self._probe_cache
+            if any(norm(k).startswith(rk) for rk in root_keys) and norm(k) not in found
+        ]
+        for k in stale:
+            del self._probe_cache[k]
+        return len(stale)
 
     def _save_cache(self) -> None:
         try:
@@ -1270,7 +1314,7 @@ class MediaInspectorPanel(ctk.CTkFrame):
             corner_radius=6,
             padx=8,
             pady=3,
-            font=ctk.CTkFont(family=self.mono_font, size=10),
+            font=ctk.CTkFont(family=self.ui_font, size=10),
             text_color=C["text_secondary"],
         )
         self.ffprobe_badge.pack(side="left", padx=8, pady=8)
@@ -1413,7 +1457,7 @@ class MediaInspectorPanel(ctk.CTkFrame):
         self.page_lbl = ctk.CTkLabel(
             fbar,
             text="Page 1 / 1",
-            font=ctk.CTkFont(family=self.mono_font, size=11),
+            font=ctk.CTkFont(family=self.ui_font, size=11),
             text_color=C["text_secondary"],
         )
         self.page_lbl.pack(side="right", padx=6, pady=7)
@@ -1432,7 +1476,7 @@ class MediaInspectorPanel(ctk.CTkFrame):
         self.scan_progress_lbl = ctk.CTkLabel(
             fbar,
             text="",
-            font=ctk.CTkFont(family=self.mono_font, size=10),
+            font=ctk.CTkFont(family=self.ui_font, size=10),
             text_color=C["accent"],
         )
         self.scan_progress_lbl.pack(side="right", padx=8, pady=7)
@@ -1513,7 +1557,7 @@ class MediaInspectorPanel(ctk.CTkFrame):
         ctk.CTkLabel(
             insp_btns,
             text="Read-Only Mode",
-            font=ctk.CTkFont(family=self.mono_font, size=10),
+            font=ctk.CTkFont(family=self.ui_font, size=10),
             text_color=C["text_muted"],
         ).pack(side="right")
 
@@ -1541,7 +1585,7 @@ class MediaInspectorPanel(ctk.CTkFrame):
             card,
             text=value,
             anchor="w",
-            font=ctk.CTkFont(family=self.mono_font, size=14, weight="bold"),
+            font=ctk.CTkFont(family=self.ui_font, size=14, weight="bold"),
             text_color=accent,
         )
         val_lbl.pack(fill="x", padx=12)
@@ -1614,7 +1658,7 @@ class MediaInspectorPanel(ctk.CTkFrame):
             ctk.CTkLabel(
                 chip,
                 text=f,
-                font=ctk.CTkFont(family=self.mono_font, size=10),
+                font=ctk.CTkFont(family=self.ui_font, size=10),
                 text_color=C["text_primary"],
             ).pack(side="left", padx=(8, 4), pady=3)
             ctk.CTkButton(
@@ -1670,6 +1714,7 @@ class MediaInspectorPanel(ctk.CTkFrame):
         self._emit_status(f"Scanning {len(valid_roots)} media folder(s) in background...", log=True)
 
         def worker():
+            _subtitle_files_in.cache_clear()  # pick up subtitle files added since the last scan
             discovered: list[Path] = []
             seen_paths: set[str] = set()
 
@@ -1732,8 +1777,10 @@ class MediaInspectorPanel(ctk.CTkFrame):
             def finish():
                 if req_id != self._scan_seq or self._shutting_down:
                     return
+                pruned = self._prune_cache(valid_roots, discovered)
                 if new_cache_entries:
                     self._probe_cache.update(new_cache_entries)
+                if new_cache_entries or pruned:
                     self._save_cache()
                 self.all_items = results
                 self.duplicate_groups = dup_groups
@@ -1993,7 +2040,7 @@ class MediaInspectorPanel(ctk.CTkFrame):
                     corner_radius=5,
                     padx=6,
                     pady=1,
-                    font=ctk.CTkFont(family=self.mono_font, size=10),
+                    font=ctk.CTkFont(family=self.ui_font, size=10),
                     text_color=col,
                 ).pack(side="left", padx=(0, 4))
 
@@ -2033,9 +2080,11 @@ class MediaInspectorPanel(ctk.CTkFrame):
         if item.is_corrupt and item.error_reason:
             lines.append(f"ERROR:      {item.error_reason}")
 
-        if item.is_duplicate and item.movie_key in self.duplicate_groups:
-            lines.extend(["", f"--- DUPLICATE MOVIE GROUP ({item.duplicate_count} files) ---"])
-            for dup in self.duplicate_groups[item.movie_key]:
+        dkey = duplicate_key(item)
+        if item.is_duplicate and dkey in self.duplicate_groups:
+            kind = "EPISODE" if item.media_type == "TV" else "MOVIE"
+            lines.extend(["", f"--- DUPLICATE {kind} GROUP ({item.duplicate_count} files) ---"])
+            for dup in self.duplicate_groups[dkey]:
                 marker = ">> " if dup.path == item.path else "   "
                 lines.append(
                     f"{marker}[{format_bytes(dup.size_bytes):>9} | {dup.resolution_label:<10} | {dup.video_codec}] {dup.path}"

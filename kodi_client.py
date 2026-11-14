@@ -35,11 +35,13 @@ from pathlib import PurePath
 from typing import Any, Callable
 
 import tkinter as tk
+from tkinter import messagebox
 
 import customtkinter as ctk
 
 POLL_INTERVAL_MS = 15_000      # status / now-playing refresh
 SCAN_DEBOUNCE_S = 45           # wait after a completed download before scanning
+SCAN_MAX_WAIT_S = 180          # ...but never postpone a pending scan longer than this
 REQUEST_TIMEOUT_S = 8
 
 
@@ -62,8 +64,11 @@ def normalize_kodi_url(raw: str) -> str:
     if url.lower().endswith("/jsonrpc"):
         url = url[: -len("/jsonrpc")]
     parsed = urllib.parse.urlparse(url)
-    if not parsed.port and parsed.scheme == "http":
-        url = f"{parsed.scheme}://{parsed.hostname}:8080{parsed.path}"
+    if not parsed.port and parsed.scheme == "http" and parsed.hostname:
+        host = parsed.hostname
+        if ":" in host:  # IPv6 literal: urlparse strips the brackets, put them back
+            host = f"[{host}]"
+        url = f"{parsed.scheme}://{host}:8080{parsed.path}"
     return url
 
 
@@ -315,7 +320,9 @@ class KodiPanel(ctk.CTkFrame):
         self._pump_job: str | None = None
         self._scan_timer: threading.Timer | None = None
         self._pending_names: list[str] = []
+        self._pending_since: float | None = None
         self._pending_lock = threading.Lock()
+        self._poll_in_flight = False
         self._online: bool | None = None
         self._playerid: int | None = None
         self._client = self._make_client()
@@ -473,7 +480,7 @@ class KodiPanel(ctk.CTkFrame):
         grid.pack(fill="x", padx=14, pady=(0, 14))
         actions = (
             ("Scan Video Library", lambda: self._action("Video library scan started", lambda: self._client.scan_video())),
-            ("Clean Video Library", lambda: self._action("Video library clean started", lambda: self._client.clean_video())),
+            ("Clean Video Library", self._confirm_clean),
             ("Scan Music Library", lambda: self._action("Music library scan started", lambda: self._client.scan_audio())),
             ("Test Notification", lambda: self._action("Notification sent",
                                                        lambda: self._client.notify("NZB Command Center", "Hello from your PC 👋"))),
@@ -660,8 +667,11 @@ class KodiPanel(ctk.CTkFrame):
         if self._closing:
             return
         client = self._client
-        if client.configured:
+        # Skip a round if the previous poll hasn't answered yet (Kodi asleep/unreachable can take
+        # several request timeouts); otherwise polls would queue up behind the worker threads.
+        if client.configured and not self._poll_in_flight:
             first = self._online is not True
+            self._poll_in_flight = True
 
             def work():
                 client.ping()
@@ -669,7 +679,15 @@ class KodiPanel(ctk.CTkFrame):
                 np = client.now_playing()
                 return ver, np
 
-            self._run(work, lambda r: self._on_poll_ok(client, *r), lambda e: self._on_poll_err(client, e))
+            def ok(r):
+                self._poll_in_flight = False
+                self._on_poll_ok(client, *r)
+
+            def err(e):
+                self._poll_in_flight = False
+                self._on_poll_err(client, e)
+
+            self._run(work, ok, err)
         self._poll_job = self.after(POLL_INTERVAL_MS, self._poll)
 
     def _on_poll_ok(self, client: KodiClient, ver: str | None, np: dict | None) -> None:
@@ -722,6 +740,17 @@ class KodiPanel(ctk.CTkFrame):
             self._status("Set Kodi's address first", "WARN")
             return
         self._run(fn, lambda _r: self._status(ok_msg, "OK"), lambda e: self._status(str(e), "ERROR"))
+
+    def _confirm_clean(self) -> None:
+        """Clean removes library entries whose files Kodi can't find, so ask first."""
+        if not messagebox.askyesno(
+            "Clean Kodi video library",
+            "Kodi will remove library entries (and their watched status) for any files it can't find.\n\n"
+            "If a network share or drive is offline right now, its entries could be removed too.\n\nContinue?",
+            parent=self,
+        ):
+            return
+        self._action("Video library clean started", lambda: self._client.clean_video())
 
     def _play_pause(self) -> None:
         if self._playerid is not None:
@@ -854,11 +883,16 @@ class KodiPanel(ctk.CTkFrame):
         if not (want_scan or want_notify):
             return
         with self._pending_lock:
+            now = time.monotonic()
             self._pending_names.append(name)
+            if self._pending_since is None:
+                self._pending_since = now
             if self._scan_timer is not None:
                 self._scan_timer.cancel()
-            # Debounce: wait for SABnzbd post-processing and batch several completions into one scan.
-            self._scan_timer = threading.Timer(SCAN_DEBOUNCE_S, self._flush_completed)
+            # Debounce: wait for SABnzbd post-processing and batch several completions into one
+            # scan, but cap the total wait so a steady stream of downloads can't delay it forever.
+            delay = min(SCAN_DEBOUNCE_S, max(0.0, self._pending_since + SCAN_MAX_WAIT_S - now))
+            self._scan_timer = threading.Timer(delay, self._flush_completed)
             self._scan_timer.daemon = True
             self._scan_timer.start()
 
@@ -866,6 +900,7 @@ class KodiPanel(ctk.CTkFrame):
         with self._pending_lock:
             names, self._pending_names = self._pending_names, []
             self._scan_timer = None
+            self._pending_since = None
         if self._closing or not names:
             return
         client = self._client

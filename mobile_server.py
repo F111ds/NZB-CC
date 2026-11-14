@@ -795,8 +795,15 @@ class FailureTracker:
             return 0
 
     def record(self, key: str) -> None:
+        now = time.monotonic()
         with self._lock:
-            self._fails.setdefault(key, deque()).append(time.monotonic())
+            # Keep memory bounded: forget clients whose failures have all aged out of the window.
+            if len(self._fails) > 1000:
+                self._fails = {k: q for k, q in self._fails.items() if q and now - q[-1] <= self.window}
+            q = self._fails.setdefault(key, deque())
+            q.append(now)
+            while len(q) > self.max_failures * 2:  # older entries can't affect the lockout
+                q.popleft()
 
     def clear(self, key: str) -> None:
         with self._lock:

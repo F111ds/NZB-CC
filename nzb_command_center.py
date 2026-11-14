@@ -128,6 +128,7 @@ DEFAULT_CONFIG = {
     "media_server_path_map": "",
     "search_history": [],
     "desktop_notifications": True,
+    "watch_folder": False,
 }
 
 # Keys edited live by the Media Server tab. Settings saves must never overwrite them
@@ -2371,6 +2372,10 @@ class NzbManagerApp(ctk.CTk):
         self.selected_nzb_meta: dict | None = None
 
         self.current_search_results: list[dict] = []
+        self._watch_after_id = None
+        self._watch_dir: Path | None = None
+        self._watch_seen: dict[str, float] = {}   # path -> mtime already handled (or present at start)
+        self._watch_in_flight: set[str] = set()
         self._search_ctx: dict | None = None  # query/offsets/modes of the last search, for "Load more"
         self._recent_pos = -1
         self.filtered_search_results: list[dict] = []
@@ -2400,6 +2405,8 @@ class NzbManagerApp(ctk.CTk):
         self.after(200, self._refresh_sab_all)
         self.after(900, self._auto_fetch_missing_caps)
         self._auto_refresh_after_id = self.after(4000, self._auto_refresh_loop)
+        if self.config_data.get("watch_folder"):
+            self.after(1500, self._start_watch)
 
     def _bind_shortcuts(self) -> None:
         self.bind("<Control-f>", self._shortcut_focus_search)
@@ -2459,6 +2466,7 @@ class NzbManagerApp(ctk.CTk):
                 if isinstance(loaded.get("search_history"), list):
                     cfg["search_history"] = [str(q) for q in loaded["search_history"] if str(q).strip()][:15]
                 cfg["desktop_notifications"] = bool(loaded.get("desktop_notifications", True))
+                cfg["watch_folder"] = bool(loaded.get("watch_folder", False))
 
                 if isinstance(loaded.get("indexers"), list):
                     migrated = []
@@ -2558,6 +2566,7 @@ class NzbManagerApp(ctk.CTk):
             "media_server_path_map": str(cfg.get("media_server_path_map", "")),
             "search_history": [str(q) for q in cfg.get("search_history", [])][:15],
             "desktop_notifications": bool(cfg.get("desktop_notifications", True)),
+            "watch_folder": bool(cfg.get("watch_folder", False)),
         }
         _atomic_write_json(CONFIG_FILE, to_disk)
         # Warn (once per new failure) when Windows couldn't encrypt a secret, instead of
@@ -2733,6 +2742,8 @@ class NzbManagerApp(ctk.CTk):
 
         self.folder_entry.delete(0, "end")
         self.folder_entry.insert(0, new_cfg["nzb_folder"])
+        if self.watch_var.get() and self._watch_dir != self._watch_folder_path():
+            self._start_watch()
         self._refresh_indexer_selector()
         self._apply_cached_caps_for_selection()
         self._update_local_drive_space()
@@ -2789,7 +2800,7 @@ class NzbManagerApp(ctk.CTk):
         if self._shutting_down:
             return
         self._shutting_down = True
-        for job_id in (self._ui_drain_after_id, self._auto_refresh_after_id):
+        for job_id in (self._ui_drain_after_id, self._auto_refresh_after_id, self._watch_after_id):
             if job_id:
                 try:
                     self.after_cancel(job_id)
@@ -3640,6 +3651,16 @@ class NzbManagerApp(ctk.CTk):
             command=self._on_auto_archive_toggled,
         ).pack(side="right")
 
+        self.watch_var = ctk.BooleanVar(value=self.config_data.get("watch_folder", False))
+        ctk.CTkSwitch(
+            local_bar,
+            text="Auto-send new",
+            variable=self.watch_var,
+            progress_color=COLORS["accent"],
+            font=ctk.CTkFont(family=UI_FONT, size=11),
+            command=self._on_watch_toggled,
+        ).pack(side="right", padx=(0, 12))
+
         self.local_list_frame = ctk.CTkScrollableFrame(local_left, fg_color="transparent")
         self.local_list_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 6))
 
@@ -3929,6 +3950,103 @@ class NzbManagerApp(ctk.CTk):
         self.config_data["auto_refresh"] = enabled
         self._write_config_file(self.config_data)
         self._set_status(f"Auto-refresh {'enabled' if enabled else 'paused'}.", log=True)
+
+    # ------------------------------------------------------------------ watch folder
+    WATCH_INTERVAL_MS = 5000
+    WATCH_SETTLE_S = 3.0  # a file must be unchanged this long (fully written) before it's sent
+
+    def _watch_folder_path(self) -> Path:
+        return Path(self.folder_entry.get().strip() or self.config_data.get("nzb_folder") or Path.home())
+
+    def _list_watch_nzbs(self) -> dict[str, tuple[float, int]]:
+        out: dict[str, tuple[float, int]] = {}
+        try:
+            with os.scandir(self._watch_dir or self._watch_folder_path()) as it:
+                for e in it:
+                    if e.is_file() and e.name.lower().endswith(".nzb"):
+                        st = e.stat()
+                        out[e.path] = (st.st_mtime, st.st_size)
+        except OSError:
+            pass
+        return out
+
+    def _on_watch_toggled(self) -> None:
+        on = bool(self.watch_var.get())
+        self.config_data["watch_folder"] = on
+        self._safe_write_config("watch folder")
+        if on:
+            self._start_watch()
+        else:
+            self._stop_watch()
+            self._set_status("Auto-send stopped.", log=True)
+
+    def _start_watch(self) -> None:
+        """Files already in the folder are left alone; only NZBs that appear from now on are sent."""
+        self._stop_watch()
+        # Lock onto this folder: typing another path in the folder box must not make the watcher
+        # send everything already sitting in that other folder.
+        self._watch_dir = self._watch_folder_path()
+        self._watch_seen = {p: m for p, (m, _sz) in self._list_watch_nzbs().items()}
+        self._set_status(
+            f"Auto-send on: new .nzb files in {self._watch_dir} will go to SABnzbd.", log=True, level="OK"
+        )
+        self._watch_after_id = self.after(self.WATCH_INTERVAL_MS, self._watch_tick)
+
+    def _stop_watch(self) -> None:
+        if self._watch_after_id:
+            try:
+                self.after_cancel(self._watch_after_id)
+            except Exception:
+                pass
+            self._watch_after_id = None
+
+    def _watch_tick(self) -> None:
+        self._watch_after_id = None
+        if self._shutting_down or not self.watch_var.get():
+            return
+        if self.config_data.get("sab_api_key"):
+            now = time.time()
+            for path, (mtime, size) in self._list_watch_nzbs().items():
+                if path in self._watch_in_flight or self._watch_seen.get(path) == mtime:
+                    continue
+                if size <= 0 or now - mtime < self.WATCH_SETTLE_S:
+                    continue  # still being written; check again next tick
+                self._watch_seen[path] = mtime
+                self._auto_send_nzb(Path(path))
+        self._watch_after_id = self.after(self.WATCH_INTERVAL_MS, self._watch_tick)
+
+    def _auto_send_nzb(self, path: Path) -> None:
+        cat = self._resolve_sab_category(self.local_cat_var.get(), item_category="", title=path.stem)
+        archive = self.auto_archive_var.get()
+        self._watch_in_flight.add(str(path))
+
+        def task():
+            try:
+                parse_local_nzb(path)  # reject half-downloaded / non-NZB files before sending
+            except Exception as exc:
+                raise RuntimeError(f"not a valid NZB ({exc})") from None
+            self.sab.add_file(path, category=cat)
+            if archive:
+                try:
+                    self._archive_sent_nzb(path)
+                except Exception as exc:
+                    return f" (archiving failed: {_format_http_error(exc)})"
+                return " and archived to sent/"
+            return ""
+
+        def ok(note):
+            self._watch_in_flight.discard(str(path))
+            self._increment_daily_nzb_count()
+            self._set_status(f"Auto-sent {path.name} to SABnzbd [cat={cat}]{note}.", log=True, level="OK")
+            self._scan_local_folder()
+            self._refresh_sab_all()
+
+        def err(exc):
+            self._watch_in_flight.discard(str(path))
+            self._set_status(f"Auto-send failed for {path.name}: {exc}", log=True, level="ERROR")
+
+        self._set_status(f"Auto-sending {path.name} to SABnzbd...")
+        self._run_bg(task, on_ok=ok, on_err=err)
 
     def _on_auto_archive_toggled(self) -> None:
         enabled = self.auto_archive_var.get()
@@ -4753,6 +4871,8 @@ class NzbManagerApp(ctk.CTk):
             self._write_config_file(self.config_data)
             self._update_local_drive_space()
             self._scan_local_folder()
+            if self.watch_var.get():
+                self._start_watch()  # new folder: only files arriving from now on are sent
 
     def _open_local_folder(self) -> None:
         folder = Path(self.folder_entry.get().strip() or self.config_data["nzb_folder"])

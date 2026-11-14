@@ -18,6 +18,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
+from tkinter import messagebox
 
 import customtkinter as ctk
 
@@ -83,6 +84,95 @@ _GENERIC_STEM_RE = re.compile(r"(s\d{1,2}e\d{1,3}|e?\d{1,3}|episode[\s._-]?\d+|m
 def _is_distinctive_name(fname: str) -> bool:
     stem = fname.rsplit(".", 1)[0] if "." in fname else fname
     return len(stem) >= 8 and not _GENERIC_STEM_RE.fullmatch(stem)
+
+
+def _tint(hex_color: str, amount: float = 0.16, base: str = "#0F1E25") -> str:
+    """Blends a colour into the dark card background (tinted badge backgrounds)."""
+    try:
+        c = [int(hex_color.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)]
+        b = [int(base.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)]
+    except (ValueError, IndexError):
+        return base
+    return "#%02X%02X%02X" % tuple(round(b[i] + (c[i] - b[i]) * amount) for i in range(3))
+
+
+def compute_audit(
+    movies: list[dict], episodes: list[dict], disk_items: list[dict], path_map_raw: str
+) -> tuple[list[dict], list[dict]]:
+    """Compares server items with files on disk -> (missing_from_server, orphaned_on_server).
+
+    Pure function, so it can run on a worker thread (it may touch the network share via
+    Path.exists() for orphan checks). Matching, strongest first:
+      1. full path, after rewriting server paths through the user's path map;
+      2. path ending (last 2..6 segments, e.g. "show a/season 01/s01e01.mkv"), only if that
+         ending is unique on BOTH sides (handles different roots without a path map);
+      3. file name alone, only if it is unique on both sides and not generic
+         (so "S01E01.mkv" from two different shows can never match each other).
+    """
+    path_map = parse_path_map(path_map_raw)
+
+    srv_entries: list[dict] = []
+    for m in movies:
+        f = m.get("file") or ""
+        if f:
+            srv_entries.append({
+                "title": f"{m.get('title', 'Movie')} ({m.get('year', '')})".replace(" ()", ""),
+                "file": f,
+                "kind": "Movie",
+            })
+    for ep in episodes:
+        f = ep.get("file") or ""
+        if f:
+            srv_entries.append({
+                "title": f"{ep.get('showtitle', 'TV')} — S{int(ep.get('season', 0)):02d}E{int(ep.get('episode', 0)):02d}",
+                "file": f,
+                "kind": "Episode",
+            })
+
+    srv_keys = [_norm_media_path(apply_path_map(se["file"], path_map)) for se in srv_entries]
+    disk_valid = [d for d in disk_items if d.get("path")]
+    disk_keys = [_norm_media_path(d["path"]) for d in disk_valid]
+
+    srv_full = {k[0] for k in srv_keys}
+    disk_full = {k[0] for k in disk_keys}
+    srv_suffix = Counter(s for k in srv_keys for s in k[1])
+    disk_suffix = Counter(s for k in disk_keys for s in k[1])
+    srv_names = Counter(k[2] for k in srv_keys if k[2])
+    disk_names = Counter(k[2] for k in disk_keys if k[2])
+
+    def is_match(key, other_full, own_suffix, other_suffix, own_names, other_names) -> bool:
+        full, suffixes, fname = key
+        if full and full in other_full:
+            return True
+        if any(own_suffix[s] == 1 and other_suffix[s] == 1 for s in suffixes):
+            return True
+        if fname and _is_distinctive_name(fname) and own_names[fname] == 1 and other_names[fname] == 1:
+            return True
+        return False
+
+    missing: list[dict] = []
+    for d, key in zip(disk_valid, disk_keys):
+        if not is_match(key, srv_full, disk_suffix, srv_suffix, disk_names, srv_names):
+            fpath = d["path"]
+            missing.append({
+                "title": d.get("title") or Path(fpath).name,
+                "file": fpath,
+                "kind": d.get("media_type") or "Media",
+                "corrupt": bool(d.get("is_corrupt", False)),
+                "folder_exists": Path(fpath).parent.exists(),
+            })
+
+    orphaned: list[dict] = []
+    if disk_valid:
+        for se, key in zip(srv_entries, srv_keys):
+            if is_match(key, disk_full, srv_suffix, disk_suffix, srv_names, disk_names):
+                continue
+            local = apply_path_map(se["file"], path_map)
+            is_remote = local.startswith(("smb://", "nfs://", "http://", "https://"))
+            if local and not is_remote and Path(local).exists():
+                continue  # exists locally, just outside the scanned Media Inspector folders
+            orphaned.append(se)
+    return missing, orphaned
 
 
 def _fmt_ms(ms: float | int) -> str:
@@ -505,6 +595,10 @@ class MediaServerPanel(ctk.CTkFrame):
         self._episodes: list[dict] = []
         self._audit_missing: list[dict] = []
         self._audit_orphaned: list[dict] = []
+        self._disk_items: list[dict] = []
+        self._has_disk_items = False
+        self._pending_refresh_names: list[str] = []
+        self._refresh_job = None
         self._filtered_rows: list[dict] = []
         self._current_page: int = 0
 
@@ -524,7 +618,7 @@ class MediaServerPanel(ctk.CTkFrame):
 
     def shutdown(self) -> None:
         self._shutting_down = True
-        for jid in (self._drain_after_id, self._poll_after_id):
+        for jid in (self._drain_after_id, self._poll_after_id, self._refresh_job):
             if jid:
                 try:
                     self.after_cancel(jid)
@@ -543,8 +637,11 @@ class MediaServerPanel(ctk.CTkFrame):
                 fn = self._ui_queue.get_nowait()
                 try:
                     fn()
-                except Exception:
-                    pass
+                except Exception as exc:  # surface instead of silently swallowing
+                    try:
+                        self._emit_status(f"Media Server tab internal error: {exc!r}", log=True, level="ERROR")
+                    except Exception:
+                        pass
         except queue.Empty:
             pass
         self._drain_after_id = self.after(50, self._drain_ui_queue)
@@ -581,18 +678,26 @@ class MediaServerPanel(ctk.CTkFrame):
             return
         if not self.auto_scan_var.get():
             return
+        # Batch completions: the first one schedules a refresh REFRESH_DELAY_MS later (also giving
+        # SABnzbd time to finish moving files); any that finish meanwhile join that same refresh.
+        # Previously completions within 15 s of a refresh were silently dropped.
+        self._pending_refresh_names.append(job_name)
+        if self._refresh_job is None:
+            self._refresh_job = self.after(self.REFRESH_DELAY_MS, self._flush_refresh)
 
-        now = time.monotonic()
-        if now - self._last_auto_scan_ts < 15.0:
+    REFRESH_DELAY_MS = 15_000
+
+    def _flush_refresh(self) -> None:
+        self._refresh_job = None
+        names, self._pending_refresh_names = self._pending_refresh_names, []
+        if not names or self._shutting_down:
             return
-        self._last_auto_scan_ts = now
-
+        self._last_auto_scan_ts = time.monotonic()
         srv_name = self.server_type
+        what = f"'{names[0]}'" if len(names) == 1 else f"{len(names)} completed downloads"
         self._run_bg(
             lambda: self.client.refresh_libraries(),
-            on_ok=lambda _r: self._emit_status(
-                f"{srv_name} library refresh triggered for '{job_name}'.", log=True, level="OK"
-            ),
+            on_ok=lambda _r: self._emit_status(f"{srv_name} library refresh triggered for {what}.", log=True, level="OK"),
             on_err=lambda exc: self._emit_status(f"{srv_name} auto-refresh failed: {exc}", log=True, level="WARN"),
         )
 
@@ -659,10 +764,10 @@ class MediaServerPanel(ctk.CTkFrame):
             conn,
             text="Not Configured" if not (self.server_url and self.server_token) else "Connecting...",
             fg_color=C["bg_card"],
-            corner_radius=6,
-            padx=8,
+            corner_radius=11,
+            padx=10,
             pady=3,
-            font=ctk.CTkFont(family=self.mono_font, size=10),
+            font=ctk.CTkFont(family=self.ui_font, size=10),
             text_color=C["text_muted"] if not (self.server_url and self.server_token) else C["amber"],
         )
         self.conn_badge.pack(side="left", padx=4, pady=8)
@@ -800,7 +905,7 @@ class MediaServerPanel(ctk.CTkFrame):
         self.page_lbl = ctk.CTkLabel(
             vbar,
             text="Page 1 / 1",
-            font=ctk.CTkFont(family=self.mono_font, size=11),
+            font=ctk.CTkFont(family=self.ui_font, size=11),
             text_color=C["text_secondary"],
         )
         self.page_lbl.pack(side="right", padx=6, pady=7)
@@ -819,7 +924,7 @@ class MediaServerPanel(ctk.CTkFrame):
         self.summary_lbl = ctk.CTkLabel(
             vbar,
             text="",
-            font=ctk.CTkFont(family=self.mono_font, size=10),
+            font=ctk.CTkFont(family=self.ui_font, size=10),
             text_color=C["text_muted"],
         )
         self.summary_lbl.pack(side="right", padx=8, pady=7)
@@ -867,11 +972,16 @@ class MediaServerPanel(ctk.CTkFrame):
         if new_raw == self.path_map_raw:
             return
         self._persist_config()
-        if self._movies or self._episodes:
-            # Re-run the audit against the new mapping without re-fetching the library.
-            self._compute_audit(self.get_disk_items() if self.get_disk_items else [])
-            self._apply_view_filter(reset_page=True)
         self._emit_status(f"Media server path map saved ({len(parse_path_map(new_raw))} mapping(s)).", log=True)
+        if self._movies or self._episodes:
+            # Re-run the audit against the new mapping (on a worker) without re-fetching the library.
+            movies, episodes, disk = list(self._movies), list(self._episodes), list(self._disk_items)
+
+            def done(res):
+                self._audit_missing, self._audit_orphaned = res
+                self._apply_view_filter(reset_page=True)
+
+            self._run_bg(lambda: compute_audit(movies, episodes, disk, new_raw), on_ok=done)
 
     def _save_and_connect(self) -> None:
         C = self.colors
@@ -904,7 +1014,13 @@ class MediaServerPanel(ctk.CTkFrame):
             return
         if self.server_url and self.server_token and not self._poll_in_flight:
             self._poll_sessions(silent=True)
-        self._poll_after_id = self.after(6000, self._poll_loop)
+        # Every 6 s while the tab is on screen; every 30 s in the background (the header pill
+        # still stays reasonably current without hammering the server).
+        try:
+            visible = bool(self.winfo_viewable())
+        except Exception:
+            visible = False
+        self._poll_after_id = self.after(6000 if visible else 30000, self._poll_loop)
 
     def _poll_sessions(self, silent: bool = False) -> None:
         if not (self.server_url and self.server_token) or self._poll_in_flight:
@@ -961,10 +1077,7 @@ class MediaServerPanel(ctk.CTkFrame):
                     height=24,
                     fg_color=C["red"],
                     hover_color="#DC2626",
-                    command=lambda i=sid: self._run_bg(
-                        lambda: self.client.control_session(i, "Stop"),
-                        on_ok=lambda _r: self._poll_sessions(silent=True),
-                    ),
+                    command=lambda i=sid, who=s["user"], what=s["title"]: self._confirm_stop(i, who, what),
                 ).pack(side="right", padx=(3, 8), pady=6)
 
                 ctk.CTkButton(
@@ -990,11 +1103,11 @@ class MediaServerPanel(ctk.CTkFrame):
             ctk.CTkLabel(
                 top,
                 text="PAUSED" if s["paused"] else "PLAYING",
-                fg_color=C["bg_panel"],
-                corner_radius=4,
+                fg_color=_tint(state_col),
+                corner_radius=9,
                 padx=6,
                 pady=1,
-                font=ctk.CTkFont(family=self.mono_font, size=9, weight="bold"),
+                font=ctk.CTkFont(family=self.ui_font, size=9, weight="bold"),
                 text_color=state_col,
             ).pack(side="left", padx=(0, 6))
 
@@ -1002,11 +1115,11 @@ class MediaServerPanel(ctk.CTkFrame):
             ctk.CTkLabel(
                 top,
                 text=s["play_method"],
-                fg_color=C["bg_panel"],
-                corner_radius=4,
+                fg_color=_tint(C["amber"] if is_tc else C["sky"]),
+                corner_radius=9,
                 padx=6,
                 pady=1,
-                font=ctk.CTkFont(family=self.mono_font, size=9),
+                font=ctk.CTkFont(family=self.ui_font, size=9),
                 text_color=C["amber"] if is_tc else C["sky"],
             ).pack(side="left", padx=(0, 8))
 
@@ -1021,13 +1134,25 @@ class MediaServerPanel(ctk.CTkFrame):
             ctk.CTkLabel(
                 top,
                 text=f"{s['elapsed']} / {s['total']} ({s['percentage']:.0f}%)",
-                font=ctk.CTkFont(family=self.mono_font, size=10),
+                font=ctk.CTkFont(family=self.ui_font, size=10),
                 text_color=C["text_secondary"],
             ).pack(side="right", padx=4)
 
             bar = ctk.CTkProgressBar(info, height=5, fg_color=C["bg_root"], progress_color=state_col)
             bar.set(min(max(s["percentage"] / 100.0, 0.0), 1.0))
             bar.pack(fill="x", pady=(4, 0))
+
+    def _confirm_stop(self, session_id: str, user: str, title: str) -> None:
+        """Stopping someone else's stream is disruptive, so ask first."""
+        if not messagebox.askyesno("Stop stream", f"Stop {user}'s playback of\n\n{title}?", parent=self):
+            return
+        self._run_bg(
+            lambda: self.client.control_session(session_id, "Stop"),
+            on_ok=lambda _r: (
+                self._emit_status(f"Stopped {user}'s stream: {title}", log=True, level="WARN"),
+                self._poll_sessions(silent=True),
+            ),
+        )
 
     def _trigger_server_scan(self) -> None:
         if not (self.server_url and self.server_token):
@@ -1048,21 +1173,28 @@ class MediaServerPanel(ctk.CTkFrame):
             return
         srv = self.server_type
         self._emit_status(f"Syncing {srv} Movies, TV Shows & running Disk Audit...", log=True)
-
-        disk_items = self.get_disk_items() if self.get_disk_items else []
+        get_disk = self.get_disk_items
+        client = self.client
+        path_map_raw = self.path_map_raw
 
         def fetch():
-            movies = self.client.get_movies()
-            shows = self.client.get_tv_shows()
-            episodes = self.client.get_episodes()
-            return movies, shows, episodes, disk_items
+            # Everything slow runs here, off the UI thread: the server API calls, reading the
+            # disk file list (probe cache / exists() checks) and the audit itself.
+            movies = client.get_movies()
+            shows = client.get_tv_shows()
+            episodes = client.get_episodes()
+            disk_items = get_disk() if get_disk else []
+            missing, orphaned = compute_audit(movies, episodes, disk_items, path_map_raw)
+            return movies, shows, episodes, disk_items, missing, orphaned
 
         def ok(res):
-            movies, shows, episodes, d_items = res
+            movies, shows, episodes, d_items, missing, orphaned = res
             self._movies = movies
             self._shows = shows
             self._episodes = episodes
-            self._compute_audit(d_items)
+            self._disk_items = d_items
+            self._has_disk_items = bool(d_items)
+            self._audit_missing, self._audit_orphaned = missing, orphaned
             self._apply_view_filter(reset_page=True)
             self._emit_status(
                 f"{srv} synced: {len(movies)} movies, {len(shows)} TV shows ({len(episodes)} eps). "
@@ -1074,80 +1206,11 @@ class MediaServerPanel(ctk.CTkFrame):
         self._run_bg(fetch, on_ok=ok)
 
     def _compute_audit(self, disk_items: list[dict]) -> None:
-        """Compares server items with files on disk.
-
-        Matching, strongest first:
-          1. full path, after rewriting server paths through the user's path map;
-          2. path ending (last 2..6 segments, e.g. "show a/season 01/s01e01.mkv"), only if that
-             ending is unique on BOTH sides (handles different roots without a path map);
-          3. file name alone, only if it is unique on both sides and not generic
-             (so "S01E01.mkv" from two different shows can never match each other).
-        """
-        path_map = parse_path_map(self.path_map_raw)
-
-        srv_entries: list[dict] = []
-        for m in self._movies:
-            f = m.get("file") or ""
-            if f:
-                srv_entries.append({
-                    "title": f"{m.get('title', 'Movie')} ({m.get('year', '')})".replace(" ()", ""),
-                    "file": f,
-                    "kind": "Movie",
-                })
-        for ep in self._episodes:
-            f = ep.get("file") or ""
-            if f:
-                srv_entries.append({
-                    "title": f"{ep.get('showtitle', 'TV')} — S{int(ep.get('season', 0)):02d}E{int(ep.get('episode', 0)):02d}",
-                    "file": f,
-                    "kind": "Episode",
-                })
-
-        srv_keys = [_norm_media_path(apply_path_map(se["file"], path_map)) for se in srv_entries]
-        disk_valid = [d for d in disk_items if d.get("path")]
-        disk_keys = [_norm_media_path(d["path"]) for d in disk_valid]
-
-        srv_full = {k[0] for k in srv_keys}
-        disk_full = {k[0] for k in disk_keys}
-        srv_tail2 = Counter(s for k in srv_keys for s in k[1])
-        disk_tail2 = Counter(s for k in disk_keys for s in k[1])
-        srv_names = Counter(k[2] for k in srv_keys if k[2])
-        disk_names = Counter(k[2] for k in disk_keys if k[2])
-
-        def is_match(key, other_full, own_tail2, other_tail2, own_names, other_names) -> bool:
-            full, suffixes, fname = key
-            if full and full in other_full:
-                return True
-            if any(own_tail2[s] == 1 and other_tail2[s] == 1 for s in suffixes):
-                return True
-            if fname and _is_distinctive_name(fname) and own_names[fname] == 1 and other_names[fname] == 1:
-                return True
-            return False
-
-        missing: list[dict] = []
-        for d, key in zip(disk_valid, disk_keys):
-            if not is_match(key, srv_full, disk_tail2, srv_tail2, disk_names, srv_names):
-                fpath = d["path"]
-                missing.append({
-                    "title": d.get("title") or Path(fpath).name,
-                    "file": fpath,
-                    "kind": d.get("media_type") or "Media",
-                    "corrupt": bool(d.get("is_corrupt", False)),
-                })
-
-        orphaned: list[dict] = []
-        if disk_valid:
-            for se, key in zip(srv_entries, srv_keys):
-                if is_match(key, disk_full, srv_tail2, disk_tail2, srv_names, disk_names):
-                    continue
-                local = apply_path_map(se["file"], path_map)
-                is_remote = local.startswith(("smb://", "nfs://", "http://", "https://"))
-                if local and not is_remote and Path(local).exists():
-                    continue  # exists locally, just outside the scanned Media Inspector folders
-                orphaned.append(se)
-
-        self._audit_missing = missing
-        self._audit_orphaned = orphaned
+        """Synchronous audit (kept for callers/tests); the UI uses compute_audit() on a worker."""
+        self._audit_missing, self._audit_orphaned = compute_audit(
+            self._movies, self._episodes, disk_items, self.path_map_raw
+        )
+        self._has_disk_items = bool(disk_items)
 
     def _clear_filter(self, _event=None) -> None:
         self.filter_entry.delete(0, "end")
@@ -1214,7 +1277,9 @@ class MediaServerPanel(ctk.CTkFrame):
             pass
 
         if not rows:
-            if view.startswith("Audit:") and not (self.get_disk_items and self.get_disk_items()):
+            # Uses the flag from the last sync: calling get_disk_items() here re-read the probe
+            # cache (and stat()ed every file) on the UI thread just to choose a message.
+            if view.startswith("Audit:") and not self._has_disk_items:
                 msg = "Run a scan in 'Media Inspector' first so the server can be compared against your disk files."
             elif not self._movies and not self._shows:
                 msg = "Click 'Sync Library & Audit' above after connecting."
@@ -1250,7 +1315,7 @@ class MediaServerPanel(ctk.CTkFrame):
                 self._render_card_left(card, title, it.get("file") or "", [(f"{watched}/{eps} watched", col)])
             elif view == "Audit: Missing from Server":
                 fpath = it.get("file") or ""
-                if fpath and Path(fpath).parent.exists():
+                if fpath and it.get("folder_exists", False):  # checked during the background audit
                     ctk.CTkButton(
                         card,
                         text="Open Folder",
@@ -1284,11 +1349,11 @@ class MediaServerPanel(ctk.CTkFrame):
             ctk.CTkLabel(
                 top,
                 text=b_txt,
-                fg_color=C["bg_panel"],
-                corner_radius=5,
+                fg_color=_tint(b_col),
+                corner_radius=10,
                 padx=7,
                 pady=1,
-                font=ctk.CTkFont(family=self.mono_font, size=10, weight="bold"),
+                font=ctk.CTkFont(family=self.ui_font, size=10, weight="bold"),
                 text_color=b_col,
             ).pack(side="left", padx=(0, 6))
 
@@ -1305,7 +1370,7 @@ class MediaServerPanel(ctk.CTkFrame):
                 info,
                 text=subtitle,
                 anchor="w",
-                font=ctk.CTkFont(family=self.mono_font, size=10),
+                font=ctk.CTkFont(family=self.ui_font, size=10),
                 text_color=C["text_muted"],
             ).pack(fill="x", pady=(3, 0))
 
