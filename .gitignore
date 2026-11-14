@@ -19,3 +19,6 @@ __pycache__/
 
 # Review screenshots
 screenshots/
+
+# Local backup copies (e.g. mobile_server.py.before-restyle)
+*.before-*
