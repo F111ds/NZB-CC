@@ -65,6 +65,7 @@ DEFAULT_PORT = 8765
 MAX_RESULTS_PER_INDEXER = 50
 MAX_TOTAL_RESULTS = 200
 MAX_BATCH_ADD = 10
+BATCH_ADD_WORKERS = 3               # NZBs downloaded in parallel for a batch add
 REQUEST_TIMEOUT = 20
 NZB_DOWNLOAD_TIMEOUT = 45
 MAX_NZB_BYTES = 50 * 1024 * 1024
@@ -100,14 +101,14 @@ class ConfigError(RuntimeError):
     """Problem with the desktop configuration. The message contains no secrets."""
 
 
-_KNOWN_SECRETS: set[str] = set()
+_KNOWN_SECRETS: frozenset[str] = frozenset()
 _SECRET_QS = re.compile(r"(?i)\b(apikey|api_key|passkey|token|r)=([^&\s'\"<>]+)")
 
 
 def redact(text) -> str:
     """Strips API keys from any text (query-string style, plus every key currently configured)."""
     out = _SECRET_QS.sub(lambda m: f"{m.group(1)}=***", str(text))
-    for secret in list(_KNOWN_SECRETS):
+    for secret in _KNOWN_SECRETS:  # a frozenset that is only ever swapped whole, never mutated
         if secret and len(secret) >= 6:
             out = out.replace(secret, "***")
     return out
@@ -160,6 +161,30 @@ def safe_xml_fromstring(raw: bytes):
     return ET.fromstring(text)
 
 
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-applies the download safety rules to every redirect hop.
+
+    Plain urlopen() follows redirects blindly, so a public CDN link that passed the
+    private-address check could bounce this server to 192.168.x.x, or an HTTPS link could
+    be downgraded to HTTP. Redirects to the SAME host (e.g. a LAN NZBHydra/Prowlarr talking
+    to itself) are allowed; any other host must resolve only to public addresses.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        old = urllib.parse.urlsplit(req.full_url)
+        new = urllib.parse.urlsplit(urllib.parse.urljoin(req.full_url, newurl))
+        if new.scheme not in ("http", "https") or not new.hostname:
+            raise UpstreamError("Refused a redirect to an unsupported URL.")
+        if old.scheme == "https" and new.scheme != "https":
+            raise UpstreamError("Refused a redirect from HTTPS to plain HTTP.")
+        if new.hostname.lower() != (old.hostname or "").lower() and not host_is_public(new.hostname):
+            raise UpstreamError("Refused a redirect to a private/local address.")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_SafeRedirectHandler())
+
+
 def http_fetch(url: str, *, timeout: float, max_bytes: int, data: bytes | None = None,
                headers: dict | None = None) -> bytes:
     """Size-capped http(s) request. Raises UpstreamError with a message that never contains the URL."""
@@ -170,7 +195,7 @@ def http_fetch(url: str, *, timeout: float, max_bytes: int, data: bytes | None =
         hdrs.update(headers)
     req = urllib.request.Request(url, data=data, headers=hdrs, method="POST" if data is not None else "GET")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             body = resp.read(max_bytes + 1)
     except urllib.error.HTTPError as exc:
         try:
@@ -243,7 +268,10 @@ def _dpapi_unprotect(stored: str) -> str:
     kernel32.LocalFree.argtypes = [ctypes.c_void_p]
     kernel32.LocalFree.restype = ctypes.c_void_p
 
-    raw = base64.b64decode(stored[6:])
+    try:
+        raw = base64.b64decode(stored[6:], validate=True)
+    except ValueError:  # binascii.Error: a damaged value in the config file
+        raise ConfigError("A saved API key in the desktop configuration is damaged.") from None
     in_buf = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
     in_blob = DATA_BLOB(len(raw), in_buf)
     out_blob = DATA_BLOB()
@@ -296,18 +324,29 @@ def load_config(path: Path | None = None) -> dict:
         if ix_id in seen:
             continue
         seen.add(ix_id)
+        # One indexer whose key can't be decrypted must not take the whole server down:
+        # keep it listed, but searches against it report why it can't be used.
+        key_error = ""
+        try:
+            api_key = _dpapi_unprotect(str(item.get("api_key") or "")).strip()
+        except ConfigError:
+            api_key = ""
+            key_error = "Its saved API key could not be decrypted — re-enter it in the desktop app's Settings."
+            log.warning("Indexer '%s': API key could not be decrypted; it will be unavailable.", name)
         indexers.append({
             "id": ix_id,
             "name": name,
             "url": url,
-            "api_key": _dpapi_unprotect(str(item.get("api_key") or "")).strip(),
+            "api_key": api_key,
+            "key_error": key_error,
         })
 
     if not sab_key:
         raise ConfigError("SABnzbd API key is missing (or could not be decrypted) in nzb_manager_config.json.")
 
-    _KNOWN_SECRETS.clear()
-    _KNOWN_SECRETS.update([sab_key] + [ix["api_key"] for ix in indexers if ix["api_key"]])
+    global _KNOWN_SECRETS
+    # Swap in a complete new set at once, so a concurrent redact() never sees an empty/partial set.
+    _KNOWN_SECRETS = frozenset([sab_key] + [ix["api_key"] for ix in indexers if ix["api_key"]])
     return {"sab_url": sab_url, "sab_api_key": sab_key, "indexers": indexers}
 
 
@@ -527,7 +566,7 @@ def parse_newznab_json(raw: bytes, indexer: dict) -> list[dict]:
 
 def search_one(indexer: dict, query: str, category: str, limit: int) -> list[dict]:
     if not indexer["api_key"]:
-        raise UpstreamError("API key is blank in the desktop configuration.")
+        raise UpstreamError(indexer.get("key_error") or "API key is blank in the desktop configuration.")
     params: dict[str, object] = {"t": "search", "apikey": indexer["api_key"], "limit": limit}
     if query:
         params["q"] = query
@@ -667,7 +706,7 @@ def validate_nzb_payload(payload: bytes, name: str) -> None:
 
 def _download_from(indexer: dict, nzb_url: str) -> bytes:
     if not indexer.get("api_key"):
-        raise UpstreamError("API key is blank in the desktop configuration.")
+        raise UpstreamError(indexer.get("key_error") or "API key is blank in the desktop configuration.")
     url = build_download_url(indexer, nzb_url)
     payload = http_fetch(
         url, timeout=NZB_DOWNLOAD_TIMEOUT, max_bytes=MAX_NZB_BYTES,
@@ -854,10 +893,14 @@ function fmtBytes(n){n=Number(n)||0;const u=['B','KB','MB','GB','TB'];let i=0;wh
 function clampPct(v){return Math.max(0,Math.min(100,Number(v)||0))}
 function toast(msg,isErr){const t=$('toast');t.textContent=msg;t.className='toast'+(isErr?' err':'');clearTimeout(toastTimer);toastTimer=setTimeout(()=>{t.className='toast hidden'},isErr?6000:3500)}
 
+const API_TIMEOUTS={'/api/search':90000,'/api/add':120000,'/api/add-batch':300000};
 async function api(path,body){
   const opt={method:body===undefined?'GET':'POST',headers:{'X-Mobile-Token':token}};
   if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body)}
-  let r;try{r=await fetch(path,opt)}catch{throw new Error('Cannot reach the server. Is the PC on and the mobile server running?')}
+  // Without a timeout a dropped Wi-Fi connection left buttons stuck on "Searching…"/"Adding…" forever.
+  const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),API_TIMEOUTS[path]||30000);opt.signal=ctl.signal;
+  let r;try{r=await fetch(path,opt)}catch(e){clearTimeout(timer);throw new Error(e&&e.name==='AbortError'?'The server took too long to answer. Check the queue before retrying an add.':'Cannot reach the server. Is the PC on and the mobile server running?')}
+  clearTimeout(timer);
   let d={};try{d=await r.json()}catch{}
   if(r.status===401){showPair(d.error||'The access code was not accepted.');throw new Error(d.error||'Unauthorized')}
   if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
@@ -1256,13 +1299,29 @@ class MobileHandler(BaseHTTPRequestHandler):
         if self._limited(ADD_LIMITER, "add"):
             return
         category, priority = parse_add_options(body)
-        added, errors = [], []
-        for result_id in dict.fromkeys(str(x) for x in ids):
+        unique_ids = list(dict.fromkeys(str(x) for x in ids))
+
+        def add(result_id: str):
             try:
-                added.append(self._add_one(result_id, category, priority))
+                return self._add_one(result_id, category, priority), None
             except (UpstreamError, ValueError) as exc:
+                return None, str(exc)
+            except Exception:  # one bad item must not lose the report for the ones already added
+                log.exception("Unexpected error adding result %s", result_id)
+                return None, "Unexpected error (see mobile_server.log on the PC)."
+
+        # Downloaded a few at a time instead of one by one: a 10-item batch used to take
+        # minutes (each NZB can need up to 45 s) while the phone showed "Adding…".
+        with ThreadPoolExecutor(max_workers=min(BATCH_ADD_WORKERS, len(unique_ids))) as pool:
+            outcomes = list(pool.map(add, unique_ids))  # map keeps the original order
+
+        added, errors = [], []
+        for result_id, (done, err) in zip(unique_ids, outcomes):
+            if done is not None:
+                added.append(done)
+            else:
                 item = get_cached_result(result_id) or {}
-                errors.append({"id": result_id, "title": item.get("title", ""), "error": str(exc)})
+                errors.append({"id": result_id, "title": item.get("title", ""), "error": err})
         self.send_json(200, {"ok": not errors, "added": added, "errors": errors})
 
     def _post_queue_item(self, body: dict) -> None:

@@ -1661,7 +1661,10 @@ class MediaInspectorPanel(ctk.CTkFrame):
 
         self._scan_seq += 1
         req_id = self._scan_seq
-        self._cancel_event.clear()
+        # A NEW event per scan. Clearing a shared event would revive a cancelled scan whose
+        # worker is still draining its thread pool, so two scans would run at once.
+        cancel_event = threading.Event()
+        self._cancel_event = cancel_event
         self._set_scan_busy(True)
         self.scan_progress_lbl.configure(text="Discovering files...")
         self._emit_status(f"Scanning {len(valid_roots)} media folder(s) in background...", log=True)
@@ -1671,10 +1674,10 @@ class MediaInspectorPanel(ctk.CTkFrame):
             seen_paths: set[str] = set()
 
             for root_dir in valid_roots:
-                if self._cancel_event.is_set() or self._shutting_down:
+                if cancel_event.is_set() or self._shutting_down:
                     return
                 for dirpath, dirnames, filenames in os.walk(root_dir):
-                    if self._cancel_event.is_set() or self._shutting_down:
+                    if cancel_event.is_set() or self._shutting_down:
                         return
                     dirnames[:] = [
                         d for d in dirnames
@@ -1700,14 +1703,14 @@ class MediaInspectorPanel(ctk.CTkFrame):
             completed = 0
 
             def probe_one(p: Path):
-                if self._cancel_event.is_set() or self._shutting_down:
+                if cancel_event.is_set() or self._shutting_down:
                     return None
                 c_entry = cache_snapshot.get(str(p))
                 return probe_media_file(p, ffprobe_exe, cache_entry=c_entry)
 
             with ThreadPoolExecutor(max_workers=4) as pool:
                 for res in pool.map(probe_one, discovered):
-                    if self._cancel_event.is_set() or self._shutting_down:
+                    if cancel_event.is_set() or self._shutting_down:
                         return
                     completed += 1
                     if res is not None:
@@ -1721,7 +1724,7 @@ class MediaInspectorPanel(ctk.CTkFrame):
                             and self.scan_progress_lbl.configure(text=f"Probing {c} / {t}")
                         )
 
-            if self._cancel_event.is_set() or self._shutting_down:
+            if cancel_event.is_set() or self._shutting_down:
                 return
 
             dup_groups = annotate_duplicate_movies(results)

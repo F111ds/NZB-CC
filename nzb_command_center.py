@@ -18,6 +18,7 @@ Usage (PowerShell):
 import base64
 import ctypes
 import ctypes.wintypes
+import gzip
 import io
 import json
 import mimetypes
@@ -35,6 +36,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
+import zlib
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -91,6 +93,9 @@ MAX_ARTWORK_BYTES = 2 * 1024 * 1024  # 2 MB cap per poster download
 MAX_ARTWORK_CACHE = 200              # LRU poster cache limit
 ARTWORK_FAIL_TTL_SEC = 300.0         # Retry failed poster lookups after 5 minutes
 MAX_RAW_XML_PREVIEW_CHARS = 250_000  # Cap raw XML viewer text to prevent UI freezes
+MAX_API_BYTES = 20 * 1024 * 1024     # Cap for indexer search / caps responses
+MAX_NZB_BYTES = 50 * 1024 * 1024     # Cap for a downloaded (or decompressed) NZB
+USER_AGENT = "Mozilla/5.0 NZBCommandCenter/1.0"
 SEARCH_PAGE_SIZE = 40
 AUTO_CAT_LABEL = "Auto (Match)"
 
@@ -119,6 +124,7 @@ DEFAULT_CONFIG = {
     "media_server_url": "",
     "media_server_token": "",
     "media_server_auto_scan": True,
+    "media_server_path_map": "",
 }
 
 # Keys edited live by the Media Server tab. Settings saves must never overwrite them
@@ -128,6 +134,7 @@ MEDIA_SERVER_CONFIG_KEYS = (
     "media_server_url",
     "media_server_token",
     "media_server_auto_scan",
+    "media_server_path_map",
 )
 
 # "Operations Center" Obsidian-Teal & Aqua Palette
@@ -204,7 +211,11 @@ def _dpapi_funcs():
     return crypt32, kernel32
 
 
+_DPAPI_FAILURES = 0  # incremented when a secret had to be saved unencrypted
+
+
 def _protect_secret(plaintext: str) -> str:
+    global _DPAPI_FAILURES
     if not plaintext:
         return ""
     if _SYS != "Windows":
@@ -225,6 +236,7 @@ def _protect_secret(plaintext: str) -> str:
                 kernel32.LocalFree(out_blob.pbData)
     except Exception:
         pass
+    _DPAPI_FAILURES += 1  # the caller warns: this secret is about to be written in plain text
     return plaintext
 
 
@@ -730,6 +742,41 @@ def _sanitize_xml(raw_bytes: bytes) -> str:
     return text
 
 
+def _http_get_limited(url: str, timeout: float, max_bytes: int) -> bytes:
+    """GET with a hard size cap, so a broken or hostile server can't exhaust memory."""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise RuntimeError(f"Response exceeds the {max_bytes // (1024 * 1024)} MB safety limit.")
+    return raw
+
+
+def _gunzip_limited(payload: bytes) -> bytes:
+    """Some indexers serve NZBs gzip-compressed; decompress with the same size cap."""
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(payload)) as gz:
+            out = gz.read(MAX_NZB_BYTES + 1)
+    except (OSError, EOFError, zlib.error):
+        raise RuntimeError("Indexer returned a corrupt gzip-compressed NZB.") from None
+    if len(out) > MAX_NZB_BYTES:
+        raise RuntimeError("Decompressed NZB exceeds the size limit.")
+    return out
+
+
+def _xml_tag(elem) -> str:
+    """Element tag without any XML namespace, lower-case."""
+    return elem.tag.split("}")[-1].lower()
+
+
+def _require_complete_nzb(raw_bytes: bytes) -> None:
+    """Rejects anything that isn't a whole NZB (JSON errors, empty bodies, truncated downloads)."""
+    if not re.search(rb"<nzb[\s>]", raw_bytes[:8192], re.I):
+        raise RuntimeError("Indexer returned data that is not an NZB file.")
+    if not raw_bytes[-512:].rstrip().lower().endswith(b"</nzb>"):
+        raise RuntimeError("Indexer returned a truncated NZB file.")
+
+
 def _validate_nzb_payload(raw_bytes: bytes) -> None:
     preview = raw_bytes[:512].decode("utf-8", errors="replace").strip()
     low = preview.lower()
@@ -1090,13 +1137,8 @@ class NewznabClient:
         if self.api_key:
             params["apikey"] = self.api_key
         url = f"{self.base_url}?{urllib.parse.urlencode(params)}"
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 NZBCommandCenter/1.0"},
-        )
         try:
-            with urllib.request.urlopen(req, timeout=15.0) as resp:
-                raw_bytes = resp.read()
+            raw_bytes = _http_get_limited(url, timeout=15.0, max_bytes=MAX_API_BYTES)
         except Exception as exc:
             raise RuntimeError(_format_http_error(exc)) from exc
 
@@ -1105,7 +1147,7 @@ class NewznabClient:
             raise RuntimeError(f"Indexer returned HTML from {self.base_url} instead of ?t=caps XML.")
 
         root = ET.fromstring(_sanitize_xml(raw_bytes))
-        if root.tag == "error":
+        if _xml_tag(root) == "error":
             desc = root.attrib.get("description", "Unknown indexer API error.")
             raise RuntimeError(f"Indexer error {root.attrib.get('code', '')}: {desc}")
 
@@ -1151,16 +1193,22 @@ class NewznabClient:
             params["cat"] = cat_id
 
         url = f"{self.base_url}?{urllib.parse.urlencode(params)}"
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 NZBCommandCenter/1.0"},
-        )
-
         try:
-            with urllib.request.urlopen(req, timeout=20.0) as resp:
-                raw_bytes = resp.read()
+            raw_bytes = _http_get_limited(url, timeout=20.0, max_bytes=MAX_API_BYTES)
         except Exception as exc:
             raise RuntimeError(f"{self.name}: {_format_http_error(exc)}") from exc
+
+        if raw_bytes.lstrip()[:1] in (b"{", b"["):
+            # Some indexers answer in JSON regardless of format; parse it without a second API hit.
+            try:
+                jdata = json.loads(raw_bytes.decode("utf-8", errors="replace"))
+            except ValueError as exc:
+                raise RuntimeError(f"{self.name} returned unreadable JSON ({exc}).") from None
+            if isinstance(jdata, dict) and jdata.get("error"):
+                raise RuntimeError(f"{self.name} error: {redact_text(str(jdata['error']))[:160]}")
+            if not isinstance(jdata, dict):
+                raise RuntimeError(f"{self.name} returned an unexpected JSON structure.")
+            return self._parse_json_results(jdata, limit)
 
         text_preview = raw_bytes[:300].decode("utf-8", errors="replace").strip()
         if text_preview.lower().startswith(("<!doctype html", "<html")):
@@ -1171,21 +1219,16 @@ class NewznabClient:
         try:
             root = ET.fromstring(_sanitize_xml(raw_bytes))
         except ET.ParseError as xml_err:
-            json_url = f"{url}&o=json"
-            req_json = urllib.request.Request(
-                json_url,
-                headers={"User-Agent": "Mozilla/5.0 NZBCommandCenter/1.0"},
-            )
             try:
-                with urllib.request.urlopen(req_json, timeout=20.0) as resp_j:
-                    jdata = json.loads(resp_j.read().decode("utf-8", errors="replace"))
+                raw_json = _http_get_limited(f"{url}&o=json", timeout=20.0, max_bytes=MAX_API_BYTES)
+                jdata = json.loads(raw_json.decode("utf-8", errors="replace"))
                 return self._parse_json_results(jdata, limit)
             except Exception:
                 raise RuntimeError(
                     f"{self.name} XML parse failed ({xml_err}). Starts with: {text_preview[:120]}"
                 ) from xml_err
 
-        if root.tag == "error":
+        if _xml_tag(root) == "error":
             desc = root.attrib.get("description", "Unknown indexer API error.")
             raise RuntimeError(f"{self.name} error {root.attrib.get('code', '')}: {desc}")
 
@@ -1306,16 +1349,16 @@ class NewznabClient:
 
     @staticmethod
     def fetch_nzb_bytes(nzb_url: str) -> bytes:
-        req = urllib.request.Request(
-            nzb_url,
-            headers={"User-Agent": "Mozilla/5.0 NZBCommandCenter/1.0"},
-        )
         try:
-            with urllib.request.urlopen(req, timeout=20.0) as resp:
-                raw = resp.read()
+            raw = _http_get_limited(nzb_url, timeout=30.0, max_bytes=MAX_NZB_BYTES)
         except Exception as exc:
             raise RuntimeError(_format_http_error(exc)) from exc
-        _validate_nzb_payload(raw)
+        if not raw:
+            raise RuntimeError("Indexer returned an empty NZB file.")
+        if raw.startswith(b"\x1f\x8b"):
+            raw = _gunzip_limited(raw)
+        _validate_nzb_payload(raw)   # turns indexer <error>/HTML pages into a readable message
+        _require_complete_nzb(raw)   # never save a JSON error or half a file as ".nzb"
         return raw
 
     @staticmethod
@@ -1984,24 +2027,14 @@ class SettingsDialog(ctk.CTkToplevel):
             )
             return
 
+        # Only the fields this dialog edits. Everything else (media folders, Kodi, Media Server,
+        # toggles) is owned by other tabs and is merged from the live config by the app, so a
+        # save here can never revert changes made elsewhere while the dialog was open.
         updated = {
             "sab_url": sab_url,
             "sab_api_key": self.sab_key.get().strip(),
             "indexers": [dict(ix) for ix in self._indexers],
             "nzb_folder": self.folder.get().strip(),
-            "auto_refresh": self._config.get("auto_refresh", True),
-            "auto_archive_sent": self._config.get("auto_archive_sent", False),
-            "media_folders": list(self._config.get("media_folders", [])),
-            "ffprobe_path": self._config.get("ffprobe_path", ""),
-            "kodi_url": self._config.get("kodi_url", ""),
-            "kodi_username": self._config.get("kodi_username", ""),
-            "kodi_password": self._config.get("kodi_password", ""),
-            "kodi_auto_scan": self._config.get("kodi_auto_scan", True),
-            "kodi_notify_on_complete": self._config.get("kodi_notify_on_complete", True),
-            "media_server_type": self._config.get("media_server_type", "Jellyfin"),
-            "media_server_url": self._config.get("media_server_url", ""),
-            "media_server_token": self._config.get("media_server_token", ""),
-            "media_server_auto_scan": self._config.get("media_server_auto_scan", True),
         }
         try:
             self._on_save(updated)
@@ -2032,6 +2065,9 @@ class NzbManagerApp(ctk.CTk):
         self._auto_refresh_after_id = None
         self._settings_dialog: SettingsDialog | None = None
         self._config_warnings: list[str] = []
+        # Encrypted values that could not be decrypted at load time, keyed by field id.
+        # They are written back unchanged so an unrelated save never erases them.
+        self._undecryptable: dict[str, str] = {}
 
         self._sab_refresh_in_flight = False
         self._search_in_flight = False
@@ -2114,6 +2150,7 @@ class NzbManagerApp(ctk.CTk):
                 cfg["sab_url"] = loaded.get("sab_url", cfg["sab_url"])
                 sab_key, sab_fail = _unprotect_secret_checked(loaded.get("sab_api_key", ""))
                 if sab_fail:
+                    self._undecryptable["sab_api_key"] = str(loaded.get("sab_api_key", ""))
                     self._config_warnings.append("SABnzbd DPAPI key could not be decrypted; please re-enter it in Settings.")
                 cfg["sab_api_key"] = sab_key
                 cfg["nzb_folder"] = loaded.get("nzb_folder", cfg["nzb_folder"])
@@ -2126,6 +2163,7 @@ class NzbManagerApp(ctk.CTk):
                 cfg["kodi_username"] = str(loaded.get("kodi_username") or "")
                 kodi_pw, kodi_fail = _unprotect_secret_checked(str(loaded.get("kodi_password") or ""))
                 if kodi_fail:
+                    self._undecryptable["kodi_password"] = str(loaded.get("kodi_password") or "")
                     self._config_warnings.append("Kodi DPAPI password could not be decrypted; please re-enter it in the Kodi tab.")
                 cfg["kodi_password"] = kodi_pw
                 cfg["kodi_auto_scan"] = bool(loaded.get("kodi_auto_scan", True))
@@ -2135,11 +2173,13 @@ class NzbManagerApp(ctk.CTk):
                 cfg["media_server_url"] = str(loaded.get("media_server_url") or "")
                 ms_token, ms_fail = _unprotect_secret_checked(str(loaded.get("media_server_token") or ""))
                 if ms_fail:
+                    self._undecryptable["media_server_token"] = str(loaded.get("media_server_token") or "")
                     self._config_warnings.append(
                         "Media Server DPAPI token could not be decrypted; please re-enter it in the Media Server tab."
                     )
                 cfg["media_server_token"] = ms_token
                 cfg["media_server_auto_scan"] = bool(loaded.get("media_server_auto_scan", True))
+                cfg["media_server_path_map"] = str(loaded.get("media_server_path_map") or "")
 
                 if isinstance(loaded.get("indexers"), list):
                     migrated = []
@@ -2156,6 +2196,7 @@ class NzbManagerApp(ctk.CTk):
 
                             ix_key, ix_fail = _unprotect_secret_checked(str(ix.get("api_key") or ""))
                             if ix_fail:
+                                self._undecryptable[self._indexer_secret_id(str(ix.get("url", "")))] = str(ix.get("api_key") or "")
                                 self._config_warnings.append(f"DPAPI key for indexer '{uniq_name}' could not be decrypted.")
                             migrated.append({
                                 "name": uniq_name,
@@ -2169,6 +2210,7 @@ class NzbManagerApp(ctk.CTk):
                     host = urllib.parse.urlparse(url).hostname or "Primary Indexer"
                     ix_key, ix_fail = _unprotect_secret_checked(loaded.get("indexer_api_key", ""))
                     if ix_fail:
+                        self._undecryptable[self._indexer_secret_id(str(url))] = str(loaded.get("indexer_api_key", ""))
                         self._config_warnings.append(f"DPAPI key for indexer '{host}' could not be decrypted.")
                     cfg["indexers"] = [{
                         "name": host,
@@ -2188,15 +2230,34 @@ class NzbManagerApp(ctk.CTk):
                 clients.append(NewznabClient(ix["url"], ix.get("api_key", ""), name=ix.get("name", "Indexer")))
         return clients
 
+    @staticmethod
+    def _indexer_secret_id(url: str) -> str:
+        return "indexer:" + (url or "").strip().rstrip("/").lower()
+
+    def _protect_or_keep(self, field_id: str, value: str) -> str:
+        """Encrypts a secret, or keeps the original undecryptable blob while the field is blank.
+
+        A key that failed to decrypt (other Windows user / restored profile) shows as blank in
+        the UI. Writing "" back would destroy it, so the original blob is preserved until the
+        user enters a new value.
+        """
+        value = value or ""
+        if value:
+            self._undecryptable.pop(field_id, None)
+            return _protect_secret(value)
+        return self._undecryptable.get(field_id, "")
+
     def _write_config_file(self, cfg: dict) -> None:
         to_disk = {
             "sab_url": cfg.get("sab_url", ""),
-            "sab_api_key": _protect_secret(cfg.get("sab_api_key", "")),
+            "sab_api_key": self._protect_or_keep("sab_api_key", cfg.get("sab_api_key", "")),
             "indexers": [
                 {
                     "name": ix.get("name", "Indexer"),
                     "url": ix.get("url", ""),
-                    "api_key": _protect_secret(ix.get("api_key", "")),
+                    "api_key": self._protect_or_keep(
+                        self._indexer_secret_id(ix.get("url", "")), ix.get("api_key", "")
+                    ),
                     "enabled": bool(ix.get("enabled", True)),
                 }
                 for ix in cfg.get("indexers", [])
@@ -2208,27 +2269,47 @@ class NzbManagerApp(ctk.CTk):
             "ffprobe_path": cfg.get("ffprobe_path", ""),
             "kodi_url": cfg.get("kodi_url", ""),
             "kodi_username": cfg.get("kodi_username", ""),
-            "kodi_password": _protect_secret(cfg.get("kodi_password", "")),
+            "kodi_password": self._protect_or_keep("kodi_password", cfg.get("kodi_password", "")),
             "kodi_auto_scan": bool(cfg.get("kodi_auto_scan", True)),
             "kodi_notify_on_complete": bool(cfg.get("kodi_notify_on_complete", True)),
             "media_server_type": cfg.get("media_server_type", "Jellyfin"),
             "media_server_url": cfg.get("media_server_url", ""),
-            "media_server_token": _protect_secret(cfg.get("media_server_token", "")),
+            "media_server_token": self._protect_or_keep("media_server_token", cfg.get("media_server_token", "")),
             "media_server_auto_scan": bool(cfg.get("media_server_auto_scan", True)),
+            "media_server_path_map": str(cfg.get("media_server_path_map", "")),
         }
         _atomic_write_json(CONFIG_FILE, to_disk)
+        # Warn (once per new failure) when Windows couldn't encrypt a secret, instead of
+        # silently leaving API keys / passwords in plain text in the config file.
+        if _DPAPI_FAILURES > getattr(self, "_dpapi_failures_reported", 0):
+            self._dpapi_failures_reported = _DPAPI_FAILURES
+            try:
+                self._log_activity(
+                    "Windows could not encrypt a saved key/password; it was written to "
+                    f"{CONFIG_FILE.name} in plain text.",
+                    "WARN",
+                )
+            except Exception:
+                pass
 
     def _on_media_config_changed(self, folders: list[str], ffprobe_path: str) -> None:
         folders_changed = list(folders) != list(self.config_data.get("media_folders", []))
         self.config_data["media_folders"] = list(folders)
         self.config_data["ffprobe_path"] = ffprobe_path
-        self._write_config_file(self.config_data)
+        self._safe_write_config("Media Inspector")
         if folders_changed:
             self._refresh_library_index_from_cache()
 
     def _on_kodi_config_changed(self, kodi_cfg: dict) -> None:
         self.config_data.update(kodi_cfg)
-        self._write_config_file(self.config_data)
+        self._safe_write_config("Kodi")
+
+    def _safe_write_config(self, source: str) -> None:
+        """Writes the config, reporting (instead of raising) a failure such as a locked or read-only file."""
+        try:
+            self._write_config_file(self.config_data)
+        except Exception as exc:
+            self._set_status(f"Could not save {source} settings: {exc}", log=True, level="ERROR")
 
     def _on_kodi_state_changed(self, text: str, color_key: str) -> None:
         if hasattr(self, "kodi_status_pill"):
@@ -2354,12 +2435,12 @@ class NzbManagerApp(ctk.CTk):
             pass
         self.card_nzbs_val.configure(text=str(self.daily_stats["count"]))
 
-    def _save_config(self, new_cfg: dict) -> None:
+    def _save_config(self, settings_fields: dict) -> None:
+        # Merge the Settings dialog's fields into the LIVE config rather than replacing it.
+        new_cfg = dict(self.config_data)
+        new_cfg.update(settings_fields)
         new_cfg["auto_refresh"] = self.auto_refresh_var.get()
         new_cfg["auto_archive_sent"] = self.auto_archive_var.get()
-        for key in MEDIA_SERVER_CONFIG_KEYS:  # owned by the Media Server tab, not the Settings dialog
-            if key in self.config_data:
-                new_cfg[key] = self.config_data[key]
         self.config_data = new_cfg
         self._write_config_file(new_cfg)
         self.sab = SabnzbdClient(new_cfg["sab_url"], new_cfg["sab_api_key"])
@@ -2412,8 +2493,13 @@ class NzbManagerApp(ctk.CTk):
                 fn = self._ui_queue.get_nowait()
                 try:
                     fn()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Previously swallowed silently, which hid real bugs. Surface them in the
+                    # Activity log (guarded so a broken logger can't break the drain loop).
+                    try:
+                        self._log_activity(f"Internal UI error: {exc!r}", "ERROR")
+                    except Exception:
+                        pass
         except queue.Empty:
             pass
         self._ui_drain_after_id = self.after(40, self._drain_ui_queue)
@@ -3679,12 +3765,17 @@ class NzbManagerApp(ctk.CTk):
     def _apply_filters_and_render(self, reset_page: bool = False) -> None:
         items = list(self.current_search_results)
 
+        # Library matching re-parses every title, so only redo it when the library index changed
+        # (a new scan / cache load), not on every filter keystroke or page change.
+        lib_index = self.library_index
         for it in items:
-            it["_lib_match"] = match_release_to_library(
-                it["title"],
-                self.library_index,
-                category=it.get("cat_hint") or it.get("category", ""),
-            )
+            if it.get("_lib_index") is not lib_index:
+                it["_lib_match"] = match_release_to_library(
+                    it["title"],
+                    lib_index,
+                    category=it.get("cat_hint") or it.get("category", ""),
+                )
+                it["_lib_index"] = lib_index
 
         text_q = self.local_filter_entry.get().strip().lower()
         if text_q:
@@ -4121,14 +4212,23 @@ class NzbManagerApp(ctk.CTk):
             self._update_local_batch_btn()
             return
 
-        self.local_nzbs = sorted(folder.glob("*.nzb"), key=lambda p: p.stat().st_mtime, reverse=True)
+        # stat() each file once; a file moved/archived between glob() and stat() is skipped
+        # instead of crashing the whole folder scan.
+        entries: list[tuple[Path, os.stat_result]] = []
+        for p in folder.glob("*.nzb"):
+            try:
+                entries.append((p, p.stat()))
+            except OSError:
+                continue
+        entries.sort(key=lambda e: e[1].st_mtime, reverse=True)
+        self.local_nzbs = [p for p, _st in entries]
         if not self.local_nzbs:
             ctk.CTkLabel(self.local_list_frame, text="No .nzb files found in this folder.", text_color=COLORS["text_muted"]).pack(pady=20)
             self._update_local_batch_btn()
             return
 
-        for p in self.local_nzbs:
-            size_str = format_bytes(p.stat().st_size)
+        for p, st in entries:
+            size_str = format_bytes(st.st_size)
             is_selected = self.selected_nzb_path == p
             row = ctk.CTkFrame(
                 self.local_list_frame,
@@ -4253,14 +4353,27 @@ class NzbManagerApp(ctk.CTk):
 
         def task():
             self.sab.add_file(path, category=cat)
+            # The upload already succeeded here. An archive failure must not make it look like
+            # the upload failed, or the user re-sends it and SABnzbd gets a duplicate.
             if archive:
-                self._archive_sent_nzb(path)
+                try:
+                    self._archive_sent_nzb(path)
+                except Exception as exc:
+                    return _format_http_error(exc)
+            return None
 
-        def ok(_r):
+        def ok(archive_err):
             self._increment_daily_nzb_count()
-            note = " and archived to sent/" if archive else ""
-            self._set_status(f"Uploaded {path.name} to SABnzbd [cat={cat}]{note}.", log=True, level="OK")
-            if archive:
+            if archive and archive_err:
+                self._set_status(
+                    f"Uploaded {path.name} to SABnzbd [cat={cat}], but archiving to sent/ failed: {archive_err}",
+                    log=True,
+                    level="WARN",
+                )
+            else:
+                note = " and archived to sent/" if archive else ""
+                self._set_status(f"Uploaded {path.name} to SABnzbd [cat={cat}]{note}.", log=True, level="OK")
+            if archive and not archive_err:
                 self._clear_inspector()
                 self._scan_local_folder()
             self._refresh_sab_all()
@@ -4284,23 +4397,30 @@ class NzbManagerApp(ctk.CTk):
             ok_count = 0
             errors: list[str] = []
             used_cats: set[str] = set()
+            archive_warnings: list[str] = []
             for p, cat in resolved_pairs:
                 try:
                     self.sab.add_file(p, category=cat)
-                    if archive:
-                        self._archive_sent_nzb(p)
-                    ok_count += 1
-                    used_cats.add(cat)
                 except Exception as exc:
                     errors.append(f"{p.name}: {_format_http_error(exc)}")
-            return ok_count, errors, sorted(used_cats)
+                    continue
+                ok_count += 1
+                used_cats.add(cat)
+                if archive:  # uploaded already; an archive problem is only a warning
+                    try:
+                        self._archive_sent_nzb(p)
+                    except Exception as exc:
+                        archive_warnings.append(f"{p.name}: queued, but archiving failed: {_format_http_error(exc)}")
+            return ok_count, errors, sorted(used_cats), archive_warnings
 
         def ok(res):
-            ok_count, errors, used_cats = res
+            ok_count, errors, used_cats, archive_warnings = res
             if ok_count:
                 self._increment_daily_nzb_count(ok_count)
             for err_msg in errors:
                 self._log_activity(err_msg, "ERROR")
+            for warn_msg in archive_warnings:
+                self._log_activity(warn_msg, "WARN")
             if archive and self.selected_nzb_path and not self.selected_nzb_path.exists():
                 self._clear_inspector()
             self._scan_local_folder()

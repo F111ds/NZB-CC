@@ -22,11 +22,13 @@ from __future__ import annotations
 import base64
 import json
 import queue
+import re
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import PurePath
@@ -196,25 +198,86 @@ class KodiClient:
     def play_movie(self, movieid: int, resume: bool = False) -> None:
         self.call("Player.Open", {"item": {"movieid": int(movieid)}, "options": {"resume": bool(resume)}})
 
-    def library_filenames(self) -> set[str]:
-        """Lower-cased file names (no folder) of every movie and episode Kodi knows about."""
-        names: set[str] = set()
+    def library_files(self) -> list[str]:
+        """Full file paths of every movie and episode Kodi knows about (stack:// parts expanded)."""
+        paths: list[str] = []
         movies = (self.call("VideoLibrary.GetMovies", {"properties": ["file"]}) or {}).get("movies", [])
         eps = (self.call("VideoLibrary.GetEpisodes", {"properties": ["file"]}) or {}).get("episodes", [])
         for it in list(movies) + list(eps):
             f = it.get("file") or ""
             if f.startswith("stack://"):
-                for part in f[len("stack://"):].split(" , "):
-                    names.add(_basename(part))
+                paths.extend(p.strip() for p in f[len("stack://"):].split(" , ") if p.strip())
             elif f:
-                names.add(_basename(f))
-        return names
+                paths.append(f)
+        return paths
 
 
 def _basename(path: str) -> str:
     # Kodi paths can be smb://, nfs://, C:\..., /mnt/... — take the last segment either way.
     p = path.replace("\\", "/").rstrip("/")
     return urllib.parse.unquote(p.rsplit("/", 1)[-1]).lower()
+
+
+_MAX_SUFFIX = 6  # deepest "same ending" compared when the two sides use different root folders
+
+
+def _path_keys(path: str) -> tuple[str, list[str], str]:
+    """(full path without scheme, path endings of 2.._MAX_SUFFIX segments, file name), lower-case.
+
+    smb://nas/share/Movies/x.mkv and \\\\nas\\share\\Movies\\x.mkv give the same full key.
+    """
+    p = urllib.parse.unquote((path or "").strip()).replace("\\", "/").rstrip("/")
+    low = p.lower()
+    for scheme in ("smb://", "nfs://", "//"):
+        if low.startswith(scheme):
+            low = low[len(scheme):]
+            break
+    parts = [x for x in low.split("/") if x]
+    fname = parts[-1] if parts else ""
+    suffixes = ["/".join(parts[-k:]) for k in range(2, min(len(parts), _MAX_SUFFIX) + 1)]
+    return "/".join(parts), suffixes, fname
+
+
+_GENERIC_STEM_RE = re.compile(r"(s\d{1,2}e\d{1,3}|e?\d{1,3}|episode[\s._-]?\d+|movie|video|film|index)", re.I)
+
+
+def _is_distinctive_name(fname: str) -> bool:
+    stem = fname.rsplit(".", 1)[0] if "." in fname else fname
+    return len(stem) >= 8 and not _GENERIC_STEM_RE.fullmatch(stem)
+
+
+def find_missing_in_kodi(disk_items: list[dict], kodi_paths: list[str]) -> list[dict]:
+    """Disk items Kodi doesn't have.
+
+    A file counts as present when, strongest first:
+      1. its full path matches (ignoring smb:// / UNC prefixes and case);
+      2. its path ending (last 2..6 segments, e.g. "show a/season 01/s01e01.mkv") matches and
+         that ending is unique on BOTH sides — this handles Kodi and the PC seeing the same
+         share under different roots;
+      3. its file name matches, is unique on both sides and isn't generic, so
+         "S01E01.mkv" from one show can never hide another show's missing episode.
+    """
+    disk = [d for d in disk_items if d.get("path")]
+    disk_keys = [_path_keys(str(d["path"])) for d in disk]
+    kodi_keys = [_path_keys(p) for p in kodi_paths]
+
+    kodi_full = {k[0] for k in kodi_keys}
+    kodi_suffix = Counter(s for k in kodi_keys for s in k[1])
+    disk_suffix = Counter(s for k in disk_keys for s in k[1])
+    kodi_names = Counter(k[2] for k in kodi_keys if k[2])
+    disk_names = Counter(k[2] for k in disk_keys if k[2])
+
+    def present(key: tuple[str, list[str], str]) -> bool:
+        full, suffixes, fname = key
+        if full and full in kodi_full:
+            return True
+        if any(disk_suffix[s] == 1 and kodi_suffix[s] == 1 for s in suffixes):
+            return True
+        if fname and _is_distinctive_name(fname) and disk_names[fname] == 1 and kodi_names[fname] == 1:
+            return True
+        return False
+
+    return [d for d, key in zip(disk, disk_keys) if not present(key)]
 
 
 # ==============================================================================
@@ -310,17 +373,28 @@ class KodiPanel(ctk.CTkFrame):
             return
         try:
             while True:
-                cb, res, exc = self._results.get_nowait()
-                if exc is not None:
-                    if cb:
-                        cb(exc)
-                    else:
-                        self._status(str(exc), "ERROR")
-                elif cb:
-                    cb(res)
-        except queue.Empty:
-            pass
-        self._pump_job = self.after(150, self._pump)
+                try:
+                    cb, res, exc = self._results.get_nowait()
+                except queue.Empty:
+                    break
+                # Each callback is isolated: one failure must not kill the loop, or the tab
+                # would silently stop updating until the app is restarted.
+                try:
+                    if exc is not None:
+                        if cb:
+                            cb(exc)
+                        else:
+                            self._status(str(exc), "ERROR")
+                    elif cb:
+                        cb(res)
+                except Exception as cb_exc:  # noqa: BLE001
+                    try:
+                        self._log(f"Internal error while updating the Kodi tab: {cb_exc!r}", "ERROR")
+                    except Exception:  # noqa: BLE001
+                        pass
+        finally:
+            if not self._closing:
+                self._pump_job = self.after(150, self._pump)
 
     # ------------------------------------------------------------------ UI
     def _card(self, parent, title: str) -> ctk.CTkFrame:
@@ -736,25 +810,26 @@ class KodiPanel(ctk.CTkFrame):
         if not self._client.configured:
             self._status("Set Kodi's address first", "WARN")
             return
-        disk = []
-        if self._get_disk_items:
-            try:
-                disk = self._get_disk_items() or []
-            except Exception as exc:  # noqa: BLE001
-                self._status(f"Could not read the media file list: {exc}", "ERROR")
-                return
-        if not disk:
-            self.miss_lbl.configure(text="No files yet — run a Media Inspector scan first")
-            self._set_text(self.miss_box, [], "")
-            return
         self.miss_lbl.configure(text="Comparing…")
         client = self._client
+        get_disk = self._get_disk_items
 
-        def done(kodi_names: set[str]):
-            missing = sorted(
-                (d for d in disk if _basename(str(d.get("path", ""))) not in kodi_names),
-                key=lambda d: str(d.get("title", "")).lower(),
-            )
+        def work():
+            # Runs on a worker thread: reading the file list can mean parsing the probe cache and
+            # checking every file on a network share, which used to freeze the window.
+            disk = (get_disk() or []) if get_disk else []
+            if not disk:
+                return None
+            missing = find_missing_in_kodi(disk, client.library_files())
+            return disk, missing
+
+        def done(result):
+            if result is None:
+                self.miss_lbl.configure(text="No files yet — run a Media Inspector scan first")
+                self._set_text(self.miss_box, [], "")
+                return
+            disk, missing = result
+            missing = sorted(missing, key=lambda d: str(d.get("title", "")).lower())
             lines = [
                 f"{'⚠ ' if d.get('is_corrupt') else ''}{d.get('title') or PurePath(str(d.get('path', ''))).name}"
                 f"   —   {d.get('path', '')}"
@@ -767,7 +842,7 @@ class KodiPanel(ctk.CTkFrame):
             self.miss_lbl.configure(text="Compare failed")
             self._status(f"Compare failed: {e}", "ERROR")
 
-        self._run(client.library_filenames, done, fail)
+        self._run(work, done, fail)
 
     # ------------------------------------------------------------------ host API
     def notify_download_completed(self, name: str) -> None:

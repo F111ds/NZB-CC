@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -15,6 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from collections import Counter
 from pathlib import Path
 
 import customtkinter as ctk
@@ -31,13 +33,56 @@ SERVER_PAGE_SIZE = 50
 _SYS = platform.system()
 
 
-def _norm_media_path(raw_path: str) -> tuple[str, str, str]:
+_MAX_SUFFIX = 6  # deepest "same ending" compared when server and disk use different roots
+
+
+def _norm_media_path(raw_path: str) -> tuple[str, list[str], str]:
+    """(full path, path endings of 2.._MAX_SUFFIX segments, file name), all lower-case."""
     clean = urllib.parse.unquote((raw_path or "").strip())
     clean_slash = clean.replace("\\", "/").rstrip("/")
-    parts = [p for p in clean_slash.split("/") if p]
-    fname = parts[-1].lower() if parts else ""
-    tail2 = "/".join(parts[-2:]).lower() if len(parts) >= 2 else fname
-    return clean_slash.lower(), tail2, fname
+    parts = [p for p in clean_slash.lower().split("/") if p]
+    fname = parts[-1] if parts else ""
+    suffixes = ["/".join(parts[-k:]) for k in range(2, min(len(parts), _MAX_SUFFIX) + 1)]
+    return clean_slash.lower(), suffixes, fname
+
+
+def parse_path_map(raw: str) -> list[tuple[str, str]]:
+    """Parses 'server_prefix=local_prefix' pairs separated by ';' or newlines.
+
+    Example: "/data/movies=D:\\Movies; /data/tv=\\\\nas\\tv"
+    Returns (server_prefix_lower, local_prefix) with forward slashes and no trailing slash,
+    longest server prefix first so the most specific mapping wins.
+    """
+    pairs: list[tuple[str, str]] = []
+    for chunk in re.split(r"[;\n]+", raw or ""):
+        if "=" not in chunk:
+            continue
+        srv, local = chunk.split("=", 1)
+        srv = srv.strip().replace("\\", "/").rstrip("/").lower()
+        local = local.strip().replace("\\", "/").rstrip("/")
+        if srv and local:
+            pairs.append((srv, local))
+    pairs.sort(key=lambda p: len(p[0]), reverse=True)
+    return pairs
+
+
+def apply_path_map(raw_path: str, path_map: list[tuple[str, str]]) -> str:
+    """Rewrites a path as the media server reports it into the equivalent local path."""
+    norm = urllib.parse.unquote((raw_path or "").strip()).replace("\\", "/")
+    low = norm.lower()
+    for srv_prefix, local_prefix in path_map:
+        if low == srv_prefix or low.startswith(srv_prefix + "/"):
+            return local_prefix + norm[len(srv_prefix):]
+    return raw_path or ""
+
+
+# File names too generic to identify a file on their own (e.g. "S01E01.mkv", "movie.mkv").
+_GENERIC_STEM_RE = re.compile(r"(s\d{1,2}e\d{1,3}|e?\d{1,3}|episode[\s._-]?\d+|movie|video|film|index)", re.I)
+
+
+def _is_distinctive_name(fname: str) -> bool:
+    stem = fname.rsplit(".", 1)[0] if "." in fname else fname
+    return len(stem) >= 8 and not _GENERIC_STEM_RE.fullmatch(stem)
 
 
 def _fmt_ms(ms: float | int) -> str:
@@ -172,26 +217,40 @@ class JellyfinClient:
     def refresh_libraries(self) -> None:
         self._request("/Library/Refresh", method="POST", timeout=10.0)
 
-    def _fetch_items(self, item_type: str, limit: int = 4000) -> list[dict]:
+    def _fetch_items(self, item_type: str, page_size: int = 1000, max_items: int = 250_000) -> list[dict]:
+        # Pages through the whole library; a single capped request silently dropped items
+        # past the limit, which then showed up as false "missing from server" audit entries.
         uid = self._get_user_id()
         endpoint = f"/Users/{uid}/Items" if uid else "/Items"
-        res = self._request(
-            endpoint,
-            params={
-                "Recursive": "true",
-                "IncludeItemTypes": item_type,
-                "Fields": "Path,ProductionYear",
-                "SortBy": "SortName",
-                "SortOrder": "Ascending",
-                "Limit": limit,
-            },
-            timeout=20.0,
-        )
-        return res.get("Items") or []
+        items: list[dict] = []
+        start = 0
+        while start < max_items:
+            res = self._request(
+                endpoint,
+                params={
+                    "Recursive": "true",
+                    "IncludeItemTypes": item_type,
+                    # RecursiveItemCount is only returned when requested explicitly.
+                    "Fields": "Path,ProductionYear,RecursiveItemCount",
+                    "SortBy": "SortName",
+                    "SortOrder": "Ascending",
+                    "StartIndex": start,
+                    "Limit": page_size,
+                    "EnableTotalRecordCount": "true",
+                },
+                timeout=30.0,
+            )
+            page = res.get("Items") or []
+            items.extend(page)
+            start += len(page)
+            total = res.get("TotalRecordCount")
+            if len(page) < page_size or (isinstance(total, int) and start >= total):
+                break
+        return items
 
     def get_movies(self) -> list[dict]:
         out: list[dict] = []
-        for it in self._fetch_items("Movie", limit=4000):
+        for it in self._fetch_items("Movie"):
             ud = it.get("UserData") or {}
             out.append({
                 "title": it.get("Name") or "Unknown",
@@ -203,9 +262,11 @@ class JellyfinClient:
 
     def get_tv_shows(self) -> list[dict]:
         out: list[dict] = []
-        for it in self._fetch_items("Series", limit=2000):
+        for it in self._fetch_items("Series"):
             ud = it.get("UserData") or {}
-            total_eps = int(it.get("RecursiveItemCount") or it.get("ChildCount") or 0)
+            # RecursiveItemCount = episodes. (ChildCount is the number of seasons, so it is not a
+            # valid fallback for an episode total.)
+            total_eps = int(it.get("RecursiveItemCount") or 0)
             unplayed = int(ud.get("UnplayedItemCount") or 0)
             watched_eps = max(0, total_eps - unplayed) if total_eps > 0 else 0
             out.append({
@@ -219,7 +280,7 @@ class JellyfinClient:
 
     def get_episodes(self) -> list[dict]:
         out: list[dict] = []
-        for it in self._fetch_items("Episode", limit=8000):
+        for it in self._fetch_items("Episode", page_size=2000):
             out.append({
                 "title": it.get("Name") or "Episode",
                 "showtitle": it.get("SeriesName") or "Series",
@@ -429,6 +490,7 @@ class MediaServerPanel(ctk.CTkFrame):
         self.server_url = str(cfg.get("media_server_url") or "").strip()
         self.server_token = str(cfg.get("media_server_token") or "").strip()
         self.auto_scan = bool(cfg.get("media_server_auto_scan", True))
+        self.path_map_raw = str(cfg.get("media_server_path_map") or "").strip()
         self.client = self._build_client()
 
         self._shutting_down = False
@@ -679,7 +741,21 @@ class MediaServerPanel(ctk.CTkFrame):
             fg_color=C["bg_card"],
             hover_color=C["bg_card_alt"],
             command=self._trigger_server_scan,
-        ).pack(fill="x", padx=12, pady=(0, 10))
+        ).pack(fill="x", padx=12, pady=(0, 6))
+
+        self.path_map_entry = ctk.CTkEntry(
+            actions_card,
+            height=26,
+            fg_color=C["bg_card"],
+            border_color=C["border"],
+            placeholder_text="Path map: /data/media=D:\\Media",
+            font=ctk.CTkFont(family=self.mono_font, size=10),
+        )
+        if self.path_map_raw:
+            self.path_map_entry.insert(0, self.path_map_raw)
+        self.path_map_entry.pack(fill="x", padx=12, pady=(0, 10))
+        self.path_map_entry.bind("<Return>", self._on_path_map_changed)
+        self.path_map_entry.bind("<FocusOut>", self._on_path_map_changed)
 
         # Row 2: View Switcher, Search & Pagination
         vbar = ctk.CTkFrame(self, fg_color=C["bg_panel"], border_width=1, border_color=C["border"], corner_radius=10)
@@ -775,6 +851,7 @@ class MediaServerPanel(ctk.CTkFrame):
         self.server_url = self.url_entry.get().strip()
         self.server_token = self.token_entry.get().strip()
         self.auto_scan = self.auto_scan_var.get()
+        self.path_map_raw = self.path_map_entry.get().strip()
         self.client = self._build_client()
         if self.on_config_change:
             self.on_config_change({
@@ -782,7 +859,19 @@ class MediaServerPanel(ctk.CTkFrame):
                 "media_server_url": self.server_url,
                 "media_server_token": self.server_token,
                 "media_server_auto_scan": self.auto_scan,
+                "media_server_path_map": self.path_map_raw,
             })
+
+    def _on_path_map_changed(self, _event=None) -> None:
+        new_raw = self.path_map_entry.get().strip()
+        if new_raw == self.path_map_raw:
+            return
+        self._persist_config()
+        if self._movies or self._episodes:
+            # Re-run the audit against the new mapping without re-fetching the library.
+            self._compute_audit(self.get_disk_items() if self.get_disk_items else [])
+            self._apply_view_filter(reset_page=True)
+        self._emit_status(f"Media server path map saved ({len(parse_path_map(new_raw))} mapping(s)).", log=True)
 
     def _save_and_connect(self) -> None:
         C = self.colors
@@ -985,52 +1074,60 @@ class MediaServerPanel(ctk.CTkFrame):
         self._run_bg(fetch, on_ok=ok)
 
     def _compute_audit(self, disk_items: list[dict]) -> None:
-        srv_entries: list[dict] = []
-        srv_full: set[str] = set()
-        srv_tail2: set[str] = set()
-        srv_names: set[str] = set()
+        """Compares server items with files on disk.
 
+        Matching, strongest first:
+          1. full path, after rewriting server paths through the user's path map;
+          2. path ending (last 2..6 segments, e.g. "show a/season 01/s01e01.mkv"), only if that
+             ending is unique on BOTH sides (handles different roots without a path map);
+          3. file name alone, only if it is unique on both sides and not generic
+             (so "S01E01.mkv" from two different shows can never match each other).
+        """
+        path_map = parse_path_map(self.path_map_raw)
+
+        srv_entries: list[dict] = []
         for m in self._movies:
             f = m.get("file") or ""
             if f:
-                full, tail2, fname = _norm_media_path(f)
-                srv_full.add(full)
-                srv_tail2.add(tail2)
-                srv_names.add(fname)
                 srv_entries.append({
                     "title": f"{m.get('title', 'Movie')} ({m.get('year', '')})".replace(" ()", ""),
                     "file": f,
                     "kind": "Movie",
                 })
-
         for ep in self._episodes:
             f = ep.get("file") or ""
             if f:
-                full, tail2, fname = _norm_media_path(f)
-                srv_full.add(full)
-                srv_tail2.add(tail2)
-                srv_names.add(fname)
                 srv_entries.append({
                     "title": f"{ep.get('showtitle', 'TV')} — S{int(ep.get('season', 0)):02d}E{int(ep.get('episode', 0)):02d}",
                     "file": f,
                     "kind": "Episode",
                 })
 
-        disk_full: set[str] = set()
-        disk_tail2: set[str] = set()
-        disk_names: set[str] = set()
+        srv_keys = [_norm_media_path(apply_path_map(se["file"], path_map)) for se in srv_entries]
+        disk_valid = [d for d in disk_items if d.get("path")]
+        disk_keys = [_norm_media_path(d["path"]) for d in disk_valid]
+
+        srv_full = {k[0] for k in srv_keys}
+        disk_full = {k[0] for k in disk_keys}
+        srv_tail2 = Counter(s for k in srv_keys for s in k[1])
+        disk_tail2 = Counter(s for k in disk_keys for s in k[1])
+        srv_names = Counter(k[2] for k in srv_keys if k[2])
+        disk_names = Counter(k[2] for k in disk_keys if k[2])
+
+        def is_match(key, other_full, own_tail2, other_tail2, own_names, other_names) -> bool:
+            full, suffixes, fname = key
+            if full and full in other_full:
+                return True
+            if any(own_tail2[s] == 1 and other_tail2[s] == 1 for s in suffixes):
+                return True
+            if fname and _is_distinctive_name(fname) and own_names[fname] == 1 and other_names[fname] == 1:
+                return True
+            return False
+
         missing: list[dict] = []
-
-        for d in disk_items:
-            fpath = d.get("path") or ""
-            if not fpath:
-                continue
-            full, tail2, fname = _norm_media_path(fpath)
-            disk_full.add(full)
-            disk_tail2.add(tail2)
-            disk_names.add(fname)
-
-            if not ((full in srv_full) or (tail2 in srv_tail2) or (fname in srv_names)):
+        for d, key in zip(disk_valid, disk_keys):
+            if not is_match(key, srv_full, disk_tail2, srv_tail2, disk_names, srv_names):
+                fpath = d["path"]
                 missing.append({
                     "title": d.get("title") or Path(fpath).name,
                     "file": fpath,
@@ -1039,13 +1136,15 @@ class MediaServerPanel(ctk.CTkFrame):
                 })
 
         orphaned: list[dict] = []
-        if disk_items:
-            for se in srv_entries:
-                full, tail2, fname = _norm_media_path(se["file"])
-                on_disk = (full in disk_full) or (tail2 in disk_tail2) or (fname in disk_names)
-                if not on_disk:
-                    if not (se["file"] and not se["file"].startswith(("smb://", "nfs://", "http://", "https://")) and Path(se["file"]).exists()):
-                        orphaned.append(se)
+        if disk_valid:
+            for se, key in zip(srv_entries, srv_keys):
+                if is_match(key, disk_full, srv_tail2, disk_tail2, srv_names, disk_names):
+                    continue
+                local = apply_path_map(se["file"], path_map)
+                is_remote = local.startswith(("smb://", "nfs://", "http://", "https://"))
+                if local and not is_remote and Path(local).exists():
+                    continue  # exists locally, just outside the scanned Media Inspector folders
+                orphaned.append(se)
 
         self._audit_missing = missing
         self._audit_orphaned = orphaned
