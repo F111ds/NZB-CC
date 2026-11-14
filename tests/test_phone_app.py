@@ -9,11 +9,14 @@ from pathlib import Path
 import mobile_server as m
 
 calls = []
+sab_calls = []
 
 class FakeSab(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
-        mode = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("mode", [""])[0]
+        qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        mode = qs.get("mode", [""])[0]
+        sab_calls.append(qs)
         now = int(time.time())
         if mode == "queue":
             d = {"queue": {"paused": False, "status": "Downloading", "kbpersec": "49356", "noofslots_total": 2, "diskspace2": "1843.2",
@@ -121,6 +124,21 @@ assert api("/api/kodi/control", {"action": "playpause", "playerid": 1})[0] == 20
 assert api("/api/kodi/scan", {})[0] == 200 and calls[-1][0] == "VideoLibrary.Scan"
 assert api("/api/kodi/play", {"movieid": "x"})[0] == 400
 assert api("/api/kodi/control", {"action": "shutdown", "playerid": 1})[0] == 400
+
+# move to top -> SABnzbd "switch" to position 0
+assert api("/api/queue/item", {"id": "SABnzbd_nzo_1", "action": "top"})[0] == 200
+assert sab_calls[-1]["mode"] == ["switch"] and sab_calls[-1]["value"] == ["SABnzbd_nzo_1"] and sab_calls[-1]["value2"] == ["0"]
+assert api("/api/queue/item", {"id": "SABnzbd_nzo_1", "action": "nuke"})[0] == 400
+
+# "already in Kodi" matching
+lib = {"ok": True, "movies": {"dune part two": {2024}, "martian": {2015}}, "episodes": {("severance", 2, 10), ("bear", 3, 1)}}
+for t, exp in [("Dune.Part.Two.2024.2160p.UHD.BluRay", "movie"), ("The.Martian.2015.1080p", "movie"), ("Dune.1984.1080p", ""),
+               ("Severance.S02E10.Cold.Harbor.1080p", "episode"), ("Severance.S02E09.1080p", ""),
+               ("The.Bear.2022.S03E01.1080p.WEB", "episode"), ("Random.Thing", "")]:
+    assert m.library_match(t, lib) == exp, t
+assert m.library_match("The.Martian.2015", {"ok": False}) == ""
+idx = m.kodi_library_index(max_age=0)
+assert idx["ok"] and "arrival" in idx["movies"], idx
 
 # Kodi off: home still works, Kodi tab says offline
 kodi.shutdown(); kodi.server_close()

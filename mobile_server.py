@@ -59,7 +59,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.3"
+VERSION = "3.4"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -689,7 +689,8 @@ def kodi_now_playing() -> dict | None:
         sub = str(item.get("year") or "") if to_int(item.get("year")) else ""
     art = item.get("art") or {}
     poster = _art_ref(art.get("poster") or art.get("tvshow.poster") or art.get("thumb") or item.get("thumbnail"))
-    return {"playerid": pid, "title": title, "sub": sub, "poster": poster,
+    fanart = _art_ref(art.get("fanart") or art.get("tvshow.fanart"))
+    return {"playerid": pid, "title": title, "sub": sub, "poster": poster, "fanart": fanart,
             "movieid": to_int(item.get("id")) if item.get("type") == "movie" else None,
             "time": _kodi_secs(props.get("time")),
             "total": _kodi_secs(props.get("totaltime")), "pct": to_float(props.get("percentage")),
@@ -752,6 +753,59 @@ def kodi_movie_details(movieid: int) -> dict:
         "cast": [{"name": str(c.get("name") or ""), "role": str(c.get("role") or "")} for c in (mv.get("cast") or [])[:8]],
     })
     return out
+
+
+def _norm_title(text: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower().replace("&", " and ")).strip()
+    return re.sub(r"^(the|a|an) ", "", text)
+
+
+_RELEASE_TV = re.compile(r"^(.*?)[ ._\-]+S(\d{1,2})[ ._\-]?E(\d{1,3})", re.I)
+_RELEASE_MOVIE = re.compile(r"^(.*?)[ ._(\[\-]+((?:19|20)\d{2})(?:[ ._)\]\-]|$)")
+_lib_lock = threading.Lock()
+_lib_state: dict = {"ts": 0.0, "movies": {}, "shows": set(), "episodes": set(), "ok": False}
+
+
+def kodi_library_index(max_age: float = 600) -> dict:
+    """Normalised titles of what Kodi already has, refreshed at most every 10 minutes (empty if Kodi is unreachable)."""
+    with _lib_lock:
+        if time.time() - _lib_state["ts"] < max_age:
+            return _lib_state
+        _lib_state["ts"] = time.time()  # don't hammer an offline Kodi on every search
+    if not kodi_configured():
+        return _lib_state
+    try:
+        movies = (kodi_call("VideoLibrary.GetMovies", {"properties": ["title", "year"]}, timeout=10) or {}).get("movies", [])
+        eps = (kodi_call("VideoLibrary.GetEpisodes", {"properties": ["showtitle", "season", "episode"]}, timeout=15) or {}).get("episodes", [])
+    except UpstreamError:
+        return _lib_state
+    mv_index: dict[str, set[int]] = {}
+    for m in movies:
+        mv_index.setdefault(_norm_title(m.get("title")), set()).add(to_int(m.get("year")))
+    ep_index = {(_norm_title(e.get("showtitle")), to_int(e.get("season")), to_int(e.get("episode"))) for e in eps}
+    with _lib_lock:
+        _lib_state.update(movies=mv_index, episodes=ep_index, shows={k[0] for k in ep_index}, ok=True)
+    return _lib_state
+
+
+def library_match(release_title: str, lib: dict) -> str:
+    """"episode" / "movie" when Kodi already has what this release is, else ""."""
+    if not lib.get("ok"):
+        return ""
+    tv = _RELEASE_TV.match(release_title)
+    if tv:
+        key = (_norm_title(tv.group(1)), int(tv.group(2)), int(tv.group(3)))
+        if key in lib["episodes"]:
+            return "episode"
+        # "Show.Name.2024.S01E02" style: try without a trailing year
+        alt = (re.sub(r" (19|20)\d{2}$", "", key[0]), key[1], key[2])
+        return "episode" if alt in lib["episodes"] else ""
+    mv = _RELEASE_MOVIE.match(release_title)
+    if mv:
+        years = lib["movies"].get(_norm_title(mv.group(1)))
+        if years and any(abs(y - int(mv.group(2))) <= 1 or not y for y in years):
+            return "movie"
+    return ""
 
 
 def _kodi_movie(mv: dict) -> dict:
@@ -1268,6 +1322,12 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;backgroun
 .round{width:48px;height:48px;border-radius:24px;border:0;background:var(--hover);color:var(--white);display:inline-flex;align-items:center;justify-content:center;flex:none}.round.main{background:var(--teal);color:var(--ink)}
 .kidle{display:flex;align-items:center;gap:12px;width:100%;border:0;text-align:left;color:var(--soft);font-size:14px}.kidle svg{color:var(--teal);flex:none}
 .icon-btn.play{color:var(--teal2)}
+.badge.lib{background:#0B2A22;color:var(--green)}
+.recent{display:flex;flex-wrap:wrap;gap:8px;margin:-2px 0 12px}.recent button{border:1px solid var(--line);background:transparent;color:var(--text);border-radius:18px;padding:0 13px;min-height:36px;font-size:13px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.recent button.clear{color:var(--muted);border-color:transparent}
+.np{position:relative;overflow:hidden}.np>*{position:relative;z-index:1}.np>.npbg{position:absolute;inset:0;z-index:0}.npbg img.art.loaded{opacity:.32}.npbg::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,var(--card) 25%,rgba(14,28,35,.55))}
+.skel{background:var(--card);border-radius:14px;padding:14px;margin-bottom:10px}.skel i{display:block;height:12px;border-radius:6px;margin:8px 0;background:linear-gradient(90deg,#13262F 0%,#1B3540 50%,#13262F 100%);background-size:200% 100%;animation:sk 1.2s linear infinite}
+@keyframes sk{from{background-position:200% 0}to{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){.skel i{animation:none}}
 .rl{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:5px;font-size:12px;color:var(--soft)}
 .rc{font:700 11px var(--mono);padding:2px 6px;border-radius:5px;background:var(--hover);color:var(--text)}.rc.imdb{background:#F5C518;color:#000}.rc.tmdb{background:#0B2A3A;color:#7DD3FC}
 .pthumb{width:46px;height:69px;border-radius:6px;border:0;padding:0;background:var(--hover);overflow:hidden;flex:none;cursor:pointer}
@@ -1304,6 +1364,7 @@ img.art{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transiti
 <div class="row"><select id="indexer" class="field" aria-label="Indexer"><option value="*">All indexers</option></select><select id="category" class="field" aria-label="Category"><option value="">All categories</option></select></div>
 <button class="btn full" id="searchbtn">Search</button>
 </div>
+<div id="recent" class="recent"></div>
 <div id="searchstatus" class="status"></div>
 <details class="opts" id="resulttools" style="display:none"><summary><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg>Sort, filter &amp; send options<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></summary><div class="body">
 <label class="label" for="sort">Sort</label><select id="sort" class="field"><option value="date_desc">Newest first</option><option value="size_desc">Largest first</option><option value="size_asc">Smallest first</option><option value="date_asc">Oldest first</option><option value="grabs_desc">Most grabs</option><option value="title_asc">Title A–Z</option><option value="title_desc">Title Z–A</option></select>
@@ -1357,6 +1418,7 @@ const $=id=>document.getElementById(id);
 let token=LS.get('nzb_mobile_token');
 let results=[],selected=new Set(),added=new Set(),activeTab='home',queueBusy=false,toastTimer=null;
 const ICON={pause:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>',play:'<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l12 7-12 7z"/></svg>',trash:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',retry:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>'};
+ICON.top='<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 4h14M12 20V9M7 13l5-5 5 5"/></svg>';
 ICON.x='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 const EMPTY_ICON='<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>';
 
@@ -1365,6 +1427,7 @@ const EMPTY_ICON='<svg width="34" height="34" viewBox="0 0 24 24" fill="none" st
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function clampPct(v){return Math.max(0,Math.min(100,Number(v)||0))}
 function toast(msg,isErr){const t=$('toast');t.textContent=msg;t.className='toast'+(isErr?' err':'');clearTimeout(toastTimer);toastTimer=setTimeout(()=>{t.className='toast hidden'},isErr?6000:3500)}
+function skeleton(n,lines){let h='';for(let i=0;i<n;i++)h+='<div class="skel">'+'<i style="width:'+(85-i*7)+'%"></i><i style="width:55%"></i>'+(lines>2?'<i style="width:35%"></i>':'')+'</div>';return h}
 function empty(title,hint){return '<div class="empty">'+EMPTY_ICON+'<b>'+esc(title)+'</b>'+esc(hint)+'</div>'}
 
 const API_TIMEOUTS={'/api/search':90000,'/api/add':120000,'/api/add-batch':300000};
@@ -1427,6 +1490,7 @@ function resultCard(x){
   const done=added.has(x.id);
   const details=[x.indexer,x.size,(x.grabs||0)+' grabs',relAge(x.pub_ts)||x.date].filter(Boolean).map(esc).join(' · ');
   let badges=qualityTags(x.title).map(t=>'<span class="badge">'+esc(t)+'</span>').join('');
+  if(x.in_library)badges='<span class="badge lib">'+(x.in_library==='episode'?'Episode already in Kodi':'Already in Kodi')+'</span>'+badges;
   if(x.also_found&&x.also_found.length)badges+='<span class="badge purple">Also on '+esc(x.also_found.join(', '))+'</span>';
   return '<article class="result" data-id="'+esc(x.id)+'"><label class="check" aria-label="Select"><input type="checkbox" data-act="sel"'+(selected.has(x.id)?' checked':'')+(done?' disabled':'')+'></label><h3>'+esc(x.title)+'</h3><div class="details">'+details+'</div>'+(badges?'<div class="badges">'+badges+'</div>':'')+'<button class="btn full'+(done?' added':'')+'" data-act="add"'+(done?' disabled':'')+'>'+(done?'Added ✓':'Add to SABnzbd')+'</button></article>';
 }
@@ -1437,8 +1501,26 @@ function renderResults(){
   $('results').innerHTML=a.map(resultCard).join('')||(results.length?empty('Nothing matches these filters','Clear the size or grabs limits to see all '+results.length+' result(s).'):'');
   updateBatchButton();
 }
+function recentList(){try{const a=JSON.parse(LS.get('nzb_mobile_recent','[]'));return Array.isArray(a)?a:[]}catch{return []}}
+function rememberSearch(){
+  const q=$('query').value.trim();if(!q)return;
+  const e={q,ix:$('indexer').value,cat:$('category').value};
+  const a=[e].concat(recentList().filter(x=>x.q.toLowerCase()!==q.toLowerCase())).slice(0,8);
+  LS.set('nzb_mobile_recent',JSON.stringify(a));renderRecent();
+}
+function renderRecent(){
+  const a=recentList();
+  $('recent').innerHTML=a.length?a.map((x,i)=>'<button data-recent="'+i+'" aria-label="Search again for '+esc(x.q)+'">'+esc(x.q)+'</button>').join('')+'<button class="clear" data-recent="clear">Clear</button>':'';
+}
+function useRecent(i){
+  if(i==='clear'){LS.set('nzb_mobile_recent','[]');renderRecent();return}
+  const x=recentList()[Number(i)];if(!x)return;
+  $('query').value=x.q;
+  if([...$('indexer').options].some(o=>o.value===x.ix)){$('indexer').value=x.ix;fillSearchCategories(x.cat)}
+  search();
+}
 async function search(){
-  const st=$('searchstatus');st.className='status';st.textContent='Searching…';$('results').innerHTML='';results=[];selected.clear();added.clear();updateBatchButton();
+  const st=$('searchstatus');st.className='status';st.textContent='Searching…';$('results').innerHTML=skeleton(3,3);rememberSearch();results=[];selected.clear();added.clear();updateBatchButton();
   $('searchbtn').disabled=true;$('query').blur();
   try{
     const d=await api('/api/search',{query:$('query').value.trim(),indexer:$('indexer').value,category:$('category').value});
@@ -1475,7 +1557,7 @@ function heroCard(x){
 }
 function queueRow(x){
   const p=clampPct(x.percentage),paused=String(x.status).toLowerCase()==='paused';
-  return '<div class="qrow queueitem" data-id="'+esc(x.id)+'"><div class="info"><div class="t">'+esc(x.name)+'</div><div class="m">'+esc(String(x.status||'').toUpperCase())+' · '+esc(x.size)+(x.eta?' · '+esc(x.eta):'')+(x.cat&&x.cat!=='*'?' · '+esc(x.cat):'')+'</div><div class="bar thin"><span style="width:'+p+'%"></span></div></div><button class="icon-btn" data-act="'+(paused?'resume':'pause')+'" aria-label="'+(paused?'Resume':'Pause')+'">'+(paused?ICON.play:ICON.pause)+'</button><button class="icon-btn red" data-act="delete" aria-label="Delete">'+ICON.trash+'</button></div>';
+  return '<div class="qrow queueitem" data-id="'+esc(x.id)+'"><div class="info"><div class="t">'+esc(x.name)+'</div><div class="m">'+esc(String(x.status||'').toUpperCase())+' · '+esc(x.size)+(x.eta?' · '+esc(x.eta):'')+(x.cat&&x.cat!=='*'?' · '+esc(x.cat):'')+'</div><div class="bar thin"><span style="width:'+p+'%"></span></div></div><button class="icon-btn" data-act="top" aria-label="Download this next">'+ICON.top+'</button><button class="icon-btn" data-act="'+(paused?'resume':'pause')+'" aria-label="'+(paused?'Resume':'Pause')+'">'+(paused?ICON.play:ICON.pause)+'</button><button class="icon-btn red" data-act="delete" aria-label="Delete">'+ICON.trash+'</button></div>';
 }
 async function refreshQueue(silent){
   if(queueBusy)return;queueBusy=true;const st=$('queuestatus');
@@ -1508,6 +1590,7 @@ function updateStatus(d){
 }
 async function pollStatus(){if(document.hidden||$('app').classList.contains('hidden')||activeTab==='queue'||activeTab==='home')return;try{updateStatus(await api('/api/queue'))}catch{const p=$('sabpill');p.className='spill bad';p.innerHTML='<i></i>SABnzbd offline'}}
 async function itemAction(id,action){
+  if(action==='top'){try{await api('/api/queue/item',{id,action});toast('Moved to the top of the queue');await refreshQueue(true)}catch(e){toast(e.message,true)}return}
   if(action==='delete'&&!confirm('Remove this item from the queue and delete its partial files?'))return;
   try{await api('/api/queue/item',{id,action});await refreshQueue(true)}catch(e){toast(e.message,true)}
 }
@@ -1536,7 +1619,7 @@ function nowCard(p,compact){
   if(!p)return compact?'<button class="card kidle" data-tab="kodi">'+ICON.play+'<span>Nothing playing on Kodi · open your library</span></button>':'<div class="card kidle">'+ICON.play+'<span>Nothing playing right now.</span></div>';
   const pp=p.paused?ICON.play:ICON.pause;
   const det=p.movieid?' data-detail="'+esc(p.movieid)+'"':'';
-  return '<div class="hero"><div class="nowrow">'+(p.poster?'<button class="pthumb"'+det+' aria-label="Details for '+esc(p.title)+'">'+artTag(p.poster)+'</button>':'')+'<div class="info'+(det?' tap':'')+'"'+det+'><div class="kode">'+(compact?'NOW ON KODI':(p.paused?'PAUSED':'NOW PLAYING'))+'</div><div class="name">'+esc(p.title)+'</div>'+(p.sub?'<div class="sub">'+esc(p.sub)+'</div>':'')+'</div></div>'+
+  return '<div class="hero np">'+(p.fanart?'<div class="npbg">'+artTag(p.fanart)+'</div>':'')+'<div class="nowrow">'+(p.poster?'<button class="pthumb"'+det+' aria-label="Details for '+esc(p.title)+'">'+artTag(p.poster)+'</button>':'')+'<div class="info'+(det?' tap':'')+'"'+det+'><div class="kode">'+(compact?'NOW ON KODI':(p.paused?'PAUSED':'NOW PLAYING'))+'</div><div class="name">'+esc(p.title)+'</div>'+(p.sub?'<div class="sub">'+esc(p.sub)+'</div>':'')+'</div></div>'+
     '<div class="bar"><span style="width:'+clampPct(p.pct)+'%"></span></div><div class="ctrls"><span class="tm">'+fmtTime(p.time)+' / '+fmtTime(p.total)+'</span>'+
     (compact?'':'<button class="round" data-kact="stop" data-pid="'+esc(p.playerid)+'" aria-label="Stop"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>')+
     '<button class="round main" data-kact="playpause" data-pid="'+esc(p.playerid)+'" aria-label="'+(p.paused?'Play':'Pause')+'">'+pp+'</button></div></div>';
@@ -1577,11 +1660,12 @@ function pumpArt(){
   while(artActive<4&&artQueue.length){
     const j=artQueue.shift();artActive++;
     fetch('/api/kodi/art?u='+encodeURIComponent(j.ref),{headers:{'X-Mobile-Token':token}})
-      .then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.blob()}).then(b=>j.res(URL.createObjectURL(b)))
+      .then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.blob()}).then(b=>{const u=URL.createObjectURL(b);artReady.set(j.ref,u);j.res(u)})
       .catch(e=>{artCache.delete(j.ref);j.rej(e)}).finally(()=>{artActive--;pumpArt()});
   }
 }
-function artTag(ref){return ref?'<img class="art" data-art="'+esc(ref)+'" alt="">':''}
+const artReady=new Map();
+function artTag(ref){if(!ref)return '';const u=artReady.get(ref);return u?'<img class="art loaded" data-art="'+esc(ref)+'" src="'+u+'" alt="">':'<img class="art" data-art="'+esc(ref)+'" alt="">'}
 const artObserver='IntersectionObserver' in window?new IntersectionObserver(es=>{for(const e of es)if(e.isIntersecting){artObserver.unobserve(e.target);showArt(e.target)}},{rootMargin:'300px'}):null;
 function showArt(img){artURL(img.dataset.art).then(u=>{img.onload=()=>img.classList.add('loaded');img.src=u}).catch(()=>{})}
 function hydrateArt(root){root.querySelectorAll('img[data-art]:not([src])').forEach(img=>artObserver?artObserver.observe(img):showArt(img))}
@@ -1638,7 +1722,7 @@ async function renderKodiList(resetPage){
   more.classList.add('hidden');
   if(!q&&view==='recent'){title.textContent='RECENTLY ADDED';list.innerHTML=kodiRecent.map(movieRow).join('')||empty('No movies yet','Run a library scan once something finishes downloading.');hydrateArt(list);return}
   if(kodiMovies===null){
-    if(kodiLoading)return;kodiLoading=true;title.textContent='LOADING LIBRARY…';
+    if(kodiLoading)return;kodiLoading=true;title.textContent='LOADING LIBRARY…';list.innerHTML=skeleton(5,2);
     try{kodiMovies=(await api('/api/kodi/movies')).movies||[]}catch(e){title.textContent='';list.innerHTML=empty('Couldn\'t load the library',e.message);return}finally{kodiLoading=false}
     return renderKodiList();
   }
@@ -1680,6 +1764,21 @@ async function kodiScan(){
 
 async function retryItem(id){try{await api('/api/history/retry',{id});toast('Retry requested');await refreshHistory()}catch(e){toast(e.message,true)}}
 
+let seenHistory=null;
+async function watchFinished(){
+  if(document.hidden||$('app').classList.contains('hidden'))return;
+  let d;try{d=await api('/api/history')}catch{return}
+  const slots=d.slots||[];
+  if(seenHistory===null){seenHistory=new Set(slots.map(x=>x.id));return}
+  const fresh=slots.filter(x=>!seenHistory.has(x.id)&&/^(completed|failed)$/i.test(x.status||''));
+  slots.forEach(x=>seenHistory.add(x.id));
+  if(!fresh.length)return;
+  const bad=fresh.filter(x=>/failed/i.test(x.status));
+  const names=fresh.slice(0,3).map(x=>(/failed/i.test(x.status)?'Failed: ':'Finished: ')+x.name).join('\n')+(fresh.length>3?'\n…and '+(fresh.length-3)+' more':'');
+  toast(names,bad.length>0);
+  if(fresh.some(x=>/completed/i.test(x.status)))kodiMovies=null;
+  if(activeTab==='history')refreshHistory();
+}
 function bind(){
   $('pairbtn').addEventListener('click',pair);
   $('token').addEventListener('keydown',e=>{if(e.key==='Enter')pair()});
@@ -1719,6 +1818,9 @@ function bind(){
   $('histrefresh').addEventListener('click',refreshHistory);
   setInterval(()=>{if(!document.hidden&&activeTab==='queue'&&!$('app').classList.contains('hidden'))refreshQueue(true)},4000);
   setInterval(pollStatus,10000);
+  setInterval(watchFinished,15000);
+  $('recent').addEventListener('click',e=>{const b=e.target.closest('[data-recent]');if(b)useRecent(b.dataset.recent)});
+  renderRecent();
   setInterval(()=>{if(document.hidden||$('app').classList.contains('hidden'))return;if(activeTab==='home')refreshHome();else if(activeTab==='kodi')refreshKodiNow()},5000);
 }
 bind();
@@ -2059,6 +2161,9 @@ class MobileHandler(BaseHTTPRequestHandler):
         merged = merge_duplicate_results(combined)
         merged.sort(key=lambda x: (x["pub_ts"], x["size_bytes"]), reverse=True)  # newest survive the cap
         output = cache_results(merged[:MAX_TOTAL_RESULTS])
+        lib = kodi_library_index()
+        for item in output:
+            item["in_library"] = library_match(item.get("title", ""), lib)
         log.info("search ip=%s indexers=%d q=%r cat=%s results=%d errors=%d", self.ip, len(selected), query, category or "-", len(output), len(errors))
         self.send_json(200, {"results": output, "errors": errors})
 
@@ -2116,8 +2221,13 @@ class MobileHandler(BaseHTTPRequestHandler):
         nzo_id, action = str(body.get("id") or ""), str(body.get("action") or "")
         if not NZB_ID_RE.match(nzo_id):
             raise ValueError("Invalid item id.")
-        if action not in ("pause", "resume", "delete"):
+        if action not in ("pause", "resume", "delete", "top"):
             raise ValueError("Invalid action.")
+        if action == "top":
+            sab_request("switch", {"value": nzo_id, "value2": 0})
+            log.info("queue item top %s ip=%s", nzo_id, self.ip)
+            self.send_json(200, {"ok": True})
+            return
         extra = {"name": action, "value": nzo_id}
         if action == "delete":
             extra["del_files"] = 1
