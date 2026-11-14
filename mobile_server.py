@@ -944,6 +944,69 @@ ADD_LIMITER = SlidingWindowLimiter(*ADD_RATE)
 
 NZB_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{4,64}$")
 CATEGORY_RE = re.compile(r"^\d{1,6}(,\d{1,6}){0,9}$")
+CAPS_CACHE_FILE = BASE_DIR / "nzb_caps_cache.json"
+
+# Standard Newznab categories: used for "All indexers" (these IDs work everywhere) and for any
+# indexer whose capabilities the desktop app hasn't cached yet.
+STANDARD_CATEGORIES: list[tuple[str, list[tuple[str, str]]]] = [
+    ("1000", [("Console", ""), ("NDS", "1010"), ("PSP", "1020"), ("Wii", "1030"), ("Xbox", "1040"), ("Xbox 360", "1050"), ("PS3", "1080"), ("Other", "1090")]),
+    ("2000", [("Movies", ""), ("Foreign", "2010"), ("Other", "2020"), ("SD", "2030"), ("HD", "2040"), ("UHD", "2045"), ("BluRay", "2050"), ("3D", "2060"), ("DVD", "2070")]),
+    ("3000", [("Audio", ""), ("MP3", "3010"), ("Video", "3020"), ("Audiobook", "3030"), ("Lossless", "3040"), ("Other", "3050")]),
+    ("4000", [("PC", ""), ("0day", "4010"), ("ISO", "4020"), ("Mac", "4030"), ("Mobile", "4040"), ("Games", "4050")]),
+    ("5000", [("TV", ""), ("Foreign", "5020"), ("SD", "5030"), ("HD", "5040"), ("UHD", "5045"), ("Other", "5050"), ("Sport", "5060"), ("Anime", "5070"), ("Documentary", "5080")]),
+    ("6000", [("XXX", "")]),
+    ("7000", [("Books", ""), ("Ebook", "7020"), ("Comics", "7030"), ("Magazines", "7010"), ("Other", "7040")]),
+    ("8000", [("Other", "")]),
+]
+
+
+def _standard_category_groups() -> list[dict]:
+    groups = []
+    for parent_id, entries in STANDARD_CATEGORIES:
+        name = entries[0][0]
+        groups.append({"id": parent_id, "name": name,
+                       "children": [{"id": cid, "name": n} for n, cid in entries[1:]]})
+    return groups
+
+
+def _groups_from_caps(pairs: list) -> list[dict]:
+    """Turns the desktop app's cached caps ([label, id] with "  ↳ Parent > Child (id)" children) into groups."""
+    groups: list[dict] = []
+    for pair in pairs:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            continue
+        label, cid = str(pair[0]), str(pair[1]).strip()
+        if not cid.isdigit():
+            continue
+        name = re.sub(r"\s*\(\d+\)\s*$", "", label.replace("\u21b3", "").strip())
+        is_child = label.startswith((" ", "\u21b3")) or "\u21b3" in label
+        if is_child and groups:
+            groups[-1]["children"].append({"id": cid, "name": name.split(">", 1)[-1].strip()})
+        else:
+            groups.append({"id": cid, "name": name, "children": []})
+    return groups
+
+
+def _site_key(url: str) -> str:
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    parts = [x for x in host.split(".") if x not in ("www", "api")]
+    return parts[-2] if len(parts) >= 2 else host
+
+
+def indexer_category_groups(indexers: list[dict]) -> dict[str, list[dict]]:
+    """Category drop-down contents per indexer id (plus "*" for all indexers)."""
+    cached: dict = {}
+    try:
+        cached = json.loads(CAPS_CACHE_FILE.read_text(encoding="utf-8")).get("by_url") or {}
+    except (OSError, ValueError, AttributeError):
+        cached = {}
+    by_site = {_site_key(u): v for u, v in cached.items() if isinstance(v, list)}
+    out: dict[str, list[dict]] = {"*": _standard_category_groups()}
+    for ix in indexers:
+        pairs = cached.get(ix["url"]) or by_site.get(_site_key(ix["url"]))
+        groups = _groups_from_caps(pairs) if isinstance(pairs, list) else []
+        out[ix["id"]] = groups or out["*"]
+    return out
 
 
 def get_local_ip() -> str:
@@ -1031,7 +1094,7 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;backgroun
 <h1>Search</h1><p class="lede">Your indexers, from anywhere at home.</p>
 <div class="card">
 <label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="query" placeholder="Movie, show or release" enterkeyhint="search" autocomplete="off" aria-label="Search"></label>
-<div class="row"><select id="indexer" class="field" aria-label="Indexer"><option value="*">All indexers</option></select><input id="category" class="field" placeholder="Category #" inputmode="numeric" aria-label="Newznab category"></div>
+<div class="row"><select id="indexer" class="field" aria-label="Indexer"><option value="*">All indexers</option></select><select id="category" class="field" aria-label="Category"><option value="">All categories</option></select></div>
 <button class="btn full" id="searchbtn">Search</button>
 </div>
 <div id="searchstatus" class="status"></div>
@@ -1101,16 +1164,27 @@ async function connect(){
     const d=await api('/api/status');
     $('pair').classList.add('hidden');$('app').classList.remove('hidden');$('tabbar').classList.remove('hidden');
     const sel=$('indexer');sel.innerHTML='<option value="*">All indexers</option>'+d.indexers.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join('');
-    loadPrefs();
+    catGroups=d.categories||{};
+    loadPrefs();fillSearchCategories(JSON.parse(LS.get('nzb_mobile_prefs','{}')||'{}').category);
     api('/api/sab/info').then(i=>fillCategories(i.categories||[])).catch(()=>{});
     showTab(activeTab);pollStatus();
   }catch(e){if($('app').classList.contains('hidden'))$('pairmsg').textContent=e.message}
+}
+let catGroups={};
+function fillSearchCategories(keep){
+  const sel=$('category'),cur=keep!==undefined?keep:sel.value,groups=catGroups[$('indexer').value]||catGroups['*']||[];
+  let h='<option value="">All categories</option>';
+  for(const g of groups){
+    if(!g.children||!g.children.length){h+='<option value="'+esc(g.id)+'">'+esc(g.name)+'</option>';continue}
+    h+='<optgroup label="'+esc(g.name)+'"><option value="'+esc(g.id)+'">All '+esc(g.name)+'</option>'+g.children.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>').join('')+'</optgroup>';
+  }
+  sel.innerHTML=h;sel.value=[...sel.options].some(o=>o.value===cur)?cur:'';
 }
 function fillCategories(cats){const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(cats.includes(keep))sel.value=keep}
 
 function showTab(t){activeTab=t;for(const n of ['search','queue','history']){$(n).classList.toggle('hidden',n!==t);$('tab'+n).classList.toggle('active',n===t)}updateBatchButton();window.scrollTo(0,0);if(t==='queue')refreshQueue();if(t==='history')refreshHistory()}
 
-function savePrefs(){LS.set('nzb_mobile_prefs',JSON.stringify({sort:$('sort').value,minsize:$('minsize').value,maxsize:$('maxsize').value,mingrabs:$('mingrabs').value,indexer:$('indexer').value,prio:$('prio').value}));LS.set('nzb_mobile_cat',$('sabcat').value)}
+function savePrefs(){LS.set('nzb_mobile_prefs',JSON.stringify({sort:$('sort').value,minsize:$('minsize').value,maxsize:$('maxsize').value,mingrabs:$('mingrabs').value,indexer:$('indexer').value,prio:$('prio').value,category:$('category').value}));LS.set('nzb_mobile_cat',$('sabcat').value)}
 function loadPrefs(){try{const p=JSON.parse(LS.get('nzb_mobile_prefs','{}'));if(p.sort)$('sort').value=p.sort;if(p.prio!==undefined)$('prio').value=p.prio;if(p.indexer&&[...$('indexer').options].some(o=>o.value===p.indexer))$('indexer').value=p.indexer;['minsize','maxsize','mingrabs'].forEach(k=>{if(p[k]!==undefined)$(k).value=p[k]})}catch{}}
 
 function filterSort(list,f){
@@ -1143,7 +1217,7 @@ async function search(){
   const st=$('searchstatus');st.className='status';st.textContent='Searching…';$('results').innerHTML='';results=[];selected.clear();added.clear();updateBatchButton();
   $('searchbtn').disabled=true;$('query').blur();
   try{
-    const d=await api('/api/search',{query:$('query').value.trim(),indexer:$('indexer').value,category:$('category').value.trim()});
+    const d=await api('/api/search',{query:$('query').value.trim(),indexer:$('indexer').value,category:$('category').value});
     results=d.results||[];
     let msg=results.length+' unique result(s)';if(d.errors&&d.errors.length)msg+=' · '+d.errors.length+' indexer error(s)\n'+d.errors.join('\n');
     st.textContent=msg;if(d.errors&&d.errors.length&&!results.length)st.className='status error';
@@ -1240,7 +1314,8 @@ function bind(){
   $('searchbtn').addEventListener('click',search);
   $('query').addEventListener('keydown',e=>{if(e.key==='Enter')search()});
   ['sort','minsize','maxsize','mingrabs'].forEach(id=>$(id).addEventListener('input',()=>{savePrefs();renderResults()}));
-  ['sabcat','prio','indexer'].forEach(id=>$(id).addEventListener('change',savePrefs));
+  $('indexer').addEventListener('change',()=>fillSearchCategories());
+  ['sabcat','prio','indexer','category'].forEach(id=>$(id).addEventListener('change',savePrefs));
   $('selvisible').addEventListener('click',()=>{filterSort(results,currentFilter()).forEach(x=>{if(!added.has(x.id)&&selected.size<10)selected.add(x.id)});renderResults()});
   $('selnone').addEventListener('click',()=>{selected.clear();renderResults()});
   $('batchbtn').addEventListener('click',addSelected);
@@ -1387,6 +1462,7 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, {
                 "ok": True, "version": VERSION,
                 "indexers": [{"id": x["id"], "name": x["name"]} for x in cfg["indexers"]],
+                "categories": indexer_category_groups(cfg["indexers"]),
                 "priorities": SAB_PRIORITIES,
             })
         elif path == "/api/sab/info":
