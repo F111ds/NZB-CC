@@ -3,12 +3,12 @@
 NZB Command Center - Phone App (v3)
 
 A phone version of NZB Command Center, served on your home network:
-  * Home   - current download, pause/resume, today's done/failed, free space, Kodi now playing
+  * Home   - current download, pause/resume, today's done/failed, free space,
+             data downloaded today / this week / this month, Kodi now playing
   * Search - your Newznab indexers, with a category drop-down per indexer; send to SABnzbd
   * Queue  - SABnzbd queue and history (pause, delete, retry, speed limit)
   * Kodi   - now playing with a full remote, movies and TV shows (continue watching,
              next episode, missing episodes), "find a better copy" for a movie
-  * More   - download stats, saved searches, phone alerts (ntfy)
 It reads the SAME nzb_manager_config.json (and DPAPI-protected keys) as the desktop
 app, including its Kodi settings, and never modifies it. Phone-only
 settings (alerts, saved searches) live in mobile_settings.json. Add the page to your
@@ -65,7 +65,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.5.0"
+VERSION = "3.5.1"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -2045,18 +2045,7 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 .miss{background:#2E2410;color:var(--amber);border-radius:10px;padding:8px 10px 8px 12px;font-size:13px;margin:8px 0;display:flex;align-items:center;gap:10px}.miss span{flex:1;min-width:0;overflow-wrap:anywhere}.miss .btn{background:transparent;color:var(--amber);border:1px solid #5A4512;flex:none}
 .badge.up{background:#0B2230;color:var(--sky)}
 .tiles.two{grid-template-columns:repeat(2,minmax(0,1fr))}
-.chart{display:flex;align-items:flex-end;gap:6px;height:150px;margin-top:6px}
-.chart .col{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%;cursor:default;position:relative}
-.chart .stack{flex:1;width:100%;max-width:34px;display:flex;flex-direction:column;justify-content:flex-end;gap:2px}
-.chart .seg{width:100%;min-height:0}.chart .seg.ok{background:var(--teal)}.chart .seg.bad{background:var(--red)}.chart .stack>.seg:first-child{border-radius:4px 4px 0 0}
-.chart .num{font:600 11px var(--mono);color:var(--text);min-height:14px}.chart .lbl{font:500 10px var(--mono);color:var(--muted)}
-.chart .col:hover .stack,.chart .col:focus .stack{filter:brightness(1.15)}.chart .col:focus{outline:none}
-.legend{display:flex;gap:14px;font-size:12px;color:var(--soft);margin-top:10px}.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
-.ctip{font:500 12px var(--mono);color:var(--soft);margin-top:8px;min-height:16px}
-.toggle{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:14px;color:var(--text)}.toggle input{width:20px;height:20px;accent-color:var(--teal);flex:none}
-.newlist{margin:8px 0 2px;padding:8px 10px;background:var(--deep);border-radius:10px;font-size:12px;color:var(--text)}.newlist div{padding:3px 0;overflow-wrap:anywhere}
 .pills{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}.pills button{border:1px solid var(--line);background:transparent;color:var(--text);border-radius:18px;padding:0 14px;min-height:38px;font-size:13px;font-weight:600}.pills button.on{background:var(--teal);color:var(--ink);border-color:var(--teal)}
-.mrow{background:var(--card);border-radius:12px;padding:12px;margin-bottom:8px}.mrow .t{font-size:14px;font-weight:600;overflow-wrap:anywhere}.mrow .m{font:500 11px var(--mono);color:var(--soft);margin-top:3px}
 </style></head><body>
 <header><div class="brand"><img src="/icon.png" alt="">NZB Command Center</div><div id="statusbar" class="statusbar hidden"><span id="sabpill" class="spill"><i></i>SABnzbd</span></div></header>
 <main>
@@ -2066,6 +2055,7 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <h1 id="greet">Hello</h1><p class="lede" id="homestatus">Loading…</p>
 <div id="homedl"></div>
 <div class="tiles"><div class="tile"><div class="k">Done today</div><div class="v" id="hdone">—</div></div><div class="tile"><div class="k">Free space</div><div class="v" id="hfree">—</div></div><div class="tile"><div class="k">Failed today</div><div class="v" id="hfail">—</div></div></div>
+<div class="tiles" id="homeusage"><div class="tile"><div class="k">Today</div><div class="v" id="husday">—</div></div><div class="tile"><div class="k">This week</div><div class="v" id="husweek">—</div></div><div class="tile"><div class="k">This month</div><div class="v" id="husmonth">—</div></div></div>
 <button class="shortcut" data-tab="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search your indexers…</button>
 <div id="homekodi"></div>
 </section>
@@ -2074,7 +2064,7 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <div class="card">
 <label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="query" placeholder="Movie, show or release" enterkeyhint="search" autocomplete="off" aria-label="Search"></label>
 <div class="row"><select id="indexer" class="field" aria-label="Indexer"><option value="*">All indexers</option></select><select id="category" class="field" aria-label="Category"><option value="">All categories</option></select></div>
-<div class="row"><button class="btn" id="searchbtn">Search</button><button class="btn ghost" id="savesearch" style="flex:none">Save search</button></div>
+<div class="row"><button class="btn" id="searchbtn">Search</button></div>
 <p class="hint" style="margin:10px 2px 0">Tip: “Show S02E04” or “Show S02” searches by episode or season.</p>
 </div>
 <div id="recent" class="recent"></div>
@@ -2130,27 +2120,6 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <button class="btn ghost full hidden" id="kodimore" style="margin-top:4px">Show more</button>
 </div>
 </section>
-<section id="more" class="hidden">
-<h1>More</h1><p class="lede">Stats, saved searches and alerts.</p>
-<div class="section">DOWNLOADS</div>
-<div id="statsbox"></div>
-<div class="section">SAVED SEARCHES</div>
-<div id="savedbox"></div>
-<div class="section">PHONE ALERTS</div>
-<div class="card">
-<label class="label" for="ntfyurl">ntfy topic URL</label><input id="ntfyurl" class="field" placeholder="https://ntfy.sh/your-secret-topic" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="url">
-<label class="label" for="ntfytoken">Access token <span style="color:var(--muted)">(optional)</span></label><input id="ntfytoken" class="field" type="password" placeholder="Only for a protected topic" autocomplete="off">
-<label class="toggle hidden" id="ntokclearrow"><input type="checkbox" id="ntokclear">Remove the saved token</label>
-<label class="toggle"><input type="checkbox" id="ncomplete">A download finishes</label>
-<label class="toggle"><input type="checkbox" id="nfailed">A download fails</label>
-<label class="toggle"><input type="checkbox" id="nsaved">A saved search finds something new</label>
-<label class="label" for="savedint" style="margin-top:8px">Check saved searches every</label><select id="savedint" class="field"><option value="1">hour</option><option value="3">3 hours</option><option value="6">6 hours</option><option value="12">12 hours</option><option value="24">day</option></select>
-<div class="row"><button class="btn" id="setsave">Save</button><button class="btn ghost" id="settest">Send test</button></div>
-<p class="hint" style="margin:10px 0 0">Install the free <b>ntfy</b> app, subscribe to a hard-to-guess topic name, and paste the topic's URL here. Alerts come from the PC, so they arrive even when this page is closed.</p>
-</div>
-<div class="section">ABOUT</div>
-<div class="card hint" id="aboutbox" style="font-size:13px">NZB Command Center phone app v__VERSION__</div>
-</section>
 </div></main>
 <div id="batchbar" class="batch hidden"><span id="batchcount">0 selected</span><button id="batchbtn" class="btn sm">Add to SABnzbd</button></div>
 <nav class="tabs hidden" id="tabbar" aria-label="Sections">
@@ -2158,7 +2127,6 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <button id="tabsearch" class="tab" data-tab="search"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search</button>
 <button id="tabqueue" class="tab" data-tab="queue"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>Queue<span id="queuecount" class="count hidden"></span></button>
 <button id="tabkodi" class="tab" data-tab="kodi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/></svg>Kodi</button>
-<button id="tabmore" class="tab" data-tab="more"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>More<span id="morecount" class="count hidden"></span></button>
 </nav>
 <div id="toast" class="toast hidden" role="status"></div>
 <div id="sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-label="Movie details"><div class="panel" id="sheetpanel"></div></div>
@@ -2222,7 +2190,7 @@ function fillSearchCategories(keep){
 }
 function fillCategories(cats){sabCats=cats;const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(cats.includes(keep))sel.value=keep}
 
-function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi','more'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':t;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi();if(t==='more')refreshMore()}
+function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':t;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi()}
 
 function savePrefs(){LS.set('nzb_mobile_prefs',JSON.stringify({sort:$('sort').value,minsize:$('minsize').value,maxsize:$('maxsize').value,mingrabs:$('mingrabs').value,indexer:$('indexer').value,prio:$('prio').value,category:$('category').value}));LS.set('nzb_mobile_cat',$('sabcat').value)}
 function loadPrefs(){try{const p=JSON.parse(LS.get('nzb_mobile_prefs','{}'));if(p.sort)$('sort').value=p.sort;if(p.prio!==undefined)$('prio').value=p.prio;if(p.indexer&&[...$('indexer').options].some(o=>o.value===p.indexer))$('indexer').value=p.indexer;['minsize','maxsize','mingrabs'].forEach(k=>{if(p[k]!==undefined)$(k).value=p[k]})}catch{}}
@@ -2424,7 +2392,7 @@ async function refreshHome(){
     $('hfree').innerHTML=d.disk_free_gb!=null&&d.disk_free_gb>=0?esc(Number(d.disk_free_gb).toFixed(0))+' <small>GB</small>':'—';
     const k=d.kodi||{};
     $('homekodi').innerHTML=!k.configured?'':(k.online?nowCard(k.playing,true):'<button class="card kidle" data-tab="kodi">'+ICON.play+'<span>Kodi is offline</span></button>');hydrateArt($('homekodi'));
-    setMoreBadge(d.saved_new);
+    loadHomeUsage();
   }catch(e){$('homestatus').className='lede status error';$('homestatus').textContent=e.message}
   finally{homeBusy=false}
 }
@@ -2647,64 +2615,13 @@ async function queueItemChange(action,value){
   try{await api('/api/queue/item',{id,action,value});toast(action==='top'?'Moved to the top of the queue':(action==='priority'?'Priority changed':'Category changed'));closeSheet();await refreshQueue(true)}catch(e){toast(e.message,true)}
 }
 
-// ---------- More tab ----------
+// ---------- Home: data downloaded ----------
 function fmtBytes(n){n=Number(n)||0;const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return (i?n.toFixed(n<10?1:0):n)+' '+u[i]}
-function setMoreBadge(n){const c=$('morecount');c.textContent=n||'';c.classList.toggle('hidden',!n)}
-function refreshMore(){loadStats();loadSaved();loadSettings()}
-async function loadStats(){
-  const box=$('statsbox');if(!box.innerHTML)box.innerHTML=skeleton(1,3);
-  let d;try{d=await api('/api/stats')}catch(e){box.innerHTML='<div class="card status error" style="margin:0 0 12px">'+esc(e.message)+'</div>';return}
-  const t=d.totals||{},days=d.days||[],max=Math.max(1,...days.map(x=>x.done+x.failed));
-  const wk=days.reduce((a,x)=>({done:a.done+x.done,failed:a.failed+x.failed}),{done:0,failed:0});
-  const cols=days.map(x=>{
-    const dt=new Date(x.date+'T12:00:00'),lbl=dt.toLocaleDateString(undefined,{weekday:'short'}),tot=x.done+x.failed;
-    const tip=dt.toLocaleDateString(undefined,{weekday:'long',month:'short',day:'numeric'})+': '+x.done+' finished, '+x.failed+' failed, '+fmtBytes(x.bytes);
-    return '<div class="col" tabindex="0" data-tip="'+esc(tip)+'" aria-label="'+esc(tip)+'"><span class="num">'+(tot||'')+'</span><div class="stack">'+
-      (x.failed?'<div class="seg bad" style="height:'+(x.failed/max*100)+'%"></div>':'')+(x.done?'<div class="seg ok" style="height:'+(x.done/max*100)+'%"></div>':'')+'</div><span class="lbl">'+esc(lbl)+'</span></div>';
-  }).join('');
-  box.innerHTML='<div class="tiles"><div class="tile"><div class="k">Today</div><div class="v">'+esc(fmtBytes(t.day))+'</div></div><div class="tile"><div class="k">This week</div><div class="v">'+esc(fmtBytes(t.week))+'</div></div><div class="tile"><div class="k">This month</div><div class="v">'+esc(fmtBytes(t.month))+'</div></div></div>'+
-    '<div class="card"><div class="row" style="align-items:baseline"><b style="font-size:14px">Last 7 days</b><span class="hint" style="text-align:right">'+wk.done+' finished · '+wk.failed+' failed</span></div>'+
-    '<div class="chart" role="img" aria-label="Downloads per day for the last 7 days">'+cols+'</div>'+
-    '<div class="legend"><span><i style="background:var(--teal)"></i>Finished</span><span><i style="background:var(--red)"></i>Failed</span></div><div class="ctip" id="ctip">Tap a day for details · all time '+esc(fmtBytes(t.total))+'</div></div>';
+let usageAt=0;
+async function loadHomeUsage(){
+  if(Date.now()-usageAt<60000)return;usageAt=Date.now();
+  try{const t=(await api('/api/stats')).totals||{};$('husday').textContent=fmtBytes(t.day);$('husweek').textContent=fmtBytes(t.week);$('husmonth').textContent=fmtBytes(t.month)}catch{}
 }
-function savedRow(x){
-  const when=x.last_run?'checked '+relAge(x.last_run):'not checked yet';
-  const meta=[x.indexer_name,x.category?'category '+x.category:'',when,x.last_count!=null&&x.last_run?x.last_count+' result(s)':''].filter(Boolean).join(' · ');
-  const news=(x.new||[]).length?'<div class="newlist">'+x.new.slice(0,6).map(n=>'<div>🆕 '+esc(n.title)+' <span style="color:var(--muted)">· '+esc(n.size)+' · '+esc(n.indexer)+'</span></div>').join('')+(x.new.length>6?'<div style="color:var(--muted)">…and '+(x.new.length-6)+' more</div>':'')+'</div>':'';
-  return '<div class="mrow" data-saved="'+esc(x.id)+'"><div class="row" style="align-items:flex-start"><div style="min-width:0"><div class="t">'+esc(x.query)+((x.new||[]).length?' <span class="badge up">'+x.new.length+' new</span>':'')+'</div><div class="m">'+esc(meta)+'</div>'+(x.last_error?'<div class="m" style="color:var(--red)">'+esc(x.last_error)+'</div>':'')+'</div></div>'+news+
-    '<div class="row" style="margin-top:10px"><button class="btn sm" data-sact="open">Search</button><button class="btn ghost sm" data-sact="run">Check now</button>'+((x.new||[]).length?'<button class="btn ghost sm" data-sact="clear">Mark seen</button>':'')+'<button class="icon-btn red" style="flex:none" data-sact="delete" aria-label="Delete saved search">'+ICON.trash+'</button></div></div>';
-}
-let savedList=[];
-function renderSaved(d){
-  savedList=d.searches||[];setMoreBadge(savedList.reduce((a,x)=>a+(x.new||[]).length,0));
-  $('savedbox').innerHTML=savedList.map(savedRow).join('')+'<p class="hint" style="margin:4px 4px 12px">'+(savedList.length?'Checked every '+d.interval_hours+' h on the PC. ':'Use “Save search” on the Search tab to watch for a title. ')+(d.alerts?'New matches also send a phone alert.':'Set up phone alerts below to hear about new matches.')+'</p>';
-}
-async function loadSaved(){try{renderSaved(await api('/api/saved'))}catch(e){$('savedbox').innerHTML='<div class="card status error">'+esc(e.message)+'</div>'}}
-async function savedAction(id,act,btn){
-  if(act==='open'){const x=savedList.find(s=>s.id===id);if(!x)return;if([...$('indexer').options].some(o=>o.value===x.indexer)){$('indexer').value=x.indexer;fillSearchCategories(x.category)}goSearch(x.query,{category:x.category});return}
-  if(act==='delete'&&!confirm('Delete this saved search?'))return;
-  if(btn){btn.disabled=true;if(act==='run')btn.textContent='Checking…'}
-  try{const d=await api('/api/saved',{action:act,id});renderSaved(d);if(act==='run'){const x=savedList.find(s=>s.id===id);toast(x&&x.last_error?x.last_error:'Checked — '+((x&&x.new.length)||0)+' new',!!(x&&x.last_error))}}
-  catch(e){toast(e.message,true);if(btn){btn.disabled=false;if(act==='run')btn.textContent='Check now'}}
-}
-async function saveCurrentSearch(){
-  const query=$('query').value.trim();if(!query){toast('Type what to look for first.',true);return}
-  try{await api('/api/saved',{action:'add',query,indexer:$('indexer').value,category:$('category').value});toast('Saved. The PC checks it regularly — see More.')}catch(e){toast(e.message,true)}
-}
-function renderSettings(s){
-  $('ntfyurl').value=s.ntfy_url||'';$('ntfytoken').value='';$('ntfytoken').placeholder=s.ntfy_token_set?'Saved — type a new one to replace it':'Only for a protected topic';
-  $('ntokclearrow').classList.toggle('hidden',!s.ntfy_token_set);$('ntokclear').checked=false;
-  $('ncomplete').checked=!!s.notify_complete;$('nfailed').checked=!!s.notify_failed;$('nsaved').checked=!!s.notify_saved;$('savedint').value=String(s.saved_interval_hours);
-  const auto=s.autostart===null?'':(s.autostart?'<br>Starts automatically when you log in to Windows. To stop that, run <b>python mobile_server.py --remove-autostart</b> on the PC.':'<br>To start it automatically when you log in to Windows, run <b>python mobile_server.py --install-autostart</b> on the PC.');
-  $('aboutbox').innerHTML='NZB Command Center phone app v'+esc(s.version)+auto;
-}
-async function loadSettings(){try{renderSettings(await api('/api/settings'))}catch(e){toast(e.message,true)}}
-async function saveSettings(){
-  const b=$('setsave');b.disabled=true;
-  try{renderSettings(await api('/api/settings',{ntfy_url:$('ntfyurl').value.trim(),ntfy_token:$('ntfytoken').value.trim(),clear_token:$('ntokclear').checked,notify_complete:$('ncomplete').checked,notify_failed:$('nfailed').checked,notify_saved:$('nsaved').checked,saved_interval_hours:Number($('savedint').value)}));toast('Settings saved');loadSaved()}
-  catch(e){toast(e.message,true)}finally{b.disabled=false}
-}
-async function testAlert(){const b=$('settest');b.disabled=true;try{await api('/api/settings/test',{});toast('Test alert sent — check your phone')}catch(e){toast(e.message,true)}finally{b.disabled=false}}
 async function kodiScan(){
   const b=$('kodiscan');b.disabled=true;
   try{await api('/api/kodi/scan',{});kodiMovies=null;toast('Library scan started on Kodi')}catch(e){toast(e.message,true)}finally{b.disabled=false}
@@ -2756,12 +2673,6 @@ function bind(){
   $('tvview').value=LS.get('nzb_mobile_tvview','all');if(!$('tvview').value)$('tvview').value='all';
   $('tvview').addEventListener('change',()=>{LS.set('nzb_mobile_tvview',$('tvview').value);window.scrollTo(0,0);renderShows(true)});
   $('tvmore').addEventListener('click',()=>{tvShown+=TV_PAGE;renderShows()});
-  $('savesearch').addEventListener('click',saveCurrentSearch);
-  $('setsave').addEventListener('click',saveSettings);
-  $('settest').addEventListener('click',testAlert);
-  $('savedbox').addEventListener('click',e=>{const row=e.target.closest('[data-saved]'),b=e.target.closest('[data-sact]');if(row&&b)savedAction(row.dataset.saved,b.dataset.sact,b)});
-  const showTip=e=>{const c=e.target.closest('.chart .col');if(c&&$('ctip'))$('ctip').textContent=c.dataset.tip};
-  $('statsbox').addEventListener('click',showTip);$('statsbox').addEventListener('mouseover',showTip);$('statsbox').addEventListener('focusin',showTip);
   $('viewer').addEventListener('click',()=>$('viewer').classList.add('hidden'));
   window.addEventListener('popstate',()=>{if(!$('viewer').classList.contains('hidden'))$('viewer').classList.add('hidden');closeSheet(true)});
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(!$('viewer').classList.contains('hidden'))$('viewer').classList.add('hidden');else closeSheet()}});

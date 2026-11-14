@@ -262,5 +262,5 @@ assert m._autostart_args(args) == ["--port", "9001", "--allow-cidr", "10.9.0.0/1
 # ---- Page ------------------------------------------------------------------------------------
 with urllib.request.urlopen(base + "/", timeout=5) as r:
     page = r.read().decode()
-assert 'data-tab="more"' in page and 'id="kodiremote"' in page and "v" + m.VERSION in page and "__VERSION__" not in page
+assert 'data-tab="more"' not in page and 'id="homeusage"' in page and 'id="kodiremote"' in page and "v" + m.VERSION in page and "__VERSION__" not in page
 print("FEATURE TESTS PASSED")
