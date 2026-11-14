@@ -1,0 +1,17 @@
+# --- Secrets: never commit ---
+# SABnzbd / indexer / Kodi / media server keys
+nzb_manager_config.json
+# Mobile companion pairing code
+mobile_access_key.txt
+# Half-written config/cache files
+*.tmp
+
+# --- Logs, caches and per-machine state ---
+mobile_server.log*
+nzb_caps_cache.json
+nzb_daily_stats.json
+media_inspector_cache.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
