@@ -59,7 +59,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.1"
+VERSION = "3.2"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -680,26 +680,90 @@ def kodi_now_playing() -> dict | None:
     if not video:
         return None
     pid = to_int(video[0].get("playerid"))
-    item = (kodi_call("Player.GetItem", {"playerid": pid, "properties": ["title", "showtitle", "season", "episode", "year"]}) or {}).get("item", {})
+    item = (kodi_call("Player.GetItem", {"playerid": pid, "properties": ["title", "showtitle", "season", "episode", "year", "art", "thumbnail"]}) or {}).get("item", {})
     props = kodi_call("Player.GetProperties", {"playerid": pid, "properties": ["percentage", "time", "totaltime", "speed"]}) or {}
     title = str(item.get("title") or item.get("label") or "Playing")
     if item.get("showtitle"):
         sub = f"{item['showtitle']} · S{to_int(item.get('season')):02d}E{to_int(item.get('episode')):02d}"
     else:
         sub = str(item.get("year") or "") if to_int(item.get("year")) else ""
-    return {"playerid": pid, "title": title, "sub": sub, "time": _kodi_secs(props.get("time")),
+    art = item.get("art") or {}
+    poster = _art_ref(art.get("poster") or art.get("tvshow.poster") or art.get("thumb") or item.get("thumbnail"))
+    return {"playerid": pid, "title": title, "sub": sub, "poster": poster,
+            "movieid": to_int(item.get("id")) if item.get("type") == "movie" else None,
+            "time": _kodi_secs(props.get("time")),
             "total": _kodi_secs(props.get("totaltime")), "pct": to_float(props.get("percentage")),
             "paused": to_int(props.get("speed")) == 0}
 
 
+def _art_ref(value) -> str:
+    """Kodi artwork reference ("image://..."), or "" -- the phone asks /api/kodi/art for the bytes."""
+    value = str(value or "")
+    return value if value.startswith("image://") and len(value) <= 2000 else ""
+
+
+IMAGE_MAGIC = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/png"), (b"GIF8", "image/gif"))
+
+
+def kodi_art(ref: str) -> tuple[bytes, str]:
+    """Fetches artwork through Kodi's own /image/ endpoint (its texture cache). Only Kodi is ever contacted."""
+    if not _art_ref(ref):
+        raise ValueError("Invalid artwork reference.")
+    k = get_config()["kodi"]
+    if not k["url"]:
+        raise UpstreamError("Kodi isn't set up.")
+    headers = {}
+    if k["user"] or k["password"]:
+        headers["Authorization"] = "Basic " + base64.b64encode(f"{k['user']}:{k['password']}".encode()).decode("ascii")
+    raw = http_fetch(k["url"] + "/image/" + urllib.parse.quote(ref, safe=""), timeout=20, max_bytes=12 * 1024 * 1024, headers=headers)
+    for magic, ctype in IMAGE_MAGIC:
+        if raw.startswith(magic):
+            return raw, ctype
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return raw, "image/webp"
+    raise UpstreamError("Kodi didn't return an image.")
+
+
+def kodi_movie_details(movieid: int) -> dict:
+    res = kodi_call("VideoLibrary.GetMovieDetails", {"movieid": movieid, "properties": KODI_MOVIE_PROPS + [
+        "plot", "tagline", "genre", "director", "mpaa", "rating", "ratings", "votes", "imdbnumber", "cast", "studio", "premiered"]}) or {}
+    mv = res.get("moviedetails") or {}
+    if not mv:
+        raise ValueError("That movie isn't in Kodi's library any more.")
+    out = _kodi_movie(mv)
+    art = mv.get("art") or {}
+    ratings = mv.get("ratings") or {}
+    imdb = ratings.get("imdb") or {}
+    other = next((dict(v, source=k) for k, v in ratings.items() if k != "imdb" and isinstance(v, dict)), None)
+    imdb_id = str(mv.get("imdbnumber") or "")
+    out.update({
+        "fanart": _art_ref(art.get("fanart")),
+        "plot": str(mv.get("plot") or ""), "tagline": str(mv.get("tagline") or ""),
+        "genres": [str(g) for g in (mv.get("genre") or [])][:5],
+        "directors": [str(d) for d in (mv.get("director") or [])][:3],
+        "studio": [str(x) for x in (mv.get("studio") or [])][:2],
+        "mpaa": re.sub(r"^Rated\s+", "", str(mv.get("mpaa") or "")).strip(),
+        "imdb_rating": round(to_float(imdb.get("rating")), 1) if imdb.get("rating") else None,
+        "imdb_votes": to_int(imdb.get("votes")) or None,
+        "rating": round(to_float((other or {}).get("rating") or mv.get("rating")), 1) or None,
+        "rating_source": str((other or {}).get("source") or ""),
+        "imdb_url": f"https://www.imdb.com/title/{imdb_id}/" if re.fullmatch(r"tt\d{5,10}", imdb_id) else "",
+        "premiered": str(mv.get("premiered") or ""),
+        "cast": [{"name": str(c.get("name") or ""), "role": str(c.get("role") or "")} for c in (mv.get("cast") or [])[:8]],
+    })
+    return out
+
+
 def _kodi_movie(mv: dict) -> dict:
     resume = mv.get("resume") or {}
+    art = mv.get("art") or {}
     return {"id": to_int(mv.get("movieid")), "title": str(mv.get("title") or "Untitled"), "year": to_int(mv.get("year")) or None,
             "runtime": to_int(mv.get("runtime")), "resume": int(to_float(resume.get("position"))),
-            "watched": to_int(mv.get("playcount")) > 0, "added": str(mv.get("dateadded") or "")[:19]}
+            "watched": to_int(mv.get("playcount")) > 0, "added": str(mv.get("dateadded") or "")[:19],
+            "poster": _art_ref(art.get("poster") or mv.get("thumbnail"))}
 
 
-KODI_MOVIE_PROPS = ["title", "year", "runtime", "playcount", "resume", "dateadded"]
+KODI_MOVIE_PROPS = ["title", "year", "runtime", "playcount", "resume", "dateadded", "art", "thumbnail"]
 
 
 # ==============================================================================
@@ -1192,6 +1256,21 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;backgroun
 .round{width:48px;height:48px;border-radius:24px;border:0;background:var(--hover);color:var(--white);display:inline-flex;align-items:center;justify-content:center;flex:none}.round.main{background:var(--teal);color:var(--ink)}
 .kidle{display:flex;align-items:center;gap:12px;width:100%;border:0;text-align:left;color:var(--soft);font-size:14px}.kidle svg{color:var(--teal);flex:none}
 .icon-btn.play{color:var(--teal2)}
+.pthumb{width:46px;height:69px;border-radius:6px;border:0;padding:0;background:var(--hover);overflow:hidden;flex:none;cursor:pointer}
+.qrow .info.tap,.nowrow .info.tap{cursor:pointer}
+img.art{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transition:opacity .25s}img.art.loaded{opacity:1}
+.nowrow{display:flex;gap:12px;align-items:center}.nowrow .pthumb{width:52px;height:78px}.nowrow .info{flex:1;min-width:0}.nowrow .name{margin-top:4px}
+.sheet{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.65);display:flex;align-items:flex-end;justify-content:center}
+.sheet .panel{background:var(--bg);width:100%;max-width:720px;max-height:92vh;overflow-y:auto;border-radius:20px 20px 0 0;position:relative;padding-bottom:calc(22px + env(safe-area-inset-bottom))}
+.fan{position:relative;aspect-ratio:16/9;background:var(--card);overflow:hidden;border:0;padding:0;width:100%;display:block}.fan::after{content:"";position:absolute;inset:0;background:linear-gradient(to bottom,rgba(6,13,16,0) 45%,var(--bg))}
+.dhead{display:flex;gap:14px;padding:0 16px;margin-top:-64px;position:relative;z-index:1;align-items:flex-end}
+.dposter{width:104px;height:156px;border-radius:10px;overflow:hidden;flex:none;background:var(--hover);border:0;padding:0;box-shadow:0 8px 24px rgba(0,0,0,.55);cursor:zoom-in}
+.dtitle{min-width:0;padding-bottom:4px}.dtitle h2{margin:0;font-size:21px;line-height:1.2;letter-spacing:-.01em}.dtitle .m{font:500 12px var(--mono);color:var(--soft);margin-top:6px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;padding:14px 16px 0}.chip{font:600 12px var(--mono);padding:5px 9px;border-radius:7px;background:var(--card);color:var(--text);text-decoration:none}.chip.imdb{background:#F5C518;color:#000}
+.dbody{padding:12px 16px 0}.tagline{font-style:italic;color:var(--soft);margin:0 0 8px}.plot{line-height:1.55;color:var(--text);margin:0 0 14px}
+.facts{font-size:13px;color:var(--soft);line-height:1.6;margin-bottom:14px}.facts b{color:var(--white);font-weight:600}
+.dclose{position:absolute;top:12px;right:12px;z-index:3;width:40px;height:40px;border-radius:20px;border:0;background:rgba(0,0,0,.6);color:#fff;display:flex;align-items:center;justify-content:center}
+.viewer{position:fixed;inset:0;z-index:30;background:#000;display:flex;align-items:center;justify-content:center;border:0;padding:0;width:100%}.viewer img{max-width:100%;max-height:100%;object-fit:contain}
 </style></head><body>
 <header><div class="brand"><img src="/icon.png" alt="">NZB Command Center</div><div id="statusbar" class="statusbar hidden"><span id="sabpill" class="spill"><i></i>SABnzbd</span></div></header>
 <main>
@@ -1255,6 +1334,8 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;backgroun
 <button id="tabkodi" class="tab" data-tab="kodi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/></svg>Kodi</button>
 </nav>
 <div id="toast" class="toast hidden" role="status"></div>
+<div id="sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-label="Movie details"><div class="panel" id="sheetpanel"></div></div>
+<button id="viewer" class="viewer hidden" aria-label="Close picture"><img id="viewerimg" alt=""></button>
 <script>
 'use strict';
 const LS={get:(k,d='')=>{try{const v=localStorage.getItem(k);return v===null?d:v}catch{return d}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}};
@@ -1262,6 +1343,7 @@ const $=id=>document.getElementById(id);
 let token=LS.get('nzb_mobile_token');
 let results=[],selected=new Set(),added=new Set(),activeTab='home',queueBusy=false,toastTimer=null;
 const ICON={pause:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>',play:'<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l12 7-12 7z"/></svg>',trash:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',retry:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>'};
+ICON.x='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 const EMPTY_ICON='<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>';
 
 (function pairFromLink(){const m=(location.hash||'').match(/^#k=([A-Za-z0-9_-]+)$/);if(m){token=m[1];LS.set('nzb_mobile_token',token);try{history.replaceState(null,'',location.pathname)}catch{}}})();
@@ -1439,7 +1521,8 @@ function fmtTime(s){s=Math.max(0,Math.floor(Number(s)||0));const h=Math.floor(s/
 function nowCard(p,compact){
   if(!p)return compact?'<button class="card kidle" data-tab="kodi">'+ICON.play+'<span>Nothing playing on Kodi · open your library</span></button>':'<div class="card kidle">'+ICON.play+'<span>Nothing playing right now.</span></div>';
   const pp=p.paused?ICON.play:ICON.pause;
-  return '<div class="hero"><div class="kode">'+(compact?'NOW ON KODI':(p.paused?'PAUSED':'NOW PLAYING'))+'</div><div class="name">'+esc(p.title)+'</div>'+(p.sub?'<div class="sub">'+esc(p.sub)+'</div>':'')+
+  const det=p.movieid?' data-detail="'+esc(p.movieid)+'"':'';
+  return '<div class="hero"><div class="nowrow">'+(p.poster?'<button class="pthumb"'+det+' aria-label="Details for '+esc(p.title)+'">'+artTag(p.poster)+'</button>':'')+'<div class="info'+(det?' tap':'')+'"'+det+'><div class="kode">'+(compact?'NOW ON KODI':(p.paused?'PAUSED':'NOW PLAYING'))+'</div><div class="name">'+esc(p.title)+'</div>'+(p.sub?'<div class="sub">'+esc(p.sub)+'</div>':'')+'</div></div>'+
     '<div class="bar"><span style="width:'+clampPct(p.pct)+'%"></span></div><div class="ctrls"><span class="tm">'+fmtTime(p.time)+' / '+fmtTime(p.total)+'</span>'+
     (compact?'':'<button class="round" data-kact="stop" data-pid="'+esc(p.playerid)+'" aria-label="Stop"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>')+
     '<button class="round main" data-kact="playpause" data-pid="'+esc(p.playerid)+'" aria-label="'+(p.paused?'Play':'Pause')+'">'+pp+'</button></div></div>';
@@ -1465,9 +1548,60 @@ async function refreshHome(){
     $('hfail').textContent=d.failed_today!=null?d.failed_today:'—';$('hfail').style.color=d.failed_today?'var(--red)':'';
     $('hfree').innerHTML=d.disk_free_gb!=null&&d.disk_free_gb>=0?esc(Number(d.disk_free_gb).toFixed(0))+' <small>GB</small>':'—';
     const k=d.kodi||{};
-    $('homekodi').innerHTML=!k.configured?'':(k.online?nowCard(k.playing,true):'<button class="card kidle" data-tab="kodi">'+ICON.play+'<span>Kodi is offline</span></button>');
+    $('homekodi').innerHTML=!k.configured?'':(k.online?nowCard(k.playing,true):'<button class="card kidle" data-tab="kodi">'+ICON.play+'<span>Kodi is offline</span></button>');hydrateArt($('homekodi'));
   }catch(e){$('homestatus').className='lede status error';$('homestatus').textContent=e.message}
   finally{homeBusy=false}
+}
+
+// ---------- Kodi artwork (fetched with the access code, shown as blob: URLs) ----------
+const artCache=new Map(),artQueue=[];let artActive=0;
+function artURL(ref){
+  if(!artCache.has(ref))artCache.set(ref,new Promise((res,rej)=>{artQueue.push({ref,res,rej});pumpArt()}));
+  return artCache.get(ref);
+}
+function pumpArt(){
+  while(artActive<4&&artQueue.length){
+    const j=artQueue.shift();artActive++;
+    fetch('/api/kodi/art?u='+encodeURIComponent(j.ref),{headers:{'X-Mobile-Token':token}})
+      .then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.blob()}).then(b=>j.res(URL.createObjectURL(b)))
+      .catch(e=>{artCache.delete(j.ref);j.rej(e)}).finally(()=>{artActive--;pumpArt()});
+  }
+}
+function artTag(ref){return ref?'<img class="art" data-art="'+esc(ref)+'" alt="">':''}
+const artObserver='IntersectionObserver' in window?new IntersectionObserver(es=>{for(const e of es)if(e.isIntersecting){artObserver.unobserve(e.target);showArt(e.target)}},{rootMargin:'300px'}):null;
+function showArt(img){artURL(img.dataset.art).then(u=>{img.onload=()=>img.classList.add('loaded');img.src=u}).catch(()=>{})}
+function hydrateArt(root){root.querySelectorAll('img[data-art]:not([src])').forEach(img=>artObserver?artObserver.observe(img):showArt(img))}
+function openViewer(ref){if(!ref)return;artURL(ref).then(u=>{$('viewerimg').src=u;$('viewer').classList.remove('hidden')}).catch(()=>toast('Couldn\'t load the picture',true))}
+
+// ---------- Movie details sheet ----------
+let sheetOpen=false;
+function closeSheet(fromPop){if(!sheetOpen)return;sheetOpen=false;$('sheet').classList.add('hidden');document.body.style.overflow='';if(!fromPop&&history.state&&history.state.sheet)history.back()}
+async function openDetail(id){
+  const panel=$('sheetpanel');
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button><div class="empty"><b>Loading…</b></div>';
+  $('sheet').classList.remove('hidden');document.body.style.overflow='hidden';
+  if(!sheetOpen){sheetOpen=true;try{history.pushState({sheet:1},'')}catch{}}
+  let d;try{d=await api('/api/kodi/movie?id='+encodeURIComponent(id))}catch(e){panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button>'+empty('Couldn\'t load this movie',e.message);return}
+  const meta=[d.year,runtimeText(d.runtime),d.watched?'watched':''].filter(Boolean).join(' · ');
+  const chips=[];
+  if(d.imdb_rating)chips.push(d.imdb_url?'<a class="chip imdb" href="'+esc(d.imdb_url)+'" target="_blank" rel="noopener">IMDb '+esc(d.imdb_rating)+'</a>':'<span class="chip imdb">IMDb '+esc(d.imdb_rating)+'</span>');
+  else if(d.rating)chips.push('<span class="chip">★ '+esc(d.rating)+(d.rating_source?' '+esc(d.rating_source.replace('themoviedb','TMDb')):'')+'</span>');
+  if(!d.imdb_rating&&d.imdb_url)chips.push('<a class="chip imdb" href="'+esc(d.imdb_url)+'" target="_blank" rel="noopener">IMDb</a>');
+  if(d.mpaa)chips.push('<span class="chip">'+esc(d.mpaa)+'</span>');
+  d.genres.forEach(g=>chips.push('<span class="chip">'+esc(g)+'</span>'));
+  const facts=[];
+  if(d.directors.length)facts.push('<b>Director</b> '+esc(d.directors.join(', ')));
+  if(d.cast.length)facts.push('<b>Cast</b> '+esc(d.cast.map(c=>c.name).join(', ')));
+  if(d.studio.length)facts.push('<b>Studio</b> '+esc(d.studio.join(', ')));
+  if(d.imdb_votes)facts.push('<b>IMDb votes</b> '+esc(Number(d.imdb_votes).toLocaleString()));
+  const play=(d.resume?'<button class="btn" data-dplay="'+esc(d.id)+'" data-resume="1">Resume at '+fmtTime(d.resume)+'</button><button class="btn ghost" data-dplay="'+esc(d.id)+'">Start over</button>':'<button class="btn" data-dplay="'+esc(d.id)+'">Play on Kodi</button>');
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button>'+
+    (d.fanart?'<button class="fan" data-view="'+esc(d.fanart)+'" aria-label="View backdrop full size">'+artTag(d.fanart)+'</button>':'<div class="fan" style="aspect-ratio:3/1"></div>')+
+    '<div class="dhead"><button class="dposter" data-view="'+esc(d.poster)+'" aria-label="View poster full size">'+artTag(d.poster)+'</button><div class="dtitle"><h2>'+esc(d.title)+'</h2><div class="m">'+esc(meta)+'</div></div></div>'+
+    (chips.length?'<div class="chips">'+chips.join('')+'</div>':'')+
+    '<div class="dbody">'+(d.tagline?'<p class="tagline">'+esc(d.tagline)+'</p>':'')+'<p class="plot">'+(esc(d.plot)||'<span style="color:var(--muted)">No synopsis in Kodi for this one.</span>')+'</p>'+
+    (facts.length?'<div class="facts">'+facts.join('<br>')+'</div>':'')+'<div class="row">'+play+'</div></div>';
+  panel.scrollTop=0;hydrateArt(panel);
 }
 
 // ---------- Kodi ----------
@@ -1475,7 +1609,7 @@ let kodiRecent=[],kodiMovies=null,kodiLoading=false;
 function runtimeText(sec){if(!sec)return '';const m=Math.round(sec/60);return m>=60?Math.floor(m/60)+'h '+(m%60)+'m':m+'m'}
 function movieRow(mv){
   const meta=[mv.year,runtimeText(mv.runtime),mv.resume?'resume at '+fmtTime(mv.resume):(mv.watched?'watched':'')].filter(Boolean).join(' · ');
-  return '<div class="qrow"><div class="info"><div class="t">'+esc(mv.title)+'</div><div class="m">'+esc(meta)+'</div></div>'+
+  return '<div class="qrow"><button class="pthumb" data-detail="'+esc(mv.id)+'" aria-label="Details for '+esc(mv.title)+'">'+artTag(mv.poster)+'</button><div class="info tap" data-detail="'+esc(mv.id)+'"><div class="t">'+esc(mv.title)+'</div><div class="m">'+esc(meta)+'</div></div>'+
     (mv.resume?'<button class="btn ghost sm" style="flex:none" data-play="'+esc(mv.id)+'" data-resume="1">Resume</button>':'')+
     '<button class="icon-btn play" data-play="'+esc(mv.id)+'" aria-label="Play '+esc(mv.title)+(mv.resume?' from the start':'')+'">'+ICON.play+'</button></div>';
 }
@@ -1485,7 +1619,7 @@ async function renderKodiList(resetPage){
   if(resetPage)kodiShown=KODI_PAGE;
   const q=$('kodifilter').value.trim().toLowerCase(),view=$('kodiview').value,title=$('kodilisttitle'),list=$('kodilist'),more=$('kodimore');
   more.classList.add('hidden');
-  if(!q&&view==='recent'){title.textContent='RECENTLY ADDED';list.innerHTML=kodiRecent.map(movieRow).join('')||empty('No movies yet','Run a library scan once something finishes downloading.');return}
+  if(!q&&view==='recent'){title.textContent='RECENTLY ADDED';list.innerHTML=kodiRecent.map(movieRow).join('')||empty('No movies yet','Run a library scan once something finishes downloading.');hydrateArt(list);return}
   if(kodiMovies===null){
     if(kodiLoading)return;kodiLoading=true;title.textContent='LOADING LIBRARY…';
     try{kodiMovies=(await api('/api/kodi/movies')).movies||[]}catch(e){title.textContent='';list.innerHTML=empty('Couldn\'t load the library',e.message);return}finally{kodiLoading=false}
@@ -1499,7 +1633,7 @@ async function renderKodiList(resetPage){
   if(view==='year')a.sort((x,y)=>(y.year||0)-(x.year||0)||x.title.localeCompare(y.title));
   const label=q?'MATCH'+(a.length===1?'':'ES'):(view==='all'?'MOVIES':KODI_VIEWS[view]);
   title.textContent=a.length+' '+label+(q&&view!=='all'&&view!=='recent'?' · '+KODI_VIEWS[view]:'');
-  list.innerHTML=a.slice(0,kodiShown).map(movieRow).join('')||empty(q?'No matches':'Nothing here',q?'Try part of the title.':'No movies fit this view.');
+  list.innerHTML=a.slice(0,kodiShown).map(movieRow).join('')||empty(q?'No matches':'Nothing here',q?'Try part of the title.':'No movies fit this view.');hydrateArt(list);
   if(a.length>kodiShown){more.textContent='Show more ('+(a.length-kodiShown)+' left)';more.classList.remove('hidden')}
 }
 async function refreshKodi(){
@@ -1510,11 +1644,11 @@ async function refreshKodi(){
     $('kodiscan').classList.remove('hidden');
     if(!d.online){st.className='lede status error';st.textContent=d.error||'Kodi is offline.';$('kodinow').innerHTML='';$('kodilib').classList.add('hidden');return}
     const c=d.counts||{};st.className='lede';st.textContent=(c.movies||0)+' movies · '+(c.episodes||0)+' episodes';
-    $('kodinow').innerHTML=nowCard(d.playing,false);
+    $('kodinow').innerHTML=nowCard(d.playing,false);hydrateArt($('kodinow'));
     kodiRecent=d.recent||[];kodiMovies=null;$('kodilib').classList.remove('hidden');renderKodiList(true);
   }catch(e){st.className='lede status error';st.textContent=e.message}
 }
-async function refreshKodiNow(){try{const d=await api('/api/kodi/now');$('kodinow').innerHTML=nowCard(d.playing,false)}catch{}}
+async function refreshKodiNow(){try{const d=await api('/api/kodi/now');$('kodinow').innerHTML=nowCard(d.playing,false);hydrateArt($('kodinow'))}catch{}}
 async function kodiControl(action,pid){
   try{await api('/api/kodi/control',{action,playerid:Number(pid)});setTimeout(()=>{if(activeTab==='kodi')refreshKodiNow();else refreshHome()},400)}catch(e){toast(e.message,true)}
 }
@@ -1535,6 +1669,15 @@ function bind(){
   document.addEventListener('click',e=>{const b=e.target.closest('[data-kact]');if(b)kodiControl(b.dataset.kact,b.dataset.pid)});
   $('homedl').addEventListener('click',async e=>{const b=e.target.closest('[data-hact]');if(!b)return;b.disabled=true;await queueAll(b.dataset.hact);refreshHome()});
   $('kodilist').addEventListener('click',e=>{const b=e.target.closest('[data-play]');if(b)playMovie(b.dataset.play,b.dataset.resume==='1')});
+  document.addEventListener('click',e=>{const b=e.target.closest('[data-detail]');if(b&&!e.target.closest('#sheet'))openDetail(b.dataset.detail)});
+  $('sheet').addEventListener('click',e=>{
+    if(e.target===$('sheet')||e.target.closest('[data-close]'))return closeSheet();
+    const v=e.target.closest('[data-view]');if(v&&v.dataset.view)return openViewer(v.dataset.view);
+    const p=e.target.closest('[data-dplay]');if(p){playMovie(p.dataset.dplay,p.dataset.resume==='1');closeSheet()}
+  });
+  $('viewer').addEventListener('click',()=>$('viewer').classList.add('hidden'));
+  window.addEventListener('popstate',()=>{if(!$('viewer').classList.contains('hidden'))$('viewer').classList.add('hidden');closeSheet(true)});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(!$('viewer').classList.contains('hidden'))$('viewer').classList.add('hidden');else closeSheet()}});
   let kodiTimer=null;$('kodifilter').addEventListener('input',()=>{clearTimeout(kodiTimer);kodiTimer=setTimeout(()=>renderKodiList(true),200)});
   $('kodiview').value=LS.get('nzb_mobile_kodiview','recent');if(!$('kodiview').value)$('kodiview').value='recent';
   $('kodiview').addEventListener('change',()=>{LS.set('nzb_mobile_kodiview',$('kodiview').value);window.scrollTo(0,0);renderKodiList(true)});
@@ -1576,7 +1719,7 @@ SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "Content-Security-Policy": (
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; "
+        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' blob:; manifest-src 'self'; "
         "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     ),
 }
@@ -1714,6 +1857,15 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, self._kodi_overview())
         elif path == "/api/kodi/now":
             self.send_json(200, {"playing": kodi_now_playing() if kodi_configured() else None})
+        elif path == "/api/kodi/art":
+            ref = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("u", [""])[0]
+            raw, ctype = kodi_art(ref)
+            self._send(200, raw, ctype, {"Cache-Control": "private, max-age=604800"})
+        elif path == "/api/kodi/movie":
+            movieid = to_int(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
+            if movieid <= 0:
+                raise ValueError("Invalid movie.")
+            self.send_json(200, kodi_movie_details(movieid))
         elif path == "/api/kodi/movies":
             res = kodi_call("VideoLibrary.GetMovies", {"properties": KODI_MOVIE_PROPS,
                             "sort": {"method": "sorttitle", "order": "ascending", "ignorearticle": True}}, timeout=20) or {}
