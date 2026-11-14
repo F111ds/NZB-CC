@@ -8,9 +8,9 @@ A phone version of NZB Command Center, served on your home network:
   * Queue  - SABnzbd queue and history (pause, delete, retry, speed limit)
   * Kodi   - now playing with a full remote, movies and TV shows (continue watching,
              next episode, missing episodes), "find a better copy" for a movie
-  * More   - download stats, Plex/Jellyfin streams, saved searches, phone alerts (ntfy)
+  * More   - download stats, saved searches, phone alerts (ntfy)
 It reads the SAME nzb_manager_config.json (and DPAPI-protected keys) as the desktop
-app, including its Kodi and media-server settings, and never modifies it. Phone-only
+app, including its Kodi settings, and never modifies it. Phone-only
 settings (alerts, saved searches) live in mobile_settings.json. Add the page to your
 phone's home screen to open it like an app.
 
@@ -242,7 +242,7 @@ class ConfigError(RuntimeError):
 
 _KNOWN_SECRETS: frozenset[str] = frozenset()
 _EXTRA_SECRETS: frozenset[str] = frozenset()  # phone-only secrets (the ntfy access token)
-_SECRET_QS = re.compile(r"(?i)\b(apikey|api_key|passkey|token|r|x-plex-token)=([^&\s'\"<>]+)")
+_SECRET_QS = re.compile(r"(?i)\b(apikey|api_key|passkey|token|r)=([^&\s'\"<>]+)")
 
 
 def redact(text) -> str:
@@ -492,22 +492,11 @@ def load_config(path: Path | None = None) -> dict:
     kodi = {"url": normalize_kodi_url(str(data.get("kodi_url") or "")),
             "user": str(data.get("kodi_username") or ""), "password": kodi_pw}
 
-    media_token = ""
-    try:
-        media_token = _dpapi_unprotect(str(data.get("media_server_token") or "")).strip()
-    except ConfigError:
-        log.warning("Media server token could not be decrypted; Plex/Jellyfin will be unavailable.")
-    media_url = str(data.get("media_server_url") or "").strip().rstrip("/")
-    if media_url and not media_url.startswith(("http://", "https://")):
-        media_url = "http://" + media_url
-    media_type = "Plex" if str(data.get("media_server_type") or "").lower() == "plex" else "Jellyfin"
-    media = {"type": media_type, "url": media_url, "token": media_token}
-
     global _KNOWN_SECRETS
     # Swap in a complete new set at once, so a concurrent redact() never sees an empty/partial set.
     _KNOWN_SECRETS = frozenset([sab_key] + [ix["api_key"] for ix in indexers if ix["api_key"]]
-                               + [s for s in (kodi_pw, media_token) if s])
-    return {"sab_url": sab_url, "sab_api_key": sab_key, "indexers": indexers, "kodi": kodi, "media": media}
+                               + ([kodi_pw] if kodi_pw else []))
+    return {"sab_url": sab_url, "sab_api_key": sab_key, "indexers": indexers, "kodi": kodi}
 
 
 _cfg_lock = threading.Lock()
@@ -666,6 +655,29 @@ def normalize_kodi_url(url: str) -> str:
     return url
 
 
+BACKEND_RETRY_SECONDS = 20
+_down_lock = threading.Lock()
+_backend_down: dict[str, tuple[float, str]] = {}
+
+
+def backend_recently_down(key: str) -> str:
+    """The error from a connection failure in the last few seconds, or "" (so polls don't wait on a dead host)."""
+    with _down_lock:
+        entry = _backend_down.get(key)
+        if entry and time.monotonic() < entry[0]:
+            return entry[1]
+        _backend_down.pop(key, None)
+        return ""
+
+
+def mark_backend(key: str, error: str = "") -> None:
+    with _down_lock:
+        if error:
+            _backend_down[key] = (time.monotonic() + BACKEND_RETRY_SECONDS, error)
+        else:
+            _backend_down.pop(key, None)
+
+
 def kodi_configured() -> bool:
     return bool(get_config()["kodi"]["url"])
 
@@ -680,6 +692,10 @@ def kodi_call(method: str, params: dict | None = None, timeout: float = 6):
     headers = {"Content-Type": "application/json"}
     if k["user"] or k["password"]:
         headers["Authorization"] = "Basic " + base64.b64encode(f"{k['user']}:{k['password']}".encode()).decode("ascii")
+    down_key = "kodi|" + k["url"]
+    recent = backend_recently_down(down_key)
+    if recent:
+        raise UpstreamError(recent)
     try:
         raw = http_fetch(k["url"] + "/jsonrpc", timeout=timeout, max_bytes=MAX_KODI_BYTES,
                          data=json.dumps(payload).encode("utf-8"), headers=headers)
@@ -690,8 +706,10 @@ def kodi_call(method: str, params: dict | None = None, timeout: float = 6):
         # Only genuine connection failures mean "Kodi is off"; anything else (an HTTP error,
         # a response over the size limit, ...) is reported as-is so it isn't misdiagnosed.
         if msg.startswith(("Connection failed", "Network error")):
+            mark_backend(down_key, "Can't reach Kodi — is it on?")
             raise UpstreamError("Can't reach Kodi — is it on?") from None
         raise UpstreamError(f"Kodi: {msg}") from None
+    mark_backend(down_key)
     try:
         body = json.loads(raw.decode("utf-8", errors="replace"))
     except ValueError:
@@ -1013,10 +1031,22 @@ def _kodi_episode(e: dict) -> dict:
             "runtime": to_int(e.get("runtime")), "aired": str(e.get("firstaired") or "")[:10]}
 
 
+MAX_GAP_EPISODE = 500  # beyond this the numbering is dates/absolute numbers, not real gaps
+
+
 def episode_gaps(numbers) -> list[int]:
-    """Episode numbers missing before the highest one Kodi has (Kodi can't know about later ones)."""
+    """Episode numbers missing before the highest one Kodi has (Kodi can't know about later ones).
+
+    Seasons numbered by date (e.g. E20241113) or with stray huge numbers are skipped: listing
+    "gaps" there would be meaningless and could mean building a list of millions of numbers.
+    """
     have = {n for n in numbers if n > 0}
-    return [n for n in range(1, max(have)) if n not in have] if have else []
+    if not have:
+        return []
+    top = max(have)
+    if top > MAX_GAP_EPISODE or top > 3 * len(have) + 10:
+        return []
+    return [n for n in range(1, top) if n not in have]
 
 
 def next_episode(episodes: list[dict]) -> dict | None:
@@ -1433,127 +1463,6 @@ def download_indexer_nzb(item: dict) -> tuple[bytes, str]:
         except UpstreamError as exc:
             errors.append(f"{indexer['name']}: {exc}")
     raise UpstreamError("; ".join(errors) or "No download source is available for this result.")
-
-
-# ==============================================================================
-# 5b. PLEX / JELLYFIN (same settings as the desktop app's Media Server tab)
-# ==============================================================================
-
-_media_user_cache: dict[str, str] = {}
-
-
-def media_configured() -> bool:
-    m = get_config()["media"]
-    return bool(m["url"] and m["token"])
-
-
-def media_call(path: str, params: dict | None = None, timeout: float = 8):
-    m = get_config()["media"]
-    if not (m["url"] and m["token"]):
-        raise UpstreamError("No media server is set up — add one in the desktop app's Media Server tab.")
-    headers = {"Accept": "application/json", ("X-Plex-Token" if m["type"] == "Plex" else "X-Emby-Token"): m["token"]}
-    url = m["url"] + path + ("?" + urllib.parse.urlencode(params) if params else "")
-    try:
-        raw = http_fetch(url, timeout=timeout, max_bytes=MAX_KODI_BYTES, headers=headers)
-    except UpstreamError as exc:
-        msg = str(exc)
-        if msg.startswith(("Connection failed", "Network error")):
-            raise UpstreamError(f"Can't reach {m['type']} — is it running?") from None
-        raise UpstreamError(f"{m['type']}: {msg}") from None
-    if not raw.strip():
-        return {}
-    try:
-        return json.loads(raw.decode("utf-8", errors="replace"))
-    except ValueError:
-        raise UpstreamError(f"{m['type']} returned an unreadable response.") from None
-
-
-def _media_session(title: str, sub: str, user: str, device: str, paused: bool, pos_s: float, dur_s: float, method: str) -> dict:
-    return {"title": title, "sub": sub, "user": user, "device": device, "paused": paused, "method": method,
-            "time": int(pos_s), "total": int(dur_s), "pct": round(min(100.0, pos_s / dur_s * 100), 1) if dur_s > 0 else 0.0}
-
-
-def media_sessions() -> list[dict]:
-    m = get_config()["media"]
-    out = []
-    if m["type"] == "Plex":
-        for x in _kdict(_kdict(media_call("/status/sessions")).get("MediaContainer")).get("Metadata") or []:
-            x = _kdict(x)
-            player, user = _kdict(x.get("Player")), _kdict(x.get("User"))
-            episode = x.get("type") == "episode"
-            out.append(_media_session(
-                str(x.get("grandparentTitle") if episode else x.get("title") or "Playing"),
-                f"S{to_int(x.get('parentIndex')):02d}E{to_int(x.get('index')):02d} · {x.get('title') or ''}" if episode else str(x.get("year") or ""),
-                str(user.get("title") or "User"), str(player.get("product") or player.get("title") or "Plex"),
-                str(player.get("state") or "").lower() == "paused",
-                to_float(x.get("viewOffset")) / 1000, to_float(x.get("duration")) / 1000,
-                "Transcode" if x.get("TranscodeSession") else "Direct play"))
-        return out
-    sessions = media_call("/Sessions")
-    for s in sessions if isinstance(sessions, list) else []:
-        item = _kdict(_kdict(s).get("NowPlayingItem"))
-        if not item:
-            continue
-        ps = _kdict(s.get("PlayState"))
-        episode = item.get("Type") == "Episode"
-        out.append(_media_session(
-            str(item.get("SeriesName") if episode else item.get("Name") or "Playing"),
-            f"S{to_int(item.get('ParentIndexNumber')):02d}E{to_int(item.get('IndexNumber')):02d} · {item.get('Name') or ''}" if episode else str(item.get("ProductionYear") or ""),
-            str(s.get("UserName") or "User"), f"{s.get('Client') or 'Client'} · {s.get('DeviceName') or 'Device'}",
-            bool(ps.get("IsPaused")), to_float(ps.get("PositionTicks")) / 1e7, to_float(item.get("RunTimeTicks")) / 1e7,
-            "Transcode" if s.get("TranscodingInfo") or ps.get("PlayMethod") == "Transcode" else "Direct play"))
-    return out
-
-
-def media_recent(limit: int = 12) -> list[dict]:
-    m = get_config()["media"]
-    out = []
-    if m["type"] == "Plex":
-        mc = _kdict(_kdict(media_call("/library/recentlyAdded", {"X-Plex-Container-Start": 0, "X-Plex-Container-Size": limit})).get("MediaContainer"))
-        for x in (mc.get("Metadata") or [])[:limit]:
-            x = _kdict(x)
-            kind = str(x.get("type") or "")
-            if kind == "episode":
-                title, sub = x.get("grandparentTitle"), f"S{to_int(x.get('parentIndex')):02d}E{to_int(x.get('index')):02d} · {x.get('title') or ''}"
-            elif kind == "season":
-                title, sub = x.get("parentTitle"), str(x.get("title") or "")
-            else:
-                title, sub = x.get("title"), str(x.get("year") or "")
-            out.append({"title": str(title or "Untitled"), "sub": sub, "kind": kind})
-        return out
-    key = f"{m['url']}|{m['token']}"
-    uid = _media_user_cache.get(key, "")
-    if not uid:
-        users = media_call("/Users")
-        users = [u for u in users if isinstance(u, dict)] if isinstance(users, list) else []
-        admin = next((u for u in users if _kdict(u.get("Policy")).get("IsAdministrator")), users[0] if users else {})
-        uid = str(admin.get("Id") or "")
-        if not re.fullmatch(r"[A-Za-z0-9\-]{1,64}", uid):
-            raise UpstreamError("Jellyfin didn't list any users for this API key.")
-        _media_user_cache[key] = uid
-    items = media_call(f"/Users/{uid}/Items/Latest", {"Limit": limit, "Fields": "ProductionYear"})
-    for x in (items if isinstance(items, list) else [])[:limit]:
-        x = _kdict(x)
-        if x.get("Type") == "Episode":
-            title, sub = x.get("SeriesName"), f"S{to_int(x.get('ParentIndexNumber')):02d}E{to_int(x.get('IndexNumber')):02d} · {x.get('Name') or ''}"
-        else:
-            title, sub = x.get("Name"), str(x.get("ProductionYear") or "")
-        out.append({"title": str(title or "Untitled"), "sub": sub, "kind": str(x.get("Type") or "").lower()})
-    return out
-
-
-def media_overview(with_recent: bool = True) -> dict:
-    if not media_configured():
-        return {"configured": False}
-    m = get_config()["media"]
-    info: dict = {"configured": True, "type": m["type"], "online": True}
-    try:
-        info["sessions"] = media_sessions()
-        if with_recent:
-            info["recent"] = media_recent()
-    except UpstreamError as exc:
-        info.update(online=False, error=str(exc))
-    return info
 
 
 # ==============================================================================
@@ -2159,7 +2068,6 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <div class="tiles"><div class="tile"><div class="k">Done today</div><div class="v" id="hdone">—</div></div><div class="tile"><div class="k">Free space</div><div class="v" id="hfree">—</div></div><div class="tile"><div class="k">Failed today</div><div class="v" id="hfail">—</div></div></div>
 <button class="shortcut" data-tab="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search your indexers…</button>
 <div id="homekodi"></div>
-<div id="homemedia"></div>
 </section>
 <section id="search" class="hidden">
 <h1>Search</h1><p class="lede">Your indexers, from anywhere at home.</p>
@@ -2223,10 +2131,9 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 </div>
 </section>
 <section id="more" class="hidden">
-<h1>More</h1><p class="lede">Stats, streams, saved searches and alerts.</p>
+<h1>More</h1><p class="lede">Stats, saved searches and alerts.</p>
 <div class="section">DOWNLOADS</div>
 <div id="statsbox"></div>
-<div id="mediawrap" class="hidden"><div class="section" id="mediatitle">MEDIA SERVER</div><div id="mediabox"></div></div>
 <div class="section">SAVED SEARCHES</div>
 <div id="savedbox"></div>
 <div class="section">PHONE ALERTS</div>
@@ -2371,14 +2278,16 @@ let upgradeFrom=null;
 const RES_RANK={'2160p':4,'1080p':3,'720p':2,'SD':1};
 function resOf(title){const m=String(title).match(/\b(2160p|1080p|720p)\b/i);return m?m[1].toLowerCase():(/\b(4k|uhd)\b/i.test(title)?'2160p':'')}
 function isUpgrade(title){
-  if(!upgradeFrom)return false;
-  const have=RES_RANK[upgradeFrom.q]||0,res=RES_RANK[resOf(title)]||0;
+  if(!upgradeFrom||!RES_RANK[upgradeFrom.q])return false;  // unknown quality of your copy: don't guess
+  const have=RES_RANK[upgradeFrom.q],res=RES_RANK[resOf(title)]||0;
   if(res>have)return true;
   return res===have&&res>0&&!upgradeFrom.hdr&&/\b(hdr|dv|dovi|dolby.?vision)\b/i.test(title);
 }
 function goSearch(q,opts){
   opts=opts||{};showTab('search');$('query').value=q;
-  if(opts.category&&[...$('category').options].some(o=>o.value===opts.category))$('category').value=opts.category;
+  // Use the requested category; if this indexer doesn't offer it, search all categories rather
+  // than silently keeping an unrelated one (e.g. a movie search inside "TV > HD").
+  if(opts.category!==undefined)$('category').value=[...$('category').options].some(o=>o.value===opts.category)?opts.category:'';
   search(opts);
 }
 async function search(extra){
@@ -2515,8 +2424,6 @@ async function refreshHome(){
     $('hfree').innerHTML=d.disk_free_gb!=null&&d.disk_free_gb>=0?esc(Number(d.disk_free_gb).toFixed(0))+' <small>GB</small>':'—';
     const k=d.kodi||{};
     $('homekodi').innerHTML=!k.configured?'':(k.online?nowCard(k.playing,true):'<button class="card kidle" data-tab="kodi">'+ICON.play+'<span>Kodi is offline</span></button>');hydrateArt($('homekodi'));
-    const md=d.media||{};
-    $('homemedia').innerHTML=md.configured&&md.streams?'<button class="card kidle" data-tab="more">'+ICON.play+'<span>'+esc(md.streams)+' streaming on '+esc(md.type)+' · see who</span></button>':'';
     setMoreBadge(d.saved_new);
   }catch(e){$('homestatus').className='lede status error';$('homestatus').textContent=e.message}
   finally{homeBusy=false}
@@ -2743,7 +2650,7 @@ async function queueItemChange(action,value){
 // ---------- More tab ----------
 function fmtBytes(n){n=Number(n)||0;const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return (i?n.toFixed(n<10?1:0):n)+' '+u[i]}
 function setMoreBadge(n){const c=$('morecount');c.textContent=n||'';c.classList.toggle('hidden',!n)}
-function refreshMore(){loadStats();loadMedia();loadSaved();loadSettings()}
+function refreshMore(){loadStats();loadSaved();loadSettings()}
 async function loadStats(){
   const box=$('statsbox');if(!box.innerHTML)box.innerHTML=skeleton(1,3);
   let d;try{d=await api('/api/stats')}catch(e){box.innerHTML='<div class="card status error" style="margin:0 0 12px">'+esc(e.message)+'</div>';return}
@@ -2759,16 +2666,6 @@ async function loadStats(){
     '<div class="card"><div class="row" style="align-items:baseline"><b style="font-size:14px">Last 7 days</b><span class="hint" style="text-align:right">'+wk.done+' finished · '+wk.failed+' failed</span></div>'+
     '<div class="chart" role="img" aria-label="Downloads per day for the last 7 days">'+cols+'</div>'+
     '<div class="legend"><span><i style="background:var(--teal)"></i>Finished</span><span><i style="background:var(--red)"></i>Failed</span></div><div class="ctip" id="ctip">Tap a day for details · all time '+esc(fmtBytes(t.total))+'</div></div>';
-}
-async function loadMedia(){
-  let d;try{d=await api('/api/media')}catch(e){d={configured:true,online:false,error:e.message}}
-  $('mediawrap').classList.toggle('hidden',!d.configured);if(!d.configured)return;
-  $('mediatitle').textContent=(d.type||'MEDIA SERVER').toUpperCase();
-  if(!d.online){$('mediabox').innerHTML='<div class="card status error" style="margin:0 0 12px">'+esc(d.error||'Offline')+'</div>';return}
-  const ss=d.sessions||[],rec=d.recent||[];
-  let h=ss.length?ss.map(s=>'<div class="mrow"><div class="row" style="align-items:flex-start"><div style="min-width:0"><div class="t">'+esc(s.title)+'</div>'+(s.sub?'<div class="m">'+esc(s.sub)+'</div>':'')+'</div><span class="tag '+(s.paused?'warn':'ok')+'" style="flex:none">'+(s.paused?'PAUSED':'PLAYING')+'</span></div><div class="bar thin"><span style="width:'+clampPct(s.pct)+'%"></span></div><div class="m" style="margin-top:6px">'+esc(s.user+' · '+s.device+' · '+s.method+' · '+fmtTime(s.time)+' / '+fmtTime(s.total))+'</div></div>').join(''):'<div class="card hint" style="margin-bottom:8px">Nobody is streaming right now.</div>';
-  if(rec.length)h+='<div class="card" style="padding:4px 14px"><div class="kode" style="padding:10px 0 4px">RECENTLY ADDED</div>'+rec.map(r=>'<div class="eprow"><div class="info"><div class="t">'+esc(r.title)+'</div>'+(r.sub?'<div class="m">'+esc(r.sub)+'</div>':'')+'</div></div>').join('')+'</div>';
-  $('mediabox').innerHTML=h;
 }
 function savedRow(x){
   const when=x.last_run?'checked '+relAge(x.last_run):'not checked yet';
@@ -2847,7 +2744,7 @@ function bind(){
     const v=e.target.closest('[data-view]');if(v&&v.dataset.view)return openViewer(v.dataset.view);
     const p=e.target.closest('[data-dplay]');if(p){playMovie(p.dataset.dplay,p.dataset.resume==='1');closeSheet();return}
     if(e.target.closest('[data-better]')&&detailMovie){
-      const d=detailMovie;upgradeFrom={q:d.quality,hdr:d.hdr};closeSheet();
+      const d=detailMovie;upgradeFrom=RES_RANK[d.quality]?{q:d.quality,hdr:d.hdr}:null;closeSheet();
       goSearch(d.title+(d.year?' '+d.year:''),{imdbid:d.imdb_id||'',category:'2000',keepUpgrade:true});return;
     }
     const qp=e.target.closest('[data-qprio]');if(qp)return queueItemChange('priority',qp.dataset.qprio);
@@ -2865,7 +2762,6 @@ function bind(){
   $('savedbox').addEventListener('click',e=>{const row=e.target.closest('[data-saved]'),b=e.target.closest('[data-sact]');if(row&&b)savedAction(row.dataset.saved,b.dataset.sact,b)});
   const showTip=e=>{const c=e.target.closest('.chart .col');if(c&&$('ctip'))$('ctip').textContent=c.dataset.tip};
   $('statsbox').addEventListener('click',showTip);$('statsbox').addEventListener('mouseover',showTip);$('statsbox').addEventListener('focusin',showTip);
-  setInterval(()=>{if(!document.hidden&&activeTab==='more'&&!$('app').classList.contains('hidden'))loadMedia()},15000);
   $('viewer').addEventListener('click',()=>$('viewer').classList.add('hidden'));
   window.addEventListener('popstate',()=>{if(!$('viewer').classList.contains('hidden'))$('viewer').classList.add('hidden');closeSheet(true)});
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(!$('viewer').classList.contains('hidden'))$('viewer').classList.add('hidden');else closeSheet()}});
@@ -3061,8 +2957,6 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, kodi_show_details(show_id))
         elif path == "/api/kodi/missing":
             self.send_json(200, {"missing": kodi_missing_episodes()})
-        elif path == "/api/media":
-            self.send_json(200, media_overview())
         elif path == "/api/stats":
             self.send_json(200, sab_stats())
         elif path == "/api/saved":
@@ -3182,6 +3076,19 @@ class MobileHandler(BaseHTTPRequestHandler):
     def _home(self) -> dict:
         """One call for the Home tab: SABnzbd summary, today's totals and what Kodi is playing."""
         out: dict = {"sab_ok": True}
+        # Kodi is asked in parallel with SABnzbd, so a slow or switched-off Kodi doesn't add
+        # its timeout on top of SABnzbd's.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            kodi_future = pool.submit(self._kodi_brief)
+            self._home_sab(out)
+            try:
+                out["kodi"] = kodi_future.result()
+            except ConfigError:
+                out["kodi"] = {"configured": False}
+        out["saved_new"] = sum(len(x.get("new") or []) for x in load_settings()["saved_searches"])
+        return out
+
+    def _home_sab(self, out: dict) -> None:
         try:
             q = sab_request("queue", {"limit": 5}).get("queue", {})
             kb = to_float(q.get("kbpersec"), -1.0)
@@ -3205,12 +3112,6 @@ class MobileHandler(BaseHTTPRequestHandler):
             out["failed_today"] = sum(1 for x in today if str(x.get("status")).lower() == "failed")
         except (UpstreamError, ConfigError) as exc:
             out.update({"sab_ok": False, "sab_error": redact(exc), "state": "Offline", "speed": "", "total": 0})
-        out["kodi"] = self._kodi_brief()
-        media = media_overview(with_recent=False)
-        out["media"] = {"configured": media.get("configured", False), "type": media.get("type", ""),
-                        "streams": len(media.get("sessions") or [])}
-        out["saved_new"] = sum(len(x.get("new") or []) for x in load_settings()["saved_searches"])
-        return out
 
     def _kodi_brief(self) -> dict:
         if not kodi_configured():

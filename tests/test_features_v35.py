@@ -1,5 +1,5 @@
-"""Phone app 3.5: TV shows, remote, smarter search, queue options, Plex/Jellyfin, alerts,
-saved searches, stats and autostart - against fake Kodi / SABnzbd / indexer / media / ntfy servers."""
+"""Phone app 3.5: TV shows, remote, smarter search, queue options, alerts, saved searches,
+stats and autostart - against fake Kodi / SABnzbd / indexer / ntfy servers."""
 import sys as _sys
 from pathlib import Path as _Path
 ROOT = _Path(__file__).resolve().parents[1]
@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import mobile_server as m
 
-log = {"kodi": [], "sab": [], "idx": [], "ntfy": [], "media": []}
+log = {"kodi": [], "sab": [], "idx": [], "ntfy": []}
 now = int(time.time())
 
 EPISODES = [  # show 1: S01E01-E03 watched, E04 started, E06 (E05 missing); S02E02 (E01 missing); show 2 fully watched
@@ -87,27 +87,6 @@ Indexer.no_tv = False
 Indexer.titles = ["Severance.S01E05.1080p.WEB"]
 
 
-class Media(BaseHTTPRequestHandler):
-    def log_message(self, *a): pass
-    def do_GET(self):
-        log["media"].append((self.path, self.headers.get("X-Emby-Token"), self.headers.get("X-Plex-Token")))
-        path = urllib.parse.urlsplit(self.path).path
-        if path == "/Sessions":
-            return reply(self, 200, [{"Id": "s1", "UserName": "sam", "Client": "Web", "DeviceName": "Firefox",
-                                      "NowPlayingItem": {"Type": "Episode", "SeriesName": "Andor", "Name": "One Way Out", "ParentIndexNumber": 1, "IndexNumber": 10, "RunTimeTicks": 36_000_000_000},
-                                      "PlayState": {"PositionTicks": 18_000_000_000, "IsPaused": False, "PlayMethod": "DirectPlay"}}, {"Id": "idle"}])
-        if path == "/Users":
-            return reply(self, 200, [{"Id": "u-1", "Policy": {"IsAdministrator": True}}])
-        if path == "/Users/u-1/Items/Latest":
-            return reply(self, 200, [{"Type": "Movie", "Name": "Arrival", "ProductionYear": 2016}])
-        if path == "/status/sessions":
-            return reply(self, 200, {"MediaContainer": {"Metadata": [{"type": "movie", "title": "Heat", "year": 1995, "duration": 600000, "viewOffset": 150000,
-                                                                       "User": {"title": "kim"}, "Player": {"product": "Plex Web", "state": "paused"}}]}})
-        if path == "/library/recentlyAdded":
-            return reply(self, 200, {"MediaContainer": {"Metadata": [{"type": "episode", "grandparentTitle": "Andor", "parentIndex": 2, "index": 1, "title": "One Year Later"}]}})
-        reply(self, 404, {})
-
-
 class Ntfy(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_POST(self):
@@ -117,12 +96,11 @@ class Ntfy(BaseHTTPRequestHandler):
 
 def serve(h):
     s = ThreadingHTTPServer(("127.0.0.1", 0), h); threading.Thread(target=s.serve_forever, daemon=True).start(); return s
-kodi, sab, idx, media, ntfy, app = (serve(h) for h in (Kodi, Sab, Indexer, Media, Ntfy, m.MobileHandler))
+kodi, sab, idx, ntfy, app = (serve(h) for h in (Kodi, Sab, Indexer, Ntfy, m.MobileHandler))
 port = lambda s: s.server_address[1]
 
 tmp = Path(tempfile.mkdtemp())
 cfg = {"sab_url": f"127.0.0.1:{port(sab)}", "sab_api_key": "plainsabkey123", "kodi_url": f"127.0.0.1:{port(kodi)}",
-       "media_server_type": "Jellyfin", "media_server_url": f"127.0.0.1:{port(media)}", "media_server_token": "mediatoken987",
        "indexers": [{"name": "Local", "url": f"http://127.0.0.1:{port(idx)}/api", "api_key": "idxkey12345"}]}
 (tmp / "nzb_manager_config.json").write_text(json.dumps(cfg))
 m.CONFIG_FILE = tmp / "nzb_manager_config.json"
@@ -205,20 +183,7 @@ assert api("/api/history/delete", {"id": "SABnzbd_nzo_old"})[0] == 200
 assert log["sab"][-1]["mode"] == "history" and log["sab"][-1]["name"] == "delete" and "del_files" not in log["sab"][-1]
 assert api("/api/history/delete", {"id": "../x"})[0] == 400
 
-# ---- Plex / Jellyfin -------------------------------------------------------------------------
-st, md = api("/api/media"); assert st == 200 and md["online"] and md["type"] == "Jellyfin", md
-assert md["sessions"] == [{"title": "Andor", "sub": "S01E10 · One Way Out", "user": "sam", "device": "Web · Firefox", "paused": False,
-                           "method": "Direct play", "time": 1800, "total": 3600, "pct": 50.0}], md["sessions"]
-assert md["recent"] == [{"title": "Arrival", "sub": "2016", "kind": "movie"}]
-assert all(x[1] == "mediatoken987" for x in log["media"]) and "mediatoken987" in m._KNOWN_SECRETS
-st, home = api("/api/home"); assert home["media"] == {"configured": True, "type": "Jellyfin", "streams": 1}, home["media"]
-cfg["media_server_type"] = "Plex"; (tmp / "nzb_manager_config.json").write_text(json.dumps(cfg)); m._cfg_state.update(mtime=None, data=None)
-st, md = api("/api/media")
-assert md["sessions"][0]["title"] == "Heat" and md["sessions"][0]["paused"] and md["sessions"][0]["pct"] == 25.0, md
-assert md["recent"] == [{"title": "Andor", "sub": "S02E01 · One Year Later", "kind": "episode"}]
-assert log["media"][-1][2] == "mediatoken987"
-media.shutdown(); media.server_close()
-st, md = api("/api/media"); assert st == 200 and not md["online"] and "Can't reach Plex" in md["error"], md
+st, home = api("/api/home"); assert "media" not in home and api("/api/media")[0] == 404
 
 # ---- Stats ---------------------------------------------------------------------------------
 Sab.history = [{"nzo_id": "a", "status": "Completed", "completed": now - 60, "bytes": 3000},
