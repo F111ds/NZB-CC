@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
-NZB Command Center - Mobile Companion (v2)
+NZB Command Center - Phone App (v3)
 
-A small LAN web page for searching your Newznab indexers and controlling SABnzbd
-from a phone. It reads the SAME nzb_manager_config.json (and DPAPI-protected keys)
-as the desktop app and never modifies it.
+A phone version of NZB Command Center, served on your home network:
+  * Home   - current download, pause/resume, today's done/failed, free space, Kodi now playing
+  * Search - your Newznab indexers, with a category drop-down per indexer; send to SABnzbd
+  * Queue  - SABnzbd queue and history (pause, delete, retry, speed limit)
+  * Kodi   - now playing (pause/stop), library scan, recently added, find and play movies
+It reads the SAME nzb_manager_config.json (and DPAPI-protected keys) as the desktop
+app, including its Kodi settings, and never modifies it. Add the page to your phone's
+home screen to open it like an app.
 
 Place this file in the SAME folder as nzb_manager_config.json.
 Standard library only (Python 3.9+).
@@ -1948,7 +1953,7 @@ def init_state() -> dict:
 
 
 def parse_args(argv=None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="NZB Command Center - Mobile Companion")
+    p = argparse.ArgumentParser(description="NZB Command Center - Phone App")
     p.add_argument("--host", default=os.environ.get("NZB_MOBILE_HOST", DEFAULT_HOST), help="address to bind (default: all interfaces)")
     p.add_argument("--port", type=int, default=int(os.environ.get("NZB_MOBILE_PORT", DEFAULT_PORT)))
     p.add_argument("--config", type=Path, default=None, help="path to nzb_manager_config.json")
@@ -1983,6 +1988,7 @@ def main(argv=None) -> None:
     print(f" Desktop config  : {CONFIG_FILE}")
     print(f" Enabled indexers: {len(cfg['indexers'])}   (config changes are picked up automatically)")
     print(f" SABnzbd         : {cfg['sab_url']}")
+    print(f" Kodi            : {cfg['kodi']['url'] or 'not set up (add it in the desktop app)'}")
     print(f" This PC         : http://127.0.0.1:{args.port}")
     print(f" Phone (Wi-Fi)   : http://{local_ip}:{args.port}")
     print()
@@ -1999,7 +2005,7 @@ def main(argv=None) -> None:
     print(f" Key file: {ACCESS_KEY_FILE}   Log: {LOG_FILE}")
     print(" To rotate the code: stop the server, delete mobile_access_key.txt, restart.")
     print()
-    print(" Keep this window open while using the mobile page. Ctrl+C stops the server.")
+    print(" Keep this window open while using the phone app. Ctrl+C stops the server.")
     print("=" * 66)
     try:
         server.serve_forever(poll_interval=0.5)
