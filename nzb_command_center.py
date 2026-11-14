@@ -21,6 +21,7 @@ import ctypes.wintypes
 import gzip
 import io
 import json
+import math
 import mimetypes
 import os
 import platform
@@ -125,6 +126,8 @@ DEFAULT_CONFIG = {
     "media_server_token": "",
     "media_server_auto_scan": True,
     "media_server_path_map": "",
+    "search_history": [],
+    "desktop_notifications": True,
 }
 
 # Keys edited live by the Media Server tab. Settings saves must never overwrite them
@@ -162,6 +165,48 @@ _SYS = platform.system()
 UI_FONT = "Segoe UI" if _SYS == "Windows" else ("SF Pro Text" if _SYS == "Darwin" else "DejaVu Sans")
 MONO_FONT = "Consolas" if _SYS == "Windows" else ("SF Mono" if _SYS == "Darwin" else "DejaVu Sans Mono")
 UI_FONT_SEMIBOLD = "Segoe UI Semibold" if _SYS == "Windows" else UI_FONT
+
+
+# --- Windows toast notifications (no extra packages) ---------------------------------------
+# Uses the WinRT toast API through Windows PowerShell 5.1, which ships with Windows 10/11.
+# The title/message travel in environment variables and are XML-escaped inside PowerShell,
+# so release names can never break or inject into the script.
+_TOAST_PS = r"""
+$ErrorActionPreference = 'Stop'
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+$t = [Security.SecurityElement]::Escape($env:NZBCC_TOAST_TITLE)
+$m = [Security.SecurityElement]::Escape($env:NZBCC_TOAST_MSG)
+$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+$xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>$t</text><text>$m</text></binding></visual></toast>")
+$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show($toast)
+"""
+
+
+def show_windows_notification(title: str, message: str) -> bool:
+    """Shows a Windows notification in the background. Returns False where unsupported."""
+    if _SYS != "Windows":
+        return False
+    env = dict(os.environ, NZBCC_TOAST_TITLE=title[:120], NZBCC_TOAST_MSG=message[:400])
+    encoded = base64.b64encode(_TOAST_PS.encode("utf-16-le")).decode("ascii")
+
+    def run() -> None:
+        try:
+            subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                 "-EncodedCommand", encoded],
+                env=env,
+                capture_output=True,
+                timeout=20,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception:
+            pass  # notifications are best-effort; never disturb the app
+
+    threading.Thread(target=run, daemon=True).start()
+    return True
 
 
 def _tint(hex_color: str, amount: float = 0.16, base: str = "#0F1E25") -> str:
@@ -540,6 +585,7 @@ SIZE_FILTER_OPTIONS = [
 ]
 
 SORT_OPTIONS = [
+    "Best Match",
     "Default (Indexer)",
     "Size: Largest First",
     "Size: Smallest First",
@@ -734,6 +780,125 @@ def detect_language(title: str, attr_lang: str = "") -> str:
         if pattern.search(title or ""):
             return label
     return "English / Untagged"
+
+
+# Plausible size ranges in GB: (min, max) per (is_tv_episode, resolution bucket)
+_EXPECTED_GB = {
+    (False, "2160p / 4K"): (10, 90), (False, "1080p"): (4, 25), (False, "720p"): (2, 10), (False, "SD / Other"): (0.6, 4),
+    (True, "2160p / 4K"): (3, 20), (True, "1080p"): (0.8, 6), (True, "720p"): (0.4, 3), (True, "SD / Other"): (0.1, 1.2),
+}
+
+
+def score_release(item: dict, in_queue: bool = False, downloaded: bool = False) -> tuple[int, list[str]]:
+    """Scores a search result 0-100 for "Best Match", with the reasons behind the score.
+
+    Quality (resolution, source, codec, HDR, repack) earns points; a size that's implausibly small
+    for its resolution (fakes, broken encodes), passworded archives, and things you already have
+    or have queued lose points. Grabs add a little confidence.
+    """
+    t = item.get("title", "")
+    pts = 0
+    why: list[str] = []
+
+    quality = item.get("quality") or detect_quality_bucket(t)
+    res_pts = {"2160p / 4K": 30, "1080p": 24, "720p": 12}.get(quality, 4)
+    pts += res_pts
+    why.append(f"{quality} +{res_pts}")
+
+    if re.search(r"\bremux\b", t, re.I):
+        src, sp = "REMUX", 20
+    elif re.search(r"\b(bluray|blu-ray|bdrip|brrip)\b", t, re.I):
+        src, sp = "BluRay", 16
+    elif re.search(r"\b(web-dl|webdl)\b", t, re.I):
+        src, sp = "WEB-DL", 14
+    elif re.search(r"\b(webrip|web)\b", t, re.I):
+        src, sp = "WEBRip", 11
+    elif re.search(r"\bhdtv\b", t, re.I):
+        src, sp = "HDTV", 6
+    elif re.search(r"\b(cam|hdcam|ts|telesync|hdts)\b", t, re.I):
+        src, sp = "CAM/TS", -25
+    else:
+        src, sp = "unknown source", 6
+    pts += sp
+    why.append(f"{src} {sp:+d}")
+
+    if re.search(r"\b(x265|h\.?265|hevc|av1)\b", t, re.I):
+        pts += 6
+        why.append("HEVC/AV1 +6")
+    elif re.search(r"\b(x264|h\.?264|avc)\b", t, re.I):
+        pts += 4
+        why.append("x264 +4")
+    if re.search(r"\b(dv|dovi|dolby[.\s_-]?vision|hdr10\+?|hdr)\b", t, re.I):
+        pts += 4
+        why.append("HDR +4")
+    if re.search(r"\b(proper|repack)\b", t, re.I):
+        pts += 2
+        why.append("repack +2")
+
+    size_gb = float(item.get("size_bytes") or 0) / 1024 ** 3
+    tv = parse_release_identity_is_tv(t)
+    is_episode = tv and bool(re.search(r"\bS\d{1,2}[\s._-]?E\d{1,3}\b|\b\d{1,2}x\d{2}\b", t, re.I))
+    if size_gb > 0 and (is_episode or not tv):
+        lo, hi = _EXPECTED_GB.get((is_episode, quality), (0, 10 ** 6))
+        if size_gb < lo * 0.5:
+            pts -= 25
+            why.append("suspiciously small -25")
+        elif size_gb < lo:
+            pts -= 6
+            why.append("small for quality -6")
+        elif size_gb > hi * 1.5:
+            pts -= 4
+            why.append("very large -4")
+
+    grabs = int(item.get("grabs_int") or 0)
+    if grabs > 0:
+        gp = min(10, round(math.log10(grabs + 1) * 4))
+        pts += gp
+        why.append(f"{grabs} grabs +{gp}")
+
+    if item.get("passworded"):
+        pts -= 40
+        why.append("passworded -40")
+
+    lib = item.get("_lib_match") or {}
+    status = lib.get("status")
+    if in_queue:
+        pts -= 50
+        why.append("already in queue -50")
+    elif downloaded:
+        pts -= 40
+        why.append("already downloaded -40")
+    elif status in ("owned", "have_better"):
+        pts -= 30
+        why.append("already in library -30")
+    elif status in ("upgrade", "corrupt"):
+        pts += 5
+        why.append("upgrade/replacement +5")
+
+    return max(0, min(100, pts)), why
+
+
+def parse_release_identity_is_tv(title: str) -> bool:
+    return bool(re.search(r"\b(S\d{1,2}([\s._-]?E\d{1,3})?|\d{1,2}x\d{2}|Season[\s._-]?\d+)\b", title or "", re.I))
+
+
+_TV_QUERY_RE = re.compile(
+    r"^(?P<show>.+?)[\s._-]+(?:S(?P<s>\d{1,2})(?:[\s._-]?E(?P<e>\d{1,3}))?|(?P<s2>\d{1,2})x(?P<e2>\d{1,3}))\s*$",
+    re.I,
+)
+
+
+def parse_tv_query(query: str) -> dict | None:
+    """'The Bear S03E01' -> show/season/episode; 'The Bear S03' -> season only; else None."""
+    m = _TV_QUERY_RE.match((query or "").strip())
+    if not m:
+        return None
+    show = m.group("show").replace(".", " ").replace("_", " ").strip(" -")
+    season = m.group("s") or m.group("s2")
+    episode = m.group("e") or m.group("e2")
+    if not show or season is None:
+        return None
+    return {"show": show, "season": int(season), "episode": int(episode) if episode else None}
 
 
 def normalize_release_key(title: str) -> str:
@@ -1253,20 +1418,53 @@ class NewznabClient:
             return list(FALLBACK_INDEXER_CATEGORIES)
         return cats
 
-    def search(self, query: str, cat_id: str = "", limit: int = 100) -> list[dict]:
+    def search(self, query: str, cat_id: str = "", limit: int = 100, offset: int = 0, mode: str = "auto") -> list[dict]:
+        """Searches the indexer. Every result carries "search_mode" ("tv" or "text").
+
+        mode="auto": a query like "The Bear S03E01" / "The Bear S03" uses the Newznab TV search
+        (t=tvsearch with season/episode), which also finds "3x01", season packs and differently
+        named releases. If the indexer doesn't support it (API error) or returns nothing, it falls
+        back to a plain text search. Pass the mode of the first page back in for "Load more", so
+        later pages come from the same kind of search. `offset` pages past the first `limit` results.
+        """
         if not self.base_url or not self.api_key:
             raise ValueError(f"URL and API key are required for '{self.name}'.")
 
-        params: dict[str, object] = {
-            "t": "search",
-            "apikey": self.api_key,
-            "limit": limit,
-        }
+        tv = parse_tv_query(query) if mode in ("auto", "tv") else None
+        if tv:
+            params: dict[str, object] = {"t": "tvsearch", "apikey": self.api_key, "limit": limit, "q": tv["show"]}
+            if tv["season"] is not None:
+                params["season"] = tv["season"]
+            if tv["episode"] is not None:
+                params["ep"] = tv["episode"]
+            if cat_id:
+                params["cat"] = cat_id
+            if offset:
+                params["offset"] = offset
+            try:
+                results = self._search_request(params, limit)
+                if results or mode == "tv":
+                    for r in results:
+                        r["search_mode"] = "tv"
+                    return results
+            except RuntimeError:
+                if mode == "tv":
+                    raise
+                # e.g. "Function not available": fall through to the plain text search
+
+        params = {"t": "search", "apikey": self.api_key, "limit": limit}
         if query.strip():
             params["q"] = query.strip()
         if cat_id:
             params["cat"] = cat_id
+        if offset:
+            params["offset"] = offset
+        results = self._search_request(params, limit)
+        for r in results:
+            r["search_mode"] = "text"
+        return results
 
+    def _search_request(self, params: dict, limit: int) -> list[dict]:
         url = f"{self.base_url}?{urllib.parse.urlencode(params)}"
         try:
             raw_bytes = _http_get_limited(url, timeout=20.0, max_bytes=MAX_API_BYTES)
@@ -2173,6 +2371,8 @@ class NzbManagerApp(ctk.CTk):
         self.selected_nzb_meta: dict | None = None
 
         self.current_search_results: list[dict] = []
+        self._search_ctx: dict | None = None  # query/offsets/modes of the last search, for "Load more"
+        self._recent_pos = -1
         self.filtered_search_results: list[dict] = []
         self.selected_search_uids: set[str] = set()
         self.search_page: int = 0
@@ -2256,6 +2456,9 @@ class NzbManagerApp(ctk.CTk):
                 cfg["media_server_token"] = ms_token
                 cfg["media_server_auto_scan"] = bool(loaded.get("media_server_auto_scan", True))
                 cfg["media_server_path_map"] = str(loaded.get("media_server_path_map") or "")
+                if isinstance(loaded.get("search_history"), list):
+                    cfg["search_history"] = [str(q) for q in loaded["search_history"] if str(q).strip()][:15]
+                cfg["desktop_notifications"] = bool(loaded.get("desktop_notifications", True))
 
                 if isinstance(loaded.get("indexers"), list):
                     migrated = []
@@ -2353,6 +2556,8 @@ class NzbManagerApp(ctk.CTk):
             "media_server_token": self._protect_or_keep("media_server_token", cfg.get("media_server_token", "")),
             "media_server_auto_scan": bool(cfg.get("media_server_auto_scan", True)),
             "media_server_path_map": str(cfg.get("media_server_path_map", "")),
+            "search_history": [str(q) for q in cfg.get("search_history", [])][:15],
+            "desktop_notifications": bool(cfg.get("desktop_notifications", True)),
         }
         _atomic_write_json(CONFIG_FILE, to_disk)
         # Warn (once per new failure) when Windows couldn't encrypt a secret, instead of
@@ -3054,6 +3259,22 @@ class NzbManagerApp(ctk.CTk):
         )
         self.search_entry.grid(row=0, column=0, sticky="ew", padx=(12, 8), pady=8)
         self.search_entry.bind("<Return>", lambda _e: self._on_search_button())
+        self.search_entry.bind("<Up>", lambda _e: self._cycle_recent(1))
+        self.search_entry.bind("<Down>", lambda _e: self._cycle_recent(-1))
+
+        self.recent_var = ctk.StringVar(value=self.RECENT_SEARCH_LABEL)
+        self.recent_menu = ctk.CTkOptionMenu(
+            bar,
+            variable=self.recent_var,
+            values=["No recent searches"],
+            width=96,
+            height=34,
+            dynamic_resizing=False,
+            fg_color=COLORS["bg_card"],
+            button_color=COLORS["bg_card_alt"],
+            command=self._on_recent_chosen,
+        )
+        self.recent_menu.grid(row=0, column=1, padx=(0, 4), pady=8)
 
         self.indexer_select_var = ctk.StringVar(value="All Enabled")
         self.indexer_select_menu = ctk.CTkOptionMenu(
@@ -3066,7 +3287,7 @@ class NzbManagerApp(ctk.CTk):
             button_color=COLORS["border"],
             command=lambda _v: self._apply_cached_caps_for_selection(),
         )
-        self.indexer_select_menu.grid(row=0, column=1, padx=4, pady=8)
+        self.indexer_select_menu.grid(row=0, column=2, padx=4, pady=8)
 
         self.indexer_cat_var = ctk.StringVar(value="All Categories")
         self.indexer_cat_menu = ctk.CTkOptionMenu(
@@ -3078,7 +3299,7 @@ class NzbManagerApp(ctk.CTk):
             fg_color=COLORS["bg_card"],
             button_color=COLORS["border"],
         )
-        self.indexer_cat_menu.grid(row=0, column=2, padx=4, pady=8)
+        self.indexer_cat_menu.grid(row=0, column=3, padx=4, pady=8)
 
         ctk.CTkButton(
             bar,
@@ -3088,7 +3309,7 @@ class NzbManagerApp(ctk.CTk):
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_card_alt"],
             command=lambda: self._refresh_indexer_categories(force=True),
-        ).grid(row=0, column=3, padx=2, pady=8)
+        ).grid(row=0, column=4, padx=2, pady=8)
 
         self.search_btn = ctk.CTkButton(
             bar,
@@ -3101,7 +3322,8 @@ class NzbManagerApp(ctk.CTk):
             font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
             command=self._on_search_button,
         )
-        self.search_btn.grid(row=0, column=4, padx=(6, 12), pady=8)
+        self.search_btn.grid(row=0, column=5, padx=(6, 12), pady=8)
+        self._refresh_recent_menu()
 
         divider()
         filters = ctk.CTkFrame(toolbar, fg_color="transparent")
@@ -3243,7 +3465,21 @@ class NzbManagerApp(ctk.CTk):
             font=ctk.CTkFont(family=UI_FONT, size=11, weight="bold"),
             command=self._send_selected_search_to_sab,
         )
-        self.batch_send_search_btn.pack(side="left", padx=(6, 10), pady=6)
+        self.batch_send_search_btn.pack(side="left", padx=(6, 6), pady=6)
+
+        ctk.CTkButton(
+            batch_bar,
+            text="★ Grab Best",
+            width=110,
+            height=30,
+            fg_color="transparent",
+            hover_color=COLORS["bg_card_alt"],
+            border_width=1,
+            border_color=COLORS["border_accent"],
+            text_color=COLORS["accent"],
+            font=ctk.CTkFont(family=UI_FONT_SEMIBOLD, size=12),
+            command=self._grab_best,
+        ).pack(side="left", padx=(0, 10), pady=6)
 
         self.lib_filter_var = ctk.StringVar(value=LIBRARY_FILTER_OPTIONS[0])
         ctk.CTkOptionMenu(
@@ -3496,6 +3732,15 @@ class NzbManagerApp(ctk.CTk):
             progress_color=COLORS["accent"],
             command=self._on_auto_refresh_toggled,
         ).pack(side="right", padx=14, pady=10)
+
+        self.notify_var = ctk.BooleanVar(value=self.config_data.get("desktop_notifications", True))
+        ctk.CTkSwitch(
+            ctrl,
+            text="Notifications",
+            variable=self.notify_var,
+            progress_color=COLORS["accent"],
+            command=self._on_notifications_toggled,
+        ).pack(side="right", padx=(6, 4), pady=10)
 
         ctk.CTkButton(
             ctrl,
@@ -3826,77 +4071,127 @@ class NzbManagerApp(ctk.CTk):
         else:
             self._run_indexer_search()
 
-    def _run_indexer_search(self) -> None:
-        clients = self._get_selected_clients()
-        if not clients:
-            self._set_status("No enabled indexers configured. Open Settings to add one.", log=True, level="WARN")
-            return
+    SEARCH_PAGE_LIMIT = 100  # results requested per indexer per page
 
-        query = self.search_entry.get().strip()
-        cat_label = self.indexer_cat_var.get()
-        cat_id = self.indexer_cat_map.get(cat_label, "")
-        if not query and not cat_id:
-            self._set_status("Enter a search term or pick a category/subcategory first.")
-            return
+    def _run_indexer_search(self, load_more: bool = False) -> None:
+        """Runs a new search, or (load_more=True) fetches the next page from every indexer that
+        still has results, continuing the same query, category and search mode."""
+        if load_more:
+            ctx = self._search_ctx
+            if not ctx or self._search_in_flight:
+                return
+            clients = [c for c in ctx["clients"] if c.name not in ctx["exhausted"]]
+            if not clients:
+                return
+            query, cat_id, cat_label = ctx["query"], ctx["cat_id"], ctx["cat_label"]
+        else:
+            clients = self._get_selected_clients()
+            if not clients:
+                self._set_status("No enabled indexers configured. Open Settings to add one.", log=True, level="WARN")
+                return
+            query = self.search_entry.get().strip()
+            cat_label = self.indexer_cat_var.get()
+            cat_id = self.indexer_cat_map.get(cat_label, "")
+            if not query and not cat_id:
+                self._set_status("Enter a search term or pick a category/subcategory first.")
+                return
+            ctx = {
+                "query": query, "cat_id": cat_id, "cat_label": cat_label, "clients": list(clients),
+                "offsets": {c.name: 0 for c in clients}, "modes": {c.name: "auto" for c in clients},
+                "exhausted": set(),
+            }
+            self._search_ctx = ctx
+            self._recent_pos = -1
+            if query:
+                self._remember_search(query)
 
         self._search_seq += 1
         req_id = self._search_seq
+        limit = self.SEARCH_PAGE_LIMIT
         desc = f"'{query}'" if query else f"category '{cat_label}'"
         target_names = ", ".join(c.name for c in clients)
         self._set_search_busy(True)
-        self._set_status(f"Searching [{target_names}] for {desc}...", log=True)
+        verb = "Loading more" if load_more else "Searching"
+        self._set_status(f"{verb} [{target_names}] for {desc}...", log=True)
+        jobs = [(c, ctx["offsets"].get(c.name, 0), ctx["modes"].get(c.name, "auto")) for c in clients]
 
         def multi_search():
-            if len(clients) == 1:
-                return clients[0].search(query, cat_id=cat_id), []
-
             per_client: dict[int, list[dict]] = {}
             errors: list[str] = []
-            with ThreadPoolExecutor(max_workers=min(4, len(clients))) as pool:
-                fut_map = {idx: pool.submit(c.search, query, cat_id) for idx, c in enumerate(clients)}
-                for idx, fut in fut_map.items():
+            with ThreadPoolExecutor(max_workers=min(4, len(jobs))) as pool:
+                futs = {
+                    i: pool.submit(c.search, query, cat_id, limit, off, mode)
+                    for i, (c, off, mode) in enumerate(jobs)
+                }
+                for i, fut in futs.items():
                     try:
-                        per_client[idx] = fut.result()
+                        per_client[i] = fut.result()
                     except Exception as exc:
-                        per_client[idx] = []
-                        errors.append(f"{clients[idx].name}: {_format_http_error(exc)}")
-
-            all_items: list[dict] = []
-            max_len = max((len(v) for v in per_client.values()), default=0)
-            seq = 0
-            for r in range(max_len):
-                for c_idx in range(len(clients)):
-                    bucket = per_client[c_idx]
-                    if r < len(bucket):
-                        it = bucket[r]
-                        it["index"] = seq
-                        seq += 1
-                        all_items.append(it)
-            return all_items, errors
+                        per_client[i] = []
+                        errors.append(f"{jobs[i][0].name}: {_format_http_error(exc)}")
+            return per_client, errors
 
         def ok(res):
             if req_id != self._search_seq:
                 return
-            items, errors = res
+            per_client, errors = res
             self._set_search_busy(False)
             for err_msg in errors:
                 self._log_activity(err_msg, "WARN")
-            if items:
+
+            # Paging bookkeeping per indexer (the search mode is fixed by the first page).
+            got_tv = False
+            for i, (c, off, _mode) in enumerate(jobs):
+                bucket = per_client.get(i, [])
+                ctx["offsets"][c.name] = off + len(bucket)
+                if bucket and ctx["modes"].get(c.name) == "auto":
+                    ctx["modes"][c.name] = bucket[0].get("search_mode", "text")
+                if any(r.get("search_mode") == "tv" for r in bucket):
+                    got_tv = True
+                if len(bucket) < limit:
+                    ctx["exhausted"].add(c.name)
+
+            # Interleave indexers so each one's top results stay near the top.
+            existing = self.current_search_results if load_more else []
+            seen = {it["uid"] for it in existing}
+            seq = max((it["index"] for it in existing), default=-1) + 1
+            new_items: list[dict] = []
+            max_len = max((len(v) for v in per_client.values()), default=0)
+            for r in range(max_len):
+                for i in range(len(jobs)):
+                    bucket = per_client.get(i, [])
+                    if r < len(bucket) and bucket[r]["uid"] not in seen:
+                        it = bucket[r]
+                        it["index"] = seq
+                        seq += 1
+                        seen.add(it["uid"])
+                        new_items.append(it)
+
+            if new_items:
                 self._update_indexer_pill("ok")
-            elif errors:
+            elif errors and not load_more:
                 self._update_indexer_pill("error")
                 self._set_status(f"Search error: {errors[0]}", log=True, level="ERROR")
                 return
 
-            self.current_search_results = items
-            self.selected_search_uids.clear()
-            self._update_batch_search_btn()
-            self._apply_filters_and_render(reset_page=True)
-            self._set_status(
-                f"Found {len(items)} release(s) across {len(clients) - len(errors)}/{len(clients)} indexer(s).",
-                log=True,
-                level="OK",
-            )
+            if load_more:
+                self.current_search_results = existing + new_items
+                self._apply_filters_and_render(reset_page=False)
+            else:
+                self.current_search_results = new_items
+                self.selected_search_uids.clear()
+                self._update_batch_search_btn()
+                self._apply_filters_and_render(reset_page=True)
+
+            more = " More available." if self._search_has_more() else ""
+            tv_note = " (TV search)" if got_tv else ""
+            if load_more:
+                total = len(self.current_search_results)
+                msg = f"Loaded {len(new_items)} more release(s){tv_note}, {total} total.{more}"
+            else:
+                ok_count = len(jobs) - len(errors)
+                msg = f"Found {len(new_items)} release(s){tv_note} across {ok_count}/{len(jobs)} indexer(s).{more}"
+            self._set_status(msg, log=True, level="OK")
 
         def err(exc):
             if req_id != self._search_seq:
@@ -3906,6 +4201,53 @@ class NzbManagerApp(ctk.CTk):
             self._set_status(f"Search failed: {exc}", log=True, level="ERROR")
 
         self._run_bg(multi_search, on_ok=ok, on_err=err)
+
+    def _search_has_more(self) -> bool:
+        ctx = self._search_ctx
+        return bool(ctx) and any(c.name not in ctx["exhausted"] for c in ctx["clients"])
+
+    # --- recent searches -------------------------------------------------------
+    RECENT_SEARCH_LABEL = "Recent"
+    MAX_RECENT_SEARCHES = 15
+
+    def _remember_search(self, query: str) -> None:
+        hist = [q for q in self.config_data.get("search_history", []) if q.lower() != query.lower()]
+        hist.insert(0, query)
+        self.config_data["search_history"] = hist[: self.MAX_RECENT_SEARCHES]
+        self._refresh_recent_menu()
+        self._safe_write_config("search history")
+
+    def _refresh_recent_menu(self) -> None:
+        if not hasattr(self, "recent_menu"):
+            return
+        hist = list(self.config_data.get("search_history", []))
+        values = hist + (["Clear recent searches"] if hist else ["No recent searches"])
+        self.recent_menu.configure(values=values)
+        self.recent_var.set(self.RECENT_SEARCH_LABEL)
+
+    def _on_recent_chosen(self, choice: str) -> None:
+        self.recent_var.set(self.RECENT_SEARCH_LABEL)
+        if choice == "Clear recent searches":
+            self.config_data["search_history"] = []
+            self._refresh_recent_menu()
+            self._safe_write_config("search history")
+            return
+        if choice == "No recent searches":
+            return
+        self.search_entry.delete(0, "end")
+        self.search_entry.insert(0, choice)
+        self._on_search_button()
+
+    def _cycle_recent(self, step: int) -> str:
+        """Up/Down in the search box walks through recent searches."""
+        hist = list(self.config_data.get("search_history", []))
+        if not hist:
+            return "break"
+        self._recent_pos = max(-1, min(len(hist) - 1, getattr(self, "_recent_pos", -1) + step))
+        self.search_entry.delete(0, "end")
+        if self._recent_pos >= 0:
+            self.search_entry.insert(0, hist[self._recent_pos])
+        return "break"
 
     def _apply_filters_and_render(self, reset_page: bool = False) -> None:
         items = list(self.current_search_results)
@@ -3921,6 +4263,12 @@ class NzbManagerApp(ctk.CTk):
                     category=it.get("cat_hint") or it.get("category", ""),
                 )
                 it["_lib_index"] = lib_index
+            norm_k = it.get("norm_key", "")
+            it["_score"], it["_score_why"] = score_release(
+                it,
+                in_queue=bool(norm_k and norm_k in self._sab_queue_keys),
+                downloaded=bool(norm_k and norm_k in self._sab_history_keys),
+            )
 
         text_q = self.local_filter_entry.get().strip().lower()
         if text_q:
@@ -3971,7 +4319,9 @@ class NzbManagerApp(ctk.CTk):
             ]
 
         sort_mode = self.sort_var.get()
-        if sort_mode == "Size: Largest First":
+        if sort_mode == "Best Match":
+            items.sort(key=lambda it: (-it.get("_score", 0), it["index"]))
+        elif sort_mode == "Size: Largest First":
             items.sort(key=lambda it: it["size_bytes"], reverse=True)
         elif sort_mode == "Size: Smallest First":
             items.sort(key=lambda it: it["size_bytes"])
@@ -4000,6 +4350,7 @@ class NzbManagerApp(ctk.CTk):
                 it["mirror_count"] = 0
 
         self.filtered_search_results = items
+        self._best_uid = self._pick_best_uid(items)
         if reset_page:
             self.search_page = 0
 
@@ -4018,6 +4369,27 @@ class NzbManagerApp(ctk.CTk):
         start = self.search_page * SEARCH_PAGE_SIZE
         page_items = items[start : start + SEARCH_PAGE_SIZE]
         self._render_search_results(page_items)
+
+    @staticmethod
+    def _pick_best_uid(items: list[dict]) -> str | None:
+        """Highest-scoring release you don't already have, haven't queued and that isn't passworded."""
+        def eligible(it: dict) -> bool:
+            if it.get("passworded"):
+                return False
+            why = " ".join(it.get("_score_why", []))
+            return not any(k in why for k in ("already in queue", "already downloaded", "already in library"))
+        cands = [it for it in items if eligible(it) and it.get("_score", 0) > 0]
+        if not cands:
+            return None
+        return max(cands, key=lambda it: (it.get("_score", 0), -it["index"]))["uid"]
+
+    def _grab_best(self) -> None:
+        best = next((it for it in self.filtered_search_results if it["uid"] == getattr(self, "_best_uid", None)), None)
+        if best is None:
+            self._set_status("No suitable release to grab (everything shown is already queued, owned or passworded).", log=True, level="WARN")
+            return
+        self._set_status(f"Best match (score {best.get('_score', 0)}): {best['title']}")
+        self._send_url_to_sab(best, self.search_cat_var.get())
 
     def _change_search_page(self, delta: int) -> None:
         total_pages = max(1, (len(self.filtered_search_results) + SEARCH_PAGE_SIZE - 1) // SEARCH_PAGE_SIZE)
@@ -4055,6 +4427,25 @@ class NzbManagerApp(ctk.CTk):
         targets = [it for it in self.current_search_results if it["uid"] in self.selected_search_uids]
         if not targets:
             return
+        dupes = [(it, reason) for it in targets if (reason := self._duplicate_reason(it))]
+        if dupes:
+            listing = "\n".join(f"• {it['title'][:70]}  ({reason})" for it, reason in dupes[:6])
+            more = f"\n…and {len(dupes) - 6} more" if len(dupes) > 6 else ""
+            choice = messagebox.askyesnocancel(
+                "Possible duplicates",
+                f"{len(dupes)} of {len(targets)} selected release(s) look like something you already have:\n\n"
+                f"{listing}{more}\n\n"
+                "Yes = send everything anyway\nNo = skip these and send the rest\nCancel = send nothing",
+                parent=self,
+            )
+            if choice is None:
+                return
+            if choice is False:
+                dupe_uids = {it["uid"] for it, _r in dupes}
+                targets = [it for it in targets if it["uid"] not in dupe_uids]
+                if not targets:
+                    self._set_status("Nothing sent: every selected release was a duplicate.", log=True, level="INFO")
+                    return
         selected_cat = self.search_cat_var.get()
         resolved_pairs = [
             (
@@ -4225,8 +4616,13 @@ class NzbManagerApp(ctk.CTk):
                 text_color=COLORS["text_secondary"],
             ).pack(side="left")
 
-            # Line 3: tags that matter for choosing a release
+            # Line 3: tags that matter for choosing a release (score first; click it for the why)
             badge_items: list[tuple[str, str, str]] = []
+            if item["uid"] == getattr(self, "_best_uid", None):
+                badge_items.append(("★ BEST PICK", COLORS["accent"], "Best match: " + ", ".join(item.get("_score_why", []))))
+            score = int(item.get("_score", 0))
+            score_col = COLORS["green"] if score >= 60 else (COLORS["accent"] if score >= 40 else COLORS["text_muted"])
+            badge_items.append((f"Score {score}", score_col, f"Score {score}: " + ", ".join(item.get("_score_why", []))))
             for tag_txt, tag_col in item.get("tags", []):
                 badge_items.append((tag_txt, tag_col, ""))
             if item["language"] not in ("English", "English / Untagged"):
@@ -4261,6 +4657,22 @@ class NzbManagerApp(ctk.CTk):
                         pill.configure(cursor="hand2")
                         pill.bind("<Button-1>", lambda _e, s=tip_summary: self._set_status(s))
 
+        # "Load more" under the last page when an indexer has results past the first page(s).
+        total_pages = max(1, (len(self.filtered_search_results) + SEARCH_PAGE_SIZE - 1) // SEARCH_PAGE_SIZE)
+        if self.search_page + 1 >= total_pages and self._search_has_more():
+            ctk.CTkButton(
+                self.search_results_frame,
+                text=f"Load more results  (next {self.SEARCH_PAGE_LIMIT} per indexer)",
+                height=34,
+                fg_color="transparent",
+                hover_color=COLORS["bg_card_alt"],
+                border_width=1,
+                border_color=COLORS["border_accent"],
+                text_color=COLORS["accent"],
+                font=ctk.CTkFont(family=UI_FONT_SEMIBOLD, size=12),
+                command=lambda: self._run_indexer_search(load_more=True),
+            ).pack(pady=(12, 4))
+
         # breathing room under the last card
         ctk.CTkFrame(self.search_results_frame, height=8, fg_color="transparent").pack()
 
@@ -4277,7 +4689,27 @@ class NzbManagerApp(ctk.CTk):
 
         self._run_bg(fetch_and_parse, on_ok=ok)
 
+    def _duplicate_reason(self, item: dict) -> str | None:
+        """Why this release looks like something you already have, or None."""
+        norm_k = item.get("norm_key", "")
+        if norm_k and norm_k in self._sab_queue_keys:
+            return "already in the SABnzbd queue"
+        if norm_k and norm_k in self._sab_history_keys:
+            return "already downloaded (SABnzbd history)"
+        lib = item.get("_lib_match") or {}
+        if lib.get("status") in ("owned", "have_better"):
+            return lib.get("summary") or "already in your library"
+        return None
+
     def _send_url_to_sab(self, item: dict, selected_cat: str) -> None:
+        reason = self._duplicate_reason(item)
+        if reason and not messagebox.askyesno(
+            "Possible duplicate",
+            f"{item['title']}\n\nThis looks like something you already have:\n{reason}\n\nSend it to SABnzbd anyway?",
+            parent=self,
+        ):
+            self._set_status(f"Not sent (duplicate): {item['title']}")
+            return
         cat = self._resolve_sab_category(
             selected_cat,
             item_category=item.get("cat_hint") or item.get("category", ""),
@@ -4935,20 +5367,25 @@ class NzbManagerApp(ctk.CTk):
         if self._known_history_states is None:
             self._known_history_states = {nid: st for nid, (st, _nm, _fm) in current_states.items()}
         else:
+            completed_names: list[str] = []
+            failed_items: list[tuple[str, str]] = []
             for nid, (st, nm, fm) in current_states.items():
                 prev = self._known_history_states.get(nid, "")
                 st_low = st.strip().lower()
                 if st_low != prev.strip().lower():
                     if st_low == "completed":
+                        completed_names.append(nm)
                         self._set_status(f"Download completed: {nm}", log=True, level="OK")
                         if hasattr(self, "kodi_panel"):
                             self.kodi_panel.notify_download_completed(nm)
                         if hasattr(self, "media_server_panel"):
                             self.media_server_panel.notify_download_completed(nm)
                     elif st_low == "failed":
+                        failed_items.append((nm, fm))
                         reason = f" — {fm}" if fm else ""
                         self._set_status(f"Download FAILED: {nm}{reason}", log=True, level="ERROR")
             self._known_history_states = {nid: st for nid, (st, _nm, _fm) in current_states.items()}
+            self._notify_downloads(completed_names, failed_items)
 
         sig = tuple(
             (
@@ -5041,6 +5478,44 @@ class NzbManagerApp(ctk.CTk):
             ).pack(side="left", fill="x", expand=True, padx=(0, 6))
 
         self.after(20, lambda: self._set_scroll_y(self.history_frame, scroll_y))
+
+    def _app_has_focus(self) -> bool:
+        try:
+            return self.state() != "iconic" and self.focus_displayof() is not None
+        except Exception:
+            return False
+
+    def _notify_downloads(self, completed: list[str], failed: list[tuple[str, str]], force: bool = False) -> None:
+        """One Windows notification per refresh for finished/failed downloads.
+
+        Only shown while the app isn't the active window (when you're looking at it, the status
+        bar and Activity log already say it). Several completions are grouped into one notification.
+        """
+        if not (completed or failed) or not self.config_data.get("desktop_notifications", True):
+            return
+        if not force and self._app_has_focus():
+            return
+        if failed:
+            name, reason = failed[0]
+            title = "Download failed" if len(failed) == 1 else f"{len(failed)} downloads failed"
+            msg = f"{name}" + (f"\n{reason}" if reason and len(failed) == 1 else "")
+            if completed:
+                msg += f"\n{len(completed)} other download(s) completed."
+        elif len(completed) == 1:
+            title, msg = "Download complete", completed[0]
+        else:
+            title = f"{len(completed)} downloads complete"
+            msg = "\n".join(completed[:3]) + (f"\n…and {len(completed) - 3} more" if len(completed) > 3 else "")
+        show_windows_notification(title, msg)
+
+    def _on_notifications_toggled(self) -> None:
+        on = bool(self.notify_var.get())
+        self.config_data["desktop_notifications"] = on
+        self._safe_write_config("notification")
+        if on and show_windows_notification("NZB Command Center", "Notifications are on. You'll be told when downloads finish or fail."):
+            self._set_status("Desktop notifications on (a test notification was sent).", log=True, level="OK")
+        elif not on:
+            self._set_status("Desktop notifications off.", log=True, level="INFO")
 
     def _clear_sab_history(self, failed_only: bool = False) -> None:
         prompt = "Remove all FAILED jobs from SABnzbd history?" if failed_only else "Clear ALL items from SABnzbd history?"
