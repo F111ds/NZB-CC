@@ -54,7 +54,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "2.0"
+VERSION = "3.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -472,10 +472,18 @@ def load_config(path: Path | None = None) -> dict:
     if not sab_key:
         raise ConfigError("SABnzbd API key is missing (or could not be decrypted) in nzb_manager_config.json.")
 
+    kodi_pw = ""
+    try:
+        kodi_pw = _dpapi_unprotect(str(data.get("kodi_password") or ""))
+    except ConfigError:
+        log.warning("Kodi password could not be decrypted; Kodi requests may be refused.")
+    kodi = {"url": normalize_kodi_url(str(data.get("kodi_url") or "")),
+            "user": str(data.get("kodi_username") or ""), "password": kodi_pw}
+
     global _KNOWN_SECRETS
     # Swap in a complete new set at once, so a concurrent redact() never sees an empty/partial set.
-    _KNOWN_SECRETS = frozenset([sab_key] + [ix["api_key"] for ix in indexers if ix["api_key"]])
-    return {"sab_url": sab_url, "sab_api_key": sab_key, "indexers": indexers}
+    _KNOWN_SECRETS = frozenset([sab_key] + [ix["api_key"] for ix in indexers if ix["api_key"]] + ([kodi_pw] if kodi_pw else []))
+    return {"sab_url": sab_url, "sab_api_key": sab_key, "indexers": indexers, "kodi": kodi}
 
 
 _cfg_lock = threading.Lock()
@@ -600,6 +608,93 @@ def sab_addfile(nzb_data: bytes, filename: str, category: str = "", priority: st
     if payload.get("status") is not True and not payload.get("nzo_ids"):
         raise UpstreamError("SABnzbd did not confirm the NZB upload.")
     return payload
+
+
+# ==============================================================================
+# 3b. KODI (JSON-RPC) — same settings as the desktop app's Kodi tab
+# ==============================================================================
+
+MAX_KODI_BYTES = 8 * 1024 * 1024
+
+
+def normalize_kodi_url(url: str) -> str:
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if "://" not in url:
+        url = "http://" + url
+    url = url.rstrip("/")
+    if url.lower().endswith("/jsonrpc"):
+        url = url[: -len("/jsonrpc")]
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.port and parsed.scheme == "http" and parsed.hostname:
+        host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+        url = f"{parsed.scheme}://{host}:8080{parsed.path}"
+    return url
+
+
+def kodi_configured() -> bool:
+    return bool(get_config()["kodi"]["url"])
+
+
+def kodi_call(method: str, params: dict | None = None, timeout: float = 6):
+    k = get_config()["kodi"]
+    if not k["url"]:
+        raise UpstreamError("Kodi isn't set up — add it in the desktop app's Kodi tab.")
+    payload: dict = {"jsonrpc": "2.0", "method": method, "id": 1}
+    if params:
+        payload["params"] = params
+    headers = {"Content-Type": "application/json"}
+    if k["user"] or k["password"]:
+        headers["Authorization"] = "Basic " + base64.b64encode(f"{k['user']}:{k['password']}".encode()).decode("ascii")
+    try:
+        raw = http_fetch(k["url"] + "/jsonrpc", timeout=timeout, max_bytes=MAX_KODI_BYTES,
+                         data=json.dumps(payload).encode("utf-8"), headers=headers)
+    except UpstreamError as exc:
+        msg = str(exc)
+        if "401" in msg:
+            raise UpstreamError("Kodi refused the username / password saved in the desktop app.") from None
+        raise UpstreamError(f"Kodi: {msg}" if msg.startswith("HTTP") else "Can't reach Kodi — is it on?") from None
+    try:
+        body = json.loads(raw.decode("utf-8", errors="replace"))
+    except ValueError:
+        raise UpstreamError("Kodi returned an invalid response.") from None
+    if isinstance(body, dict) and body.get("error"):
+        raise UpstreamError(f"Kodi: {(body['error'] or {}).get('message', 'error')}")
+    return body.get("result") if isinstance(body, dict) else None
+
+
+def _kodi_secs(t) -> int:
+    t = t or {}
+    return to_int(t.get("hours")) * 3600 + to_int(t.get("minutes")) * 60 + to_int(t.get("seconds"))
+
+
+def kodi_now_playing() -> dict | None:
+    players = kodi_call("Player.GetActivePlayers") or []
+    video = [p for p in players if p.get("type") == "video"] or players
+    if not video:
+        return None
+    pid = to_int(video[0].get("playerid"))
+    item = (kodi_call("Player.GetItem", {"playerid": pid, "properties": ["title", "showtitle", "season", "episode", "year"]}) or {}).get("item", {})
+    props = kodi_call("Player.GetProperties", {"playerid": pid, "properties": ["percentage", "time", "totaltime", "speed"]}) or {}
+    title = str(item.get("title") or item.get("label") or "Playing")
+    if item.get("showtitle"):
+        sub = f"{item['showtitle']} · S{to_int(item.get('season')):02d}E{to_int(item.get('episode')):02d}"
+    else:
+        sub = str(item.get("year") or "") if to_int(item.get("year")) else ""
+    return {"playerid": pid, "title": title, "sub": sub, "time": _kodi_secs(props.get("time")),
+            "total": _kodi_secs(props.get("totaltime")), "pct": to_float(props.get("percentage")),
+            "paused": to_int(props.get("speed")) == 0}
+
+
+def _kodi_movie(mv: dict) -> dict:
+    resume = mv.get("resume") or {}
+    return {"id": to_int(mv.get("movieid")), "title": str(mv.get("title") or "Untitled"), "year": to_int(mv.get("year")) or None,
+            "runtime": to_int(mv.get("runtime")), "resume": int(to_float(resume.get("position"))),
+            "watched": to_int(mv.get("playcount")) > 0}
+
+
+KODI_MOVIE_PROPS = ["title", "year", "runtime", "playcount", "resume"]
 
 
 # ==============================================================================
@@ -1085,12 +1180,26 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;backgroun
 .batch span{flex:1;font-weight:600;font-size:14px}
 .toast{position:fixed;left:12px;right:12px;bottom:calc(82px + env(safe-area-inset-bottom));max-width:696px;margin:auto;background:var(--hover);border:1px solid var(--teal);border-radius:14px;padding:13px 15px;z-index:9;white-space:pre-wrap;font-size:14px;box-shadow:0 10px 30px rgba(0,0,0,.45)}.toast.err{border-color:var(--red)}
 .pair{max-width:440px;margin:40px auto 0}.pair h1{margin-top:0}
+.seg{display:flex;background:var(--card);border-radius:12px;padding:4px;margin:4px 0 14px}.seg button{flex:1;min-height:40px;border:0;border-radius:9px;background:transparent;color:var(--muted);font-weight:600;font-size:14px}.seg button.on{background:var(--hover);color:var(--white)}
+.shortcut{width:100%;display:flex;align-items:center;gap:10px;background:var(--deep);border:1px solid var(--line);border-radius:14px;padding:0 14px;min-height:52px;color:var(--muted);font-size:16px;margin-bottom:12px;text-align:left}
+.kode{font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--muted)}
+.ctrls{display:flex;align-items:center;gap:12px}.ctrls .tm{flex:1;font:500 12px var(--mono);color:var(--soft)}
+.round{width:48px;height:48px;border-radius:24px;border:0;background:var(--hover);color:var(--white);display:inline-flex;align-items:center;justify-content:center;flex:none}.round.main{background:var(--teal);color:var(--ink)}
+.kidle{display:flex;align-items:center;gap:12px;width:100%;border:0;text-align:left;color:var(--soft);font-size:14px}.kidle svg{color:var(--teal);flex:none}
+.icon-btn.play{color:var(--teal2)}
 </style></head><body>
 <header><div class="brand"><img src="/icon.png" alt="">NZB Command Center</div><div id="statusbar" class="statusbar hidden"><span id="sabpill" class="spill"><i></i>SABnzbd</span></div></header>
 <main>
 <div id="pair" class="pair card"><h1>Connect</h1><p class="lede" style="margin-left:0">Mobile control for your PC · v__VERSION__</p><label class="label" for="token">Access code</label><input id="token" class="field" type="password" placeholder="Code shown on your PC" autocomplete="off" autocapitalize="off" autocorrect="off"><button class="btn full" id="pairbtn">Connect</button><div id="pairmsg" class="hint" style="margin-top:10px">The code is in the window running NZB Mobile Server. Opening its pairing link on this phone connects automatically.</div></div>
 <div id="app" class="hidden">
-<section id="search">
+<section id="home" class="hidden">
+<h1 id="greet">Hello</h1><p class="lede" id="homestatus">Loading…</p>
+<div id="homedl"></div>
+<div class="tiles"><div class="tile"><div class="k">Done today</div><div class="v" id="hdone">—</div></div><div class="tile"><div class="k">Free space</div><div class="v" id="hfree">—</div></div><div class="tile"><div class="k">Failed today</div><div class="v" id="hfail">—</div></div></div>
+<button class="shortcut" data-tab="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search your indexers…</button>
+<div id="homekodi"></div>
+</section>
+<section id="search" class="hidden">
 <h1>Search</h1><p class="lede">Your indexers, from anywhere at home.</p>
 <div class="card">
 <label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="query" placeholder="Movie, show or release" enterkeyhint="search" autocomplete="off" aria-label="Search"></label>
@@ -1110,6 +1219,7 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;backgroun
 </section>
 <section id="queue" class="hidden">
 <h1>Queue</h1><p class="lede" id="queuestatus">Loading…</p>
+<div class="seg"><button class="on" data-tab="queue">Active</button><button data-tab="history">History</button></div>
 <div id="queueitems"></div>
 <div class="section">CONTROLS</div>
 <div class="card"><div class="row"><button id="qresume" class="btn sm">Resume all</button><button id="qpause" class="btn ghost sm">Pause all</button></div>
@@ -1117,14 +1227,25 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;backgroun
 </section>
 <section id="history" class="hidden">
 <div class="row" style="align-items:flex-end"><div><h1>History</h1><p class="lede" id="histstatus">Recent downloads</p></div><button class="icon-btn" id="histrefresh" aria-label="Refresh history" style="flex:none;margin-bottom:14px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button></div>
+<div class="seg" style="margin-top:0"><button data-tab="queue">Active</button><button class="on" data-tab="history">History</button></div>
 <div id="historyitems"></div>
+</section>
+<section id="kodi" class="hidden">
+<div class="row" style="align-items:flex-end"><div><h1>Kodi</h1><p class="lede" id="kodistatus">Loading…</p></div><button class="btn ghost sm" id="kodiscan" style="flex:none;margin-bottom:14px">Scan library</button></div>
+<div id="kodinow"></div>
+<div id="kodilib" class="hidden">
+<label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="kodifilter" placeholder="Find a movie" autocomplete="off" enterkeyhint="search" aria-label="Find a movie"></label>
+<div class="section" id="kodilisttitle">RECENTLY ADDED</div>
+<div id="kodilist"></div>
+</div>
 </section>
 </div></main>
 <div id="batchbar" class="batch hidden"><span id="batchcount">0 selected</span><button id="batchbtn" class="btn sm">Add to SABnzbd</button></div>
 <nav class="tabs hidden" id="tabbar" aria-label="Sections">
-<button id="tabsearch" class="tab active" data-tab="search"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search</button>
+<button id="tabhome" class="tab active" data-tab="home"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>Home</button>
+<button id="tabsearch" class="tab" data-tab="search"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search</button>
 <button id="tabqueue" class="tab" data-tab="queue"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>Queue<span id="queuecount" class="count hidden"></span></button>
-<button id="tabhistory" class="tab" data-tab="history"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>History</button>
+<button id="tabkodi" class="tab" data-tab="kodi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/></svg>Kodi</button>
 </nav>
 <div id="toast" class="toast hidden" role="status"></div>
 <script>
@@ -1132,7 +1253,7 @@ nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;backgroun
 const LS={get:(k,d='')=>{try{const v=localStorage.getItem(k);return v===null?d:v}catch{return d}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}};
 const $=id=>document.getElementById(id);
 let token=LS.get('nzb_mobile_token');
-let results=[],selected=new Set(),added=new Set(),activeTab='search',queueBusy=false,toastTimer=null;
+let results=[],selected=new Set(),added=new Set(),activeTab='home',queueBusy=false,toastTimer=null;
 const ICON={pause:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>',play:'<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l12 7-12 7z"/></svg>',trash:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',retry:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>'};
 const EMPTY_ICON='<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>';
 
@@ -1182,7 +1303,7 @@ function fillSearchCategories(keep){
 }
 function fillCategories(cats){const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(cats.includes(keep))sel.value=keep}
 
-function showTab(t){activeTab=t;for(const n of ['search','queue','history']){$(n).classList.toggle('hidden',n!==t);$('tab'+n).classList.toggle('active',n===t)}updateBatchButton();window.scrollTo(0,0);if(t==='queue')refreshQueue();if(t==='history')refreshHistory()}
+function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':t;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi()}
 
 function savePrefs(){LS.set('nzb_mobile_prefs',JSON.stringify({sort:$('sort').value,minsize:$('minsize').value,maxsize:$('maxsize').value,mingrabs:$('mingrabs').value,indexer:$('indexer').value,prio:$('prio').value,category:$('category').value}));LS.set('nzb_mobile_cat',$('sabcat').value)}
 function loadPrefs(){try{const p=JSON.parse(LS.get('nzb_mobile_prefs','{}'));if(p.sort)$('sort').value=p.sort;if(p.prio!==undefined)$('prio').value=p.prio;if(p.indexer&&[...$('indexer').options].some(o=>o.value===p.indexer))$('indexer').value=p.indexer;['minsize','maxsize','mingrabs'].forEach(k=>{if(p[k]!==undefined)$(k).value=p[k]})}catch{}}
@@ -1282,7 +1403,7 @@ function updateStatus(d){
   $('statusbar').classList.remove('hidden');
   const c=$('queuecount');c.textContent=d.total||'';c.classList.toggle('hidden',!d.total);
 }
-async function pollStatus(){if(document.hidden||$('app').classList.contains('hidden')||activeTab==='queue')return;try{updateStatus(await api('/api/queue'))}catch{const p=$('sabpill');p.className='spill bad';p.innerHTML='<i></i>SABnzbd offline'}}
+async function pollStatus(){if(document.hidden||$('app').classList.contains('hidden')||activeTab==='queue'||activeTab==='home')return;try{updateStatus(await api('/api/queue'))}catch{const p=$('sabpill');p.className='spill bad';p.innerHTML='<i></i>SABnzbd offline'}}
 async function itemAction(id,action){
   if(action==='delete'&&!confirm('Remove this item from the queue and delete its partial files?'))return;
   try{await api('/api/queue/item',{id,action});await refreshQueue(true)}catch(e){toast(e.message,true)}
@@ -1305,12 +1426,99 @@ async function refreshHistory(){
   try{const d=await api('/api/history');st.className='lede';st.textContent=d.slots.length+' recent download(s)';$('historyitems').innerHTML=d.slots.map(historyRow).join('')||empty('No history yet','Finished and failed downloads show up here.')}
   catch(e){st.textContent=e.message;st.className='lede status error'}
 }
+// ---------- Home ----------
+let homeBusy=false;
+function fmtTime(s){s=Math.max(0,Math.floor(Number(s)||0));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return (h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0')}
+function nowCard(p,compact){
+  if(!p)return compact?'<button class="card kidle" data-tab="kodi">'+ICON.play+'<span>Nothing playing on Kodi · open your library</span></button>':'<div class="card kidle">'+ICON.play+'<span>Nothing playing right now.</span></div>';
+  const pp=p.paused?ICON.play:ICON.pause;
+  return '<div class="hero"><div class="kode">'+(compact?'NOW ON KODI':(p.paused?'PAUSED':'NOW PLAYING'))+'</div><div class="name">'+esc(p.title)+'</div>'+(p.sub?'<div class="sub">'+esc(p.sub)+'</div>':'')+
+    '<div class="bar"><span style="width:'+clampPct(p.pct)+'%"></span></div><div class="ctrls"><span class="tm">'+fmtTime(p.time)+' / '+fmtTime(p.total)+'</span>'+
+    (compact?'':'<button class="round" data-kact="stop" data-pid="'+esc(p.playerid)+'" aria-label="Stop"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>')+
+    '<button class="round main" data-kact="playpause" data-pid="'+esc(p.playerid)+'" aria-label="'+(p.paused?'Play':'Pause')+'">'+pp+'</button></div></div>';
+}
+function homeDownload(d){
+  const c=d.current;
+  const btn=d.paused?'<button class="btn sm" data-hact="resume">Resume all</button>':'<button class="btn ghost sm" data-hact="pause">Pause all</button>';
+  const qbtn='<button class="btn ghost sm" data-tab="queue">Queue'+(d.total?' ('+esc(d.total)+')':'')+'</button>';
+  if(!c)return '<div class="hero"><div class="kode">DOWNLOADS</div><div class="name">Nothing downloading</div><div class="sub">Search for something and send it to SABnzbd.</div><div class="row" style="margin-top:12px">'+(d.paused?btn:'')+qbtn+'</div></div>';
+  const low=String(d.state||'').toLowerCase(),tag=low==='paused'?'warn':(low==='downloading'?'ok':'busy');
+  return '<div class="hero"><div class="row" style="justify-content:space-between"><span class="tag '+tag+'" style="flex:none">'+esc(String(d.state||'').toUpperCase())+'</span><span style="flex:none;font:700 18px var(--mono);color:var(--teal)">'+esc(d.speed||'')+'</span></div>'+
+    '<div class="name">'+esc(c.name)+'</div><div class="bar"><span style="width:'+clampPct(c.pct)+'%"></span></div>'+
+    '<div class="sub">'+esc(Math.round(c.pct||0))+'% · '+esc(c.sizeleft||'?')+' left of '+esc(c.size||'?')+(c.eta?' · '+esc(c.eta):'')+'</div><div class="row" style="margin-top:12px">'+btn+qbtn+'</div></div>';
+}
+async function refreshHome(){
+  if(homeBusy)return;homeBusy=true;
+  const hr=new Date().getHours();$('greet').textContent=hr<12?'Good morning':(hr<18?'Good afternoon':'Good evening');
+  try{
+    const d=await api('/api/home');
+    if(d.sab_ok){updateStatus(d);$('homestatus').className='lede';$('homestatus').textContent=d.total?d.total+' in queue':'Queue is empty';$('homedl').innerHTML=homeDownload(d)}
+    else{const p=$('sabpill');p.className='spill bad';p.innerHTML='<i></i>SABnzbd offline';$('statusbar').classList.remove('hidden');$('homestatus').className='lede status error';$('homestatus').textContent=d.sab_error||'SABnzbd is offline';$('homedl').innerHTML=''}
+    $('hdone').textContent=d.done_today!=null?d.done_today:'—';
+    $('hfail').textContent=d.failed_today!=null?d.failed_today:'—';$('hfail').style.color=d.failed_today?'var(--red)':'';
+    $('hfree').innerHTML=d.disk_free_gb!=null&&d.disk_free_gb>=0?esc(Number(d.disk_free_gb).toFixed(0))+' <small>GB</small>':'—';
+    const k=d.kodi||{};
+    $('homekodi').innerHTML=!k.configured?'':(k.online?nowCard(k.playing,true):'<button class="card kidle" data-tab="kodi">'+ICON.play+'<span>Kodi is offline</span></button>');
+  }catch(e){$('homestatus').className='lede status error';$('homestatus').textContent=e.message}
+  finally{homeBusy=false}
+}
+
+// ---------- Kodi ----------
+let kodiRecent=[],kodiMovies=null,kodiLoading=false;
+function runtimeText(sec){if(!sec)return '';const m=Math.round(sec/60);return m>=60?Math.floor(m/60)+'h '+(m%60)+'m':m+'m'}
+function movieRow(mv){
+  const meta=[mv.year,runtimeText(mv.runtime),mv.resume?'resume at '+fmtTime(mv.resume):(mv.watched?'watched':'')].filter(Boolean).join(' · ');
+  return '<div class="qrow"><div class="info"><div class="t">'+esc(mv.title)+'</div><div class="m">'+esc(meta)+'</div></div>'+
+    (mv.resume?'<button class="btn ghost sm" style="flex:none" data-play="'+esc(mv.id)+'" data-resume="1">Resume</button>':'')+
+    '<button class="icon-btn play" data-play="'+esc(mv.id)+'" aria-label="Play '+esc(mv.title)+(mv.resume?' from the start':'')+'">'+ICON.play+'</button></div>';
+}
+async function renderKodiList(){
+  const q=$('kodifilter').value.trim().toLowerCase(),title=$('kodilisttitle'),list=$('kodilist');
+  if(!q){title.textContent='RECENTLY ADDED';list.innerHTML=kodiRecent.map(movieRow).join('')||empty('No movies yet','Run a library scan once something finishes downloading.');return}
+  if(kodiMovies===null){
+    if(kodiLoading)return;kodiLoading=true;title.textContent='LOADING LIBRARY…';
+    try{kodiMovies=(await api('/api/kodi/movies')).movies||[]}catch(e){title.textContent='';list.innerHTML=empty('Couldn\'t load the library',e.message);return}finally{kodiLoading=false}
+    return renderKodiList();
+  }
+  const hits=kodiMovies.filter(m=>m.title.toLowerCase().includes(q));
+  title.textContent=hits.length+' MATCH'+(hits.length===1?'':'ES');
+  list.innerHTML=hits.slice(0,100).map(movieRow).join('')||empty('No matches','Try part of the title.');
+}
+async function refreshKodi(){
+  const st=$('kodistatus');
+  try{
+    const d=await api('/api/kodi');
+    if(!d.configured){st.className='lede';st.textContent='Kodi isn\'t set up yet — add it in the desktop app\'s Kodi tab.';$('kodinow').innerHTML='';$('kodilib').classList.add('hidden');$('kodiscan').classList.add('hidden');return}
+    $('kodiscan').classList.remove('hidden');
+    if(!d.online){st.className='lede status error';st.textContent=d.error||'Kodi is offline.';$('kodinow').innerHTML='';$('kodilib').classList.add('hidden');return}
+    const c=d.counts||{};st.className='lede';st.textContent=(c.movies||0)+' movies · '+(c.episodes||0)+' episodes';
+    $('kodinow').innerHTML=nowCard(d.playing,false);
+    kodiRecent=d.recent||[];$('kodilib').classList.remove('hidden');renderKodiList();
+  }catch(e){st.className='lede status error';st.textContent=e.message}
+}
+async function refreshKodiNow(){try{const d=await api('/api/kodi/now');$('kodinow').innerHTML=nowCard(d.playing,false)}catch{}}
+async function kodiControl(action,pid){
+  try{await api('/api/kodi/control',{action,playerid:Number(pid)});setTimeout(()=>{if(activeTab==='kodi')refreshKodiNow();else refreshHome()},400)}catch(e){toast(e.message,true)}
+}
+async function playMovie(id,resume){
+  try{await api('/api/kodi/play',{movieid:Number(id),resume:!!resume});toast(resume?'Resuming on Kodi…':'Starting on Kodi…');setTimeout(refreshKodiNow,2000)}catch(e){toast(e.message,true)}
+}
+async function kodiScan(){
+  const b=$('kodiscan');b.disabled=true;
+  try{await api('/api/kodi/scan',{});kodiMovies=null;toast('Library scan started on Kodi')}catch(e){toast(e.message,true)}finally{b.disabled=false}
+}
+
 async function retryItem(id){try{await api('/api/history/retry',{id});toast('Retry requested');await refreshHistory()}catch(e){toast(e.message,true)}}
 
 function bind(){
   $('pairbtn').addEventListener('click',pair);
   $('token').addEventListener('keydown',e=>{if(e.key==='Enter')pair()});
-  document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.tab)));
+  document.addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(b)showTab(b.dataset.tab)});
+  document.addEventListener('click',e=>{const b=e.target.closest('[data-kact]');if(b)kodiControl(b.dataset.kact,b.dataset.pid)});
+  $('homedl').addEventListener('click',async e=>{const b=e.target.closest('[data-hact]');if(!b)return;b.disabled=true;await queueAll(b.dataset.hact);refreshHome()});
+  $('kodilist').addEventListener('click',e=>{const b=e.target.closest('[data-play]');if(b)playMovie(b.dataset.play,b.dataset.resume==='1')});
+  let kodiTimer=null;$('kodifilter').addEventListener('input',()=>{clearTimeout(kodiTimer);kodiTimer=setTimeout(renderKodiList,200)});
+  $('kodiscan').addEventListener('click',kodiScan);
   $('searchbtn').addEventListener('click',search);
   $('query').addEventListener('keydown',e=>{if(e.key==='Enter')search()});
   ['sort','minsize','maxsize','mingrabs'].forEach(id=>$(id).addEventListener('input',()=>{savePrefs();renderResults()}));
@@ -1329,6 +1537,7 @@ function bind(){
   $('histrefresh').addEventListener('click',refreshHistory);
   setInterval(()=>{if(!document.hidden&&activeTab==='queue'&&!$('app').classList.contains('hidden'))refreshQueue(true)},4000);
   setInterval(pollStatus,10000);
+  setInterval(()=>{if(document.hidden||$('app').classList.contains('hidden'))return;if(activeTab==='home')refreshHome();else if(activeTab==='kodi')refreshKodiNow()},5000);
 }
 bind();
 if(token)connect();
@@ -1467,6 +1676,16 @@ class MobileHandler(BaseHTTPRequestHandler):
             })
         elif path == "/api/sab/info":
             self.send_json(200, {"categories": sab_categories()})
+        elif path == "/api/home":
+            self.send_json(200, self._home())
+        elif path == "/api/kodi":
+            self.send_json(200, self._kodi_overview())
+        elif path == "/api/kodi/now":
+            self.send_json(200, {"playing": kodi_now_playing() if kodi_configured() else None})
+        elif path == "/api/kodi/movies":
+            res = kodi_call("VideoLibrary.GetMovies", {"properties": KODI_MOVIE_PROPS,
+                            "sort": {"method": "sorttitle", "order": "ascending", "ignorearticle": True}}, timeout=20) or {}
+            self.send_json(200, {"movies": [_kodi_movie(x) for x in res.get("movies", [])]})
         elif path == "/api/queue":
             q = sab_request("queue", {"limit": 100}).get("queue", {})
             kb = to_float(q.get("kbpersec"), -1.0)
@@ -1526,6 +1745,23 @@ class MobileHandler(BaseHTTPRequestHandler):
             sab_request("retry", {"value": nzo_id})
             log.info("retry %s ip=%s", nzo_id, self.ip)
             self.send_json(200, {"ok": True})
+        elif path == "/api/kodi/play":
+            movieid = to_int(body.get("movieid"))
+            if movieid <= 0:
+                raise ValueError("Invalid movie.")
+            kodi_call("Player.Open", {"item": {"movieid": movieid}, "options": {"resume": bool(body.get("resume"))}})
+            log.info("kodi play movie=%d resume=%s ip=%s", movieid, bool(body.get("resume")), self.ip)
+            self.send_json(200, {"ok": True})
+        elif path == "/api/kodi/control":
+            action, pid = str(body.get("action") or ""), to_int(body.get("playerid"), -1)
+            if action not in ("playpause", "stop") or not 0 <= pid <= 10:
+                raise ValueError("Invalid player action.")
+            kodi_call("Player.PlayPause" if action == "playpause" else "Player.Stop", {"playerid": pid})
+            self.send_json(200, {"ok": True})
+        elif path == "/api/kodi/scan":
+            kodi_call("VideoLibrary.Scan", {"showdialogs": False})
+            log.info("kodi scan ip=%s", self.ip)
+            self.send_json(200, {"ok": True})
         elif path == "/api/speedlimit":
             mbps = to_float(body.get("mbps"), -1.0)
             if not 0 <= mbps <= 10000:
@@ -1535,6 +1771,60 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"ok": True})
         else:
             self.send_json(404, {"error": "Not found."})
+
+    def _home(self) -> dict:
+        """One call for the Home tab: SABnzbd summary, today's totals and what Kodi is playing."""
+        out: dict = {"sab_ok": True}
+        try:
+            q = sab_request("queue", {"limit": 5}).get("queue", {})
+            kb = to_float(q.get("kbpersec"), -1.0)
+            slots = q.get("slots", [])
+            cur = next((x for x in slots if str(x.get("status", "")).lower() == "downloading"), slots[0] if slots else None)
+            free = q.get("diskspace2") or q.get("diskspace1")
+            out.update({
+                "state": "Paused" if q.get("paused") else q.get("status", "SABnzbd"),
+                "paused": bool(q.get("paused")),
+                "speed": f"{format_bytes(kb * 1024)}/s" if kb >= 0 else f"{q.get('speed', '0')}B/s",
+                "total": to_int(q.get("noofslots_total"), len(slots)),
+                "disk_free_gb": to_float(free, -1.0) if free not in (None, "") else None,
+                "current": None if not cur else {
+                    "name": cur.get("filename", "Unnamed"), "status": cur.get("status", ""), "pct": to_float(cur.get("percentage")),
+                    "size": cur.get("size", ""), "sizeleft": cur.get("sizeleft", ""), "eta": cur.get("timeleft", "")},
+            })
+            midnight = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
+            hist = sab_request("history", {"limit": 60}).get("history", {}).get("slots", [])
+            today = [x for x in hist if to_int(x.get("completed")) >= midnight]
+            out["done_today"] = sum(1 for x in today if str(x.get("status")).lower() == "completed")
+            out["failed_today"] = sum(1 for x in today if str(x.get("status")).lower() == "failed")
+        except (UpstreamError, ConfigError) as exc:
+            out.update({"sab_ok": False, "sab_error": redact(exc), "state": "Offline", "speed": "", "total": 0})
+        out["kodi"] = self._kodi_brief()
+        return out
+
+    def _kodi_brief(self) -> dict:
+        if not kodi_configured():
+            return {"configured": False}
+        try:
+            return {"configured": True, "online": True, "playing": kodi_now_playing()}
+        except UpstreamError as exc:
+            return {"configured": True, "online": False, "error": str(exc)}
+
+    def _kodi_overview(self) -> dict:
+        info = self._kodi_brief()
+        if not info.get("online"):
+            return info
+        lim = {"limits": {"start": 0, "end": 1}}
+        try:
+            info["counts"] = {
+                "movies": to_int(((kodi_call("VideoLibrary.GetMovies", lim) or {}).get("limits") or {}).get("total")),
+                "episodes": to_int(((kodi_call("VideoLibrary.GetEpisodes", lim) or {}).get("limits") or {}).get("total")),
+            }
+            recent = (kodi_call("VideoLibrary.GetRecentlyAddedMovies", {"properties": KODI_MOVIE_PROPS,
+                      "limits": {"start": 0, "end": 12}}) or {}).get("movies", [])
+            info["recent"] = [_kodi_movie(x) for x in recent]
+        except UpstreamError as exc:
+            info.update(online=False, error=str(exc))
+        return info
 
     def _post_search(self, body: dict) -> None:
         if self._limited(SEARCH_LIMITER, "search"):
