@@ -1,5 +1,5 @@
 """
-John's NZB Command Center — Operations Center Edition
+NZB Command Center — Operations Center Edition
 Local NZB, SABnzbd, Multi-Indexer Newznab, Media Inspector, Kodi Manager
 & Jellyfin / Plex Media Server Monitor
 
@@ -2329,7 +2329,7 @@ class NzbManagerApp(ctk.CTk):
         apply_app_theme()  # before any widget exists, including this window
         super().__init__()
 
-        self.title("John's NZB Command Center — Operations Center")
+        self.title("NZB Command Center — Operations Center")
         self.geometry("1360x900")
         self.minsize(1080, 720)
         self.configure(fg_color=COLORS["bg_root"])
@@ -2882,7 +2882,7 @@ class NzbManagerApp(ctk.CTk):
         title_block.pack(side="left", padx=(11, 18))
         ctk.CTkLabel(
             title_block,
-            text="John's NZB Command Center",
+            text="NZB Command Center",
             height=20,
             anchor="w",
             font=ctk.CTkFont(family=UI_FONT, size=15, weight="bold"),

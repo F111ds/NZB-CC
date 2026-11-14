@@ -1,5 +1,5 @@
 """
-kodi_client.py — Kodi tab for John's NZB Command Center.
+kodi_client.py — Kodi tab for NZB Command Center.
 
 Talks to Kodi over its JSON-RPC web interface (Kodi: Settings > Services >
 Control > "Allow remote control via HTTP"). Keep this file next to

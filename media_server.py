@@ -1,6 +1,6 @@
 # media_server.py
 # Standalone Jellyfin & Plex Media Server Client, Stream Monitor & Disk Audit Module
-# Designed for John's NZB Command Center — Operations Center Edition
+# Designed for NZB Command Center — Operations Center Edition
 #
 # Zero external dependencies beyond Python stdlib + customtkinter.
 

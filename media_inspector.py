@@ -1,6 +1,6 @@
 # media_inspector.py
 # Standalone Media Library Scanner & FFprobe Inspector Module
-# Designed for John's NZB Command Center — Operations Center Edition
+# Designed for NZB Command Center — Operations Center Edition
 #
 # Strictly read-only: never deletes, moves, or renames media files.
 
