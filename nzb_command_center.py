@@ -35,7 +35,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import tkinter as tk
+import tkinter.font as tkfont
 import uuid
+import webbrowser
 import xml.etree.ElementTree as ET
 import zlib
 from collections import OrderedDict
@@ -129,6 +132,10 @@ DEFAULT_CONFIG = {
     "search_history": [],
     "desktop_notifications": True,
     "watch_folder": False,
+    "window_geometry": "",
+    "window_zoomed": False,
+    "last_tab": "",
+    "compact_dashboard": False,
 }
 
 # Keys edited live by the Media Server tab. Settings saves must never overwrite them
@@ -221,6 +228,199 @@ def _tint(hex_color: str, amount: float = 0.16, base: str = "#0F1E25") -> str:
         return base
     mixed = tuple(round(b[i] + (c[i] - b[i]) * amount) for i in range(3))
     return "#%02X%02X%02X" % mixed
+
+
+ON_ACCENT = "#041016"  # text/icon colour on accent-filled buttons
+
+# --- Icons: Windows' built-in icon font (Segoe Fluent Icons on 11, Segoe MDL2 Assets on 10) ---
+ICON_GLYPHS = {
+    "search": "\uE721", "send": "\uE724", "view": "\uE890", "save": "\uE74E", "refresh": "\uE72C",
+    "pause": "\uE769", "play": "\uE768", "settings": "\uE713", "folder_open": "\uE838", "folder": "\uE8B7",
+    "file": "\uE8E5", "delete": "\uE74D", "star": "\uE735", "cancel": "\uE711", "up": "\uE70E",
+    "down": "\uE70D", "top": "\uE74A", "movie": "\uE714", "tv": "\uE7F4", "music": "\uE8D6",
+    "book": "\uE8F1", "game": "\uE7FC", "app": "\uE71D", "package": "\uE7B8", "code": "\uE943",
+    "collapse": "\uE70E", "expand": "\uE70D",
+}
+_ICON_FONT_FAMILIES = ("Segoe Fluent Icons", "Segoe MDL2 Assets")
+_ICON_FONT_FILES = ("SegoeIcons.ttf", "segmdl2.ttf")
+_icon_font_path: str | None = None
+_icon_font_family: str | None = None
+_ICON_CACHE: dict = {}
+
+
+def _find_icon_font_file() -> str:
+    global _icon_font_path
+    if _icon_font_path is None:
+        _icon_font_path = ""
+        fonts_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+        for name in _ICON_FONT_FILES:
+            if (fonts_dir / name).exists():
+                _icon_font_path = str(fonts_dir / name)
+                break
+    return _icon_font_path
+
+
+def icon_font_family() -> str:
+    """Tk font family for drawing icon glyphs as text ("" when the system has none). Needs a Tk root."""
+    global _icon_font_family
+    if _icon_font_family is None:
+        try:
+            available = set(tkfont.families())
+        except Exception:
+            return ""
+        _icon_font_family = next((f for f in _ICON_FONT_FAMILIES if f in available), "")
+    return _icon_font_family
+
+
+def app_icon(name: str, color: str, size: int = 14):
+    """A crisp CTkImage of an icon glyph in the given colour, or None (no Pillow / no icon font).
+
+    Buttons pass this as image=..., so without Pillow or the font they simply show text only.
+    """
+    key = (name, color, size)
+    if key in _ICON_CACHE:
+        return _ICON_CACHE[key]
+    img = None
+    glyph = ICON_GLYPHS.get(name)
+    font_path = _find_icon_font_file()
+    if PIL_AVAILABLE and glyph and font_path:
+        try:
+            from PIL import ImageDraw, ImageFont
+            px = size * 3  # drawn large and scaled down: sharp at 100-200% display scaling
+            font = ImageFont.truetype(font_path, px)
+            im = Image.new("RGBA", (px, px), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(im)
+            l, t, r, b = draw.textbbox((0, 0), glyph, font=font)
+            draw.text(((px - (r - l)) / 2 - l, (px - (b - t)) / 2 - t), glyph, font=font, fill=color)
+            img = ctk.CTkImage(light_image=im, dark_image=im, size=(size, size))
+        except Exception:
+            img = None
+    _ICON_CACHE[key] = img
+    return img
+
+
+APP_ICON_FILE = Path(__file__).resolve().parent / "app_icon.ico"
+
+
+def ensure_app_icon() -> Path | None:
+    """The window/taskbar icon (the teal "N" logo). Generated once with Pillow if missing."""
+    if APP_ICON_FILE.exists():
+        return APP_ICON_FILE
+    if not PIL_AVAILABLE:
+        return None
+    try:
+        from PIL import ImageDraw, ImageFont
+        S = 256
+        im = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(im)
+        draw.rounded_rectangle((8, 8, S - 8, S - 8), radius=58, fill=COLORS["accent"])
+        font = None
+        for face in ("segoeuib.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf"):
+            try:
+                font = ImageFont.truetype(face, 176)
+                break
+            except OSError:
+                continue
+        font = font or ImageFont.load_default()
+        l, t, r, b = draw.textbbox((0, 0), "N", font=font)
+        draw.text(((S - (r - l)) / 2 - l, (S - (b - t)) / 2 - t), "N", font=font, fill=ON_ACCENT)
+        im.save(APP_ICON_FILE, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+        return APP_ICON_FILE
+    except Exception:
+        return None
+
+
+def style_window_chrome(win, caption: str | None = None) -> None:
+    """Windows 11: tints the title bar to match the app header. Harmless no-op elsewhere."""
+    if _SYS != "Windows":
+        return
+
+    def colorref(hex_color: str) -> int:
+        h = hex_color.lstrip("#")
+        return int(h[4:6] + h[2:4] + h[0:2], 16)  # 0x00BBGGRR
+
+    try:
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+        # 35 = caption colour, 34 = border colour, 36 = caption text colour (Windows 11 build 22000+)
+        for attr, color in ((35, caption or COLORS["bg_panel"]), (34, COLORS["border"]), (36, COLORS["text_primary"])):
+            val = ctypes.c_int(colorref(color))
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(val), ctypes.sizeof(val))
+    except Exception:
+        pass
+
+
+def apply_window_chrome(win, delay_ms: int = 250) -> None:
+    """App icon + tinted title bar for a window. Delayed: CustomTkinter sets its own icon at ~200 ms."""
+    def run() -> None:
+        try:
+            if not win.winfo_exists():
+                return
+            icon = ensure_app_icon()
+            if icon:
+                win.iconbitmap(str(icon))
+            style_window_chrome(win)
+        except Exception:
+            pass
+
+    win.after(delay_ms, run)
+
+
+class Tooltip:
+    """Small hover hint for buttons and pills."""
+
+    def __init__(self, widget, text: str, delay_ms: int = 450):
+        self.widget = widget
+        self.text = text
+        self.delay_ms = delay_ms
+        self._after_id = None
+        self._tip = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def set_text(self, text: str) -> None:
+        self.text = text
+
+    def _schedule(self, _event=None) -> None:
+        self._cancel()
+        self._after_id = self.widget.after(self.delay_ms, self._show)
+
+    def _cancel(self) -> None:
+        if self._after_id:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _show(self) -> None:
+        self._after_id = None
+        try:
+            if self._tip is not None or not self.widget.winfo_exists() or not self.text:
+                return
+            x = self.widget.winfo_rootx() + 6
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+            tip = tk.Toplevel(self.widget)
+            tip.wm_overrideredirect(True)
+            tip.attributes("-topmost", True)
+            tk.Label(
+                tip, text=self.text, justify="left", wraplength=380, padx=9, pady=5,
+                bg=COLORS["bg_card_alt"], fg=COLORS["text_primary"], font=(UI_FONT, 9),
+                highlightthickness=1, highlightbackground=COLORS["border_accent"], bd=0,
+            ).pack()
+            tip.wm_geometry(f"+{x}+{y}")
+            self._tip = tip
+        except Exception:
+            self._tip = None
+
+    def _hide(self, _event=None) -> None:
+        self._cancel()
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
 
 
 def apply_app_theme() -> None:
@@ -836,20 +1036,16 @@ def score_release(item: dict, in_queue: bool = False, downloaded: bool = False) 
         pts += 2
         why.append("repack +2")
 
-    size_gb = float(item.get("size_bytes") or 0) / 1024 ** 3
-    tv = parse_release_identity_is_tv(t)
-    is_episode = tv and bool(re.search(r"\bS\d{1,2}[\s._-]?E\d{1,3}\b|\b\d{1,2}x\d{2}\b", t, re.I))
-    if size_gb > 0 and (is_episode or not tv):
-        lo, hi = _EXPECTED_GB.get((is_episode, quality), (0, 10 ** 6))
-        if size_gb < lo * 0.5:
-            pts -= 25
-            why.append("suspiciously small -25")
-        elif size_gb < lo:
-            pts -= 6
-            why.append("small for quality -6")
-        elif size_gb > hi * 1.5:
-            pts -= 4
-            why.append("very large -4")
+    verdict = size_verdict(item)
+    if verdict == "tiny":
+        pts -= 25
+        why.append("suspiciously small -25")
+    elif verdict == "small":
+        pts -= 6
+        why.append("small for quality -6")
+    elif verdict == "large":
+        pts -= 4
+        why.append("very large -4")
 
     grabs = int(item.get("grabs_int") or 0)
     if grabs > 0:
@@ -877,6 +1073,66 @@ def score_release(item: dict, in_queue: bool = False, downloaded: bool = False) 
         why.append("upgrade/replacement +5")
 
     return max(0, min(100, pts)), why
+
+
+def size_verdict(item: dict) -> str:
+    """How a release's size compares with what its resolution normally needs.
+
+    "tiny" (under half the usual minimum: likely fake/broken), "small", "large" (well above the
+    usual maximum, e.g. remuxes), "ok", or "" when it can't be judged (season packs, unknown size).
+    """
+    t = item.get("title", "")
+    quality = item.get("quality") or detect_quality_bucket(t)
+    size_gb = float(item.get("size_bytes") or 0) / 1024 ** 3
+    tv = parse_release_identity_is_tv(t)
+    is_episode = tv and bool(re.search(r"\bS\d{1,2}[\s._-]?E\d{1,3}\b|\b\d{1,2}x\d{2}\b", t, re.I))
+    if size_gb <= 0 or (tv and not is_episode):
+        return ""
+    lo, hi = _EXPECTED_GB.get((is_episode, quality), (0, 10 ** 6))
+    if size_gb < lo * 0.5:
+        return "tiny"
+    if size_gb < lo:
+        return "small"
+    if size_gb > hi * 1.5:
+        return "large"
+    return "ok"
+
+
+SIZE_VERDICT_STYLE = {
+    "tiny": ("red", "Suspiciously small for its resolution: likely fake or broken."),
+    "small": ("amber", "Smaller than usual for its resolution."),
+    "large": ("purple", "Much larger than usual (e.g. a remux)."),
+    "ok": ("text_secondary", "Typical size for its resolution."),
+    "": ("text_secondary", ""),
+}
+
+
+def release_kind(item: dict) -> tuple[str, str, str]:
+    """(icon name, colour key, short label) describing what a release is, for artwork placeholders."""
+    cat = f"{item.get('category', '')} {item.get('cat_hint', '')}".lower()
+    title = item.get("title", "")
+    if re.search(r"audio|music|mp3|flac|lossless", cat):
+        return "music", "purple", "MUSIC"
+    if re.search(r"book|comic|magazine", cat):
+        return "book", "amber", "BOOK"
+    if re.search(r"console|game", cat):
+        return "game", "red", "GAME"
+    if re.search(r"\bpc\b|\bapps?\b|software", cat):
+        return "app", "sky", "APP"
+    if "tv" in cat or parse_release_identity_is_tv(title):
+        return "tv", "sky", "TV"
+    if "movie" in cat or re.search(r"\b(19|20)\d{2}\b", title):
+        return "movie", "accent", "MOVIE"
+    return "package", "text_muted", "NZB"
+
+
+def _details_link(*candidates: str) -> str:
+    """First http(s) link among an item's comments/guid fields: the release page on the indexer."""
+    for c in candidates:
+        c = (c or "").strip()
+        if c.startswith(("http://", "https://")):
+            return c.split("#", 1)[0]
+    return ""
 
 
 def parse_release_identity_is_tv(title: str) -> bool:
@@ -1275,6 +1531,9 @@ class SabnzbdClient:
     def move_queue_item_top(self, nzo_id: str) -> None:
         self._request("switch", {"value": nzo_id, "value2": "0"})
 
+    def move_queue_item(self, nzo_id: str, position: int) -> None:
+        self._request("switch", {"value": nzo_id, "value2": str(max(0, int(position)))})
+
     def set_priority(self, nzo_id: str, priority_val: str) -> None:
         self._request("queue", {"name": "priority", "value": nzo_id, "value2": priority_val})
 
@@ -1510,6 +1769,11 @@ class NewznabClient:
         for idx, item in enumerate(root.findall(".//item")[:limit]):
             title = (item.findtext("title") or "Untitled Release").strip()
             link = (item.findtext("link") or "").strip()
+            guid_el = item.find("guid")
+            details_url = _details_link(
+                item.findtext("comments") or "",
+                (guid_el.text or "") if guid_el is not None and guid_el.attrib.get("isPermaLink", "").lower() == "true" else "",
+            )
             pub_date = (item.findtext("pubDate") or "").strip()
             category = (item.findtext("category") or "").strip()
 
@@ -1571,6 +1835,7 @@ class NewznabClient:
                 "grabs_int": grabs_int,
                 "cover_url": cover_url,
                 "nzb_url": nzb_url,
+                "details_url": details_url,
                 "mirror_count": 0,
             })
         return results
@@ -1617,6 +1882,7 @@ class NewznabClient:
                 "grabs_int": 0,
                 "cover_url": "",
                 "nzb_url": nzb_url,
+                "details_url": _details_link(str(item.get("comments") or ""), str(item.get("guid") or "")),
                 "mirror_count": 0,
             })
         return results
@@ -1733,6 +1999,7 @@ class NzbViewerDialog(ctk.CTkToplevel):
         self.title(f"NZB Viewer — {title}")
         self.geometry("820x580")
         self.minsize(640, 440)
+        apply_window_chrome(self)
         self.configure(fg_color=COLORS["bg_root"])
         self.transient(master)
         self.bind("<Escape>", lambda _e: self.destroy())
@@ -1814,6 +2081,7 @@ class SettingsDialog(ctk.CTkToplevel):
     def __init__(self, master, config: dict, on_save):
         super().__init__(master)
         self.title("Connection & Indexer Settings")
+        apply_window_chrome(self)
         self.geometry("760x710")
         self.minsize(640, 540)
         self.resizable(True, True)
@@ -1870,6 +2138,7 @@ class SettingsDialog(ctk.CTkToplevel):
             border_color=COLORS["border"],
         )
         container.pack(side="top", fill="both", expand=True, padx=16, pady=(16, 10))
+        self._container = container
 
         sab_hdr = ctk.CTkFrame(container, fg_color="transparent")
         sab_hdr.pack(fill="x", padx=14, pady=(10, 6))
@@ -1915,12 +2184,13 @@ class SettingsDialog(ctk.CTkToplevel):
         for entry in (self.sab_url, self.sab_key, self.folder):
             entry.bind("<KeyRelease>", lambda _e: self._mark_dirty())
 
-        ctk.CTkLabel(
+        self._idx_header = ctk.CTkLabel(
             container,
             text="Newznab Indexers",
             font=ctk.CTkFont(family=UI_FONT, size=14, weight="bold"),
             text_color=COLORS["accent"],
-        ).pack(anchor="w", padx=14, pady=(14, 6))
+        )
+        self._idx_header.pack(anchor="w", padx=14, pady=(14, 6))
 
         self.idx_list_frame = ctk.CTkFrame(
             container,
@@ -2110,6 +2380,20 @@ class SettingsDialog(ctk.CTkToplevel):
         )
         entry.grid(row=row_idx, column=1, padx=(0, 12), pady=4, sticky="ew")
         return entry
+
+    def focus_section(self, section: str) -> None:
+        """Scrolls to a section: "sab" (connection fields) or "indexers"."""
+        try:
+            self.update_idletasks()
+            canvas = self._container._parent_canvas
+            if section == "indexers":
+                total = max(1, self._container.winfo_height())
+                canvas.yview_moveto(max(0.0, (self._idx_header.winfo_y() - 8) / total))
+            else:
+                canvas.yview_moveto(0.0)
+                (self.sab_url if not self.sab_url.get().strip() else self.sab_key).focus_set()
+        except Exception:
+            pass
 
     def _render_indexer_rows(self) -> None:
         for w in self.idx_list_frame.winfo_children():
@@ -2327,12 +2611,16 @@ class NzbManagerApp(ctk.CTk):
     def __init__(self):
         ctk.set_appearance_mode("dark")
         apply_app_theme()  # before any widget exists, including this window
+        _ICON_CACHE.clear()  # icon images belong to one Tk interpreter; never reuse a destroyed one's
         super().__init__()
 
         self.title("NZB Command Center — Operations Center")
         self.geometry("1360x900")
         self.minsize(1080, 720)
         self.configure(fg_color=COLORS["bg_root"])
+        apply_window_chrome(self, delay_ms=60)
+        self._dashboard_compact = False
+        self._compact_after_id = None
 
         self._shutting_down = False
         self._ui_queue: queue.Queue = queue.Queue()
@@ -2359,6 +2647,7 @@ class NzbManagerApp(ctk.CTk):
         self.sab = SabnzbdClient(self.config_data["sab_url"], self.config_data["sab_api_key"])
         self.indexers: list[NewznabClient] = self._build_indexer_clients(self.config_data)
         self.artwork = ArtworkCache(size=(58, 84))
+        self._restore_window_geometry()
 
         self.sab_categories: list[str] = ["*"]
         self._sab_cats_loaded = False
@@ -2386,6 +2675,11 @@ class NzbManagerApp(ctk.CTk):
         self._build_ui()
         self._bind_shortcuts()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        last_tab = self.config_data.get("last_tab", "")
+        if last_tab in self._tab_names:
+            self.tabs.set(last_tab)
+        if self.config_data.get("compact_dashboard"):
+            self._set_dashboard_compact(True, save=False)
 
         self._drain_ui_queue()
         self._load_cached_indexer_categories()
@@ -2413,17 +2707,59 @@ class NzbManagerApp(ctk.CTk):
         self.bind("<Control-F>", self._shortcut_focus_search)
         self.bind("<Control-comma>", lambda _e: self._open_settings())
         self.bind("<F5>", lambda _e: self._refresh_sab_all())
+        self.bind("<F9>", lambda _e: self._toggle_dashboard())
 
     def _shortcut_focus_search(self, _event=None) -> None:
         self.tabs.set("Indexer Search")
         self.search_entry.focus_set()
         self.search_entry.select_range(0, "end")
 
-    def _open_settings(self) -> None:
+    def _open_settings(self, section: str | None = None) -> None:
         if self._settings_dialog is not None and self._settings_dialog.winfo_exists():
             self._settings_dialog.focus()
-            return
-        self._settings_dialog = SettingsDialog(self, self.config_data, self._save_config)
+        else:
+            self._settings_dialog = SettingsDialog(self, self.config_data, self._save_config)
+        if section:
+            dlg = self._settings_dialog
+            self.after(220, lambda: dlg.winfo_exists() and dlg.focus_section(section))
+
+    # ------------------------------------------------------------------ window state
+    @staticmethod
+    def _virtual_screen(widget) -> tuple[int, int, int, int]:
+        """(x, y, width, height) of the whole desktop across all monitors."""
+        if _SYS == "Windows":
+            try:
+                gsm = ctypes.windll.user32.GetSystemMetrics
+                w, h = gsm(78), gsm(79)
+                if w > 0 and h > 0:
+                    return gsm(76), gsm(77), w, h
+            except Exception:
+                pass
+        return 0, 0, widget.winfo_screenwidth(), widget.winfo_screenheight()
+
+    def _restore_window_geometry(self) -> None:
+        """Reopens at the last size/position, unless that's off-screen (e.g. a monitor was unplugged)."""
+        m = re.fullmatch(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", str(self.config_data.get("window_geometry") or ""))
+        if m:
+            w, h, x, y = (int(v) for v in m.groups())
+            w, h = max(w, 1080), max(h, 720)
+            vx, vy, vw, vh = self._virtual_screen(self)
+            if vx - w + 160 <= x <= vx + vw - 160 and vy - 10 <= y <= vy + vh - 120:
+                self.geometry(f"{w}x{h}+{x}+{y}")
+        if self.config_data.get("window_zoomed"):
+            self.after(80, lambda: self.state("zoomed"))
+
+    def _remember_window_state(self) -> None:
+        try:
+            state = self.state()
+            self.config_data["window_zoomed"] = state == "zoomed"
+            if state == "normal":
+                self.config_data["window_geometry"] = self.geometry()
+            self.config_data["last_tab"] = self.tabs.get()
+            self.config_data["compact_dashboard"] = self._dashboard_compact
+            self._write_config_file(self.config_data)
+        except Exception:
+            pass
 
     def _load_config(self) -> dict:
         cfg = json.loads(json.dumps(DEFAULT_CONFIG))
@@ -2467,6 +2803,10 @@ class NzbManagerApp(ctk.CTk):
                     cfg["search_history"] = [str(q) for q in loaded["search_history"] if str(q).strip()][:15]
                 cfg["desktop_notifications"] = bool(loaded.get("desktop_notifications", True))
                 cfg["watch_folder"] = bool(loaded.get("watch_folder", False))
+                cfg["window_geometry"] = str(loaded.get("window_geometry") or "")
+                cfg["window_zoomed"] = bool(loaded.get("window_zoomed", False))
+                cfg["last_tab"] = str(loaded.get("last_tab") or "")
+                cfg["compact_dashboard"] = bool(loaded.get("compact_dashboard", False))
 
                 if isinstance(loaded.get("indexers"), list):
                     migrated = []
@@ -2567,6 +2907,10 @@ class NzbManagerApp(ctk.CTk):
             "search_history": [str(q) for q in cfg.get("search_history", [])][:15],
             "desktop_notifications": bool(cfg.get("desktop_notifications", True)),
             "watch_folder": bool(cfg.get("watch_folder", False)),
+            "window_geometry": str(cfg.get("window_geometry", "")),
+            "window_zoomed": bool(cfg.get("window_zoomed", False)),
+            "last_tab": str(cfg.get("last_tab", "")),
+            "compact_dashboard": bool(cfg.get("compact_dashboard", False)),
         }
         _atomic_write_json(CONFIG_FILE, to_disk)
         # Warn (once per new failure) when Windows couldn't encrypt a secret, instead of
@@ -2799,8 +3143,9 @@ class NzbManagerApp(ctk.CTk):
     def _on_close(self) -> None:
         if self._shutting_down:
             return
+        self._remember_window_state()
         self._shutting_down = True
-        for job_id in (self._ui_drain_after_id, self._auto_refresh_after_id, self._watch_after_id):
+        for job_id in (self._ui_drain_after_id, self._auto_refresh_after_id, self._watch_after_id, self._compact_after_id):
             if job_id:
                 try:
                     self.after_cancel(job_id)
@@ -2919,13 +3264,27 @@ class NzbManagerApp(ctk.CTk):
         self.kodi_status_pill = status_pill("●  Kodi: Not Configured", COLORS["text_muted"])
         self.media_server_status_pill = status_pill("●  Media Server: Not Configured", COLORS["text_muted"], last=True)
 
+        # Each pill is a shortcut to the place where that connection is set up.
+        for pill, action, hint in (
+            (self.sab_status_pill, lambda: self._open_settings("sab"), "SABnzbd connection: click to open Settings"),
+            (self.indexer_status_pill, lambda: self._open_settings("indexers"), "Indexers: click to manage them in Settings"),
+            (self.kodi_status_pill, lambda: self.tabs.set("Kodi"), "Kodi: click to open the Kodi tab"),
+            (self.media_server_status_pill, lambda: self.tabs.set("Media Server"), "Jellyfin / Plex: click to open the Media Server tab"),
+        ):
+            pill.configure(cursor="hand2")
+            pill.bind("<Button-1>", lambda _e, a=action: a(), add="+")
+            pill.bind("<Enter>", lambda _e, w=pill: w.configure(fg_color=COLORS["bg_card_alt"]), add="+")
+            pill.bind("<Leave>", lambda _e, w=pill: w.configure(fg_color=COLORS["bg_card"]), add="+")
+            Tooltip(pill, hint)
+
         right = ctk.CTkFrame(header, fg_color="transparent")
         right.pack(side="right", padx=18, fill="y")
 
         ctk.CTkButton(
             right,
             text="Settings",
-            width=96,
+            image=app_icon("settings", ON_ACCENT),
+            width=108,
             height=34,
             fg_color=COLORS["accent"],
             hover_color=COLORS["accent_hover"],
@@ -2937,7 +3296,8 @@ class NzbManagerApp(ctk.CTk):
         self.pause_all_btn = ctk.CTkButton(
             right,
             text="Pause Queue",
-            width=116,
+            image=app_icon("pause", COLORS["text_primary"]),
+            width=128,
             height=34,
             fg_color="transparent",
             hover_color=COLORS["bg_card_alt"],
@@ -2948,13 +3308,31 @@ class NzbManagerApp(ctk.CTk):
         )
         self.pause_all_btn.pack(side="right", padx=(0, 8), pady=15)
 
+        collapse_icon = app_icon("collapse", COLORS["text_secondary"])
+        self.dash_toggle_btn = ctk.CTkButton(
+            right,
+            text="" if collapse_icon else "▴",
+            image=collapse_icon,
+            width=34,
+            height=34,
+            fg_color="transparent",
+            hover_color=COLORS["bg_card_alt"],
+            border_width=1,
+            border_color=COLORS["border"],
+            text_color=COLORS["text_secondary"],
+            command=self._toggle_dashboard,
+        )
+        self.dash_toggle_btn.pack(side="right", padx=(0, 8), pady=15)
+        self._dash_toggle_tip = Tooltip(self.dash_toggle_btn, "Shrink the dashboard to one line for more room (F9)")
+
         telemetry = ctk.CTkFrame(self, fg_color="transparent")
         telemetry.grid(row=1, column=0, sticky="ew", padx=16, pady=(14, 8))
         for col in range(4):
             telemetry.grid_columnconfigure(col, weight=1, uniform="metric")
 
+        self._telemetry_row = telemetry
         self.card_speed_val, self.card_speed_sub = self._metric_card(
-            telemetry, 0, "DOWNLOAD SPEED & QUEUE", "0 B/s", "0 queued  •  0 B left  •  ETA 0:00:00", COLORS["accent"]
+            telemetry, 0, "DOWNLOAD SPEED & QUEUE", "—", "Connecting to SABnzbd…", COLORS["accent"]
         )
         self.card_dl_val, self.card_dl_sub = self._metric_card(
             telemetry, 1, "TOTAL DOWNLOADED", "0 B", "Today: 0 B  •  Week: 0 B", COLORS["sky"]
@@ -2975,6 +3353,7 @@ class NzbManagerApp(ctk.CTk):
 
         ops_row = ctk.CTkFrame(self, fg_color="transparent")
         ops_row.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
+        self._ops_row = ops_row
         ops_row.grid_columnconfigure(0, weight=3)
         ops_row.grid_columnconfigure(1, weight=2)
 
@@ -3011,7 +3390,7 @@ class NzbManagerApp(ctk.CTk):
 
         self.now_dl_stats = ctk.CTkLabel(
             now_hdr,
-            text="0%  •  0 B left  •  ETA 0:00:00  •  0 B/s",
+            text="—",
             font=ctk.CTkFont(family=UI_FONT_SEMIBOLD, size=11),
             text_color=COLORS["text_secondary"],
         )
@@ -3034,6 +3413,8 @@ class NzbManagerApp(ctk.CTk):
 
         self.speed_chart = SpeedChartWidget(ops_row, height=74)
         self.speed_chart.grid(row=0, column=1, sticky="nsew")
+
+        self._build_compact_strip()
 
         self.tabs = ctk.CTkTabview(
             self,
@@ -3061,6 +3442,10 @@ class NzbManagerApp(ctk.CTk):
         self.tab_kodi = self.tabs.add("Kodi")
         self.tab_media_server = self.tabs.add("Media Server")
         self.tab_log = self.tabs.add("Activity Log")
+        self._tab_names = (
+            "Indexer Search", "Local NZB Files", "SABnzbd Queue & History", "Media Inspector",
+            "Kodi", "Media Server", "Activity Log",
+        )
 
         self._build_search_tab()
         self._build_local_tab()
@@ -3077,7 +3462,7 @@ class NzbManagerApp(ctk.CTk):
 
         ctk.CTkLabel(
             footer,
-            text="Ctrl+F  Search     F5  Refresh SAB     Ctrl+,  Settings",
+            text="Ctrl+F  Search     F5  Refresh SAB     F9  Compact view     Ctrl+,  Settings     Right-click a result for more",
             font=ctk.CTkFont(family=UI_FONT, size=10),
             text_color=COLORS["text_muted"],
         ).pack(side="right", padx=18)
@@ -3090,6 +3475,91 @@ class NzbManagerApp(ctk.CTk):
             text_color=COLORS["text_secondary"],
         )
         self.status_bar.pack(side="left", fill="x", expand=True, padx=18)
+
+    def _build_compact_strip(self) -> None:
+        """One-line version of the dashboard, shown instead of the cards in compact view."""
+        strip = ctk.CTkFrame(self, height=46, fg_color=COLORS["bg_panel"], border_width=1, border_color=COLORS["border"], corner_radius=10)
+        strip.pack_propagate(False)
+        self._compact_strip = strip
+
+        self.cs_badge = ctk.CTkLabel(
+            strip, text="IDLE", height=22, corner_radius=11, padx=10, fg_color=COLORS["bg_card"],
+            font=ctk.CTkFont(family=UI_FONT, size=10, weight="bold"), text_color=COLORS["text_muted"],
+        )
+        self.cs_badge.pack(side="left", padx=(14, 10))
+
+        def stat(text: str = "", color: str = COLORS["text_secondary"], bold: bool = False) -> ctk.CTkLabel:
+            lbl = ctk.CTkLabel(
+                strip, text=text, text_color=color,
+                font=ctk.CTkFont(family=UI_FONT_SEMIBOLD if bold else UI_FONT, size=12 if bold else 11),
+            )
+            lbl.pack(side="right", padx=(0, 16))
+            return lbl
+
+        self.cs_nzbs = stat()
+        self.cs_drive = stat(bold=True)
+        ctk.CTkFrame(strip, width=1, height=22, fg_color=COLORS["border"], corner_radius=0).pack(side="right", padx=(0, 16))
+        self.cs_queue = stat()
+        self.cs_speed = stat(bold=True)
+
+        self.cs_bar = ctk.CTkProgressBar(strip, width=150, height=6, fg_color=COLORS["bg_card"], progress_color=COLORS["accent"])
+        self.cs_bar.set(0)
+        self.cs_bar.pack(side="right", padx=(0, 16))
+
+        self.cs_name = ctk.CTkLabel(
+            strip, text="", anchor="w", font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
+            text_color=COLORS["text_primary"],
+        )
+        self.cs_name.pack(side="left", fill="x", expand=True, padx=(0, 12))
+
+    def _toggle_dashboard(self) -> None:
+        self._set_dashboard_compact(not self._dashboard_compact)
+
+    def _set_dashboard_compact(self, compact: bool, save: bool = True) -> None:
+        self._dashboard_compact = compact
+        if self._compact_after_id:
+            try:
+                self.after_cancel(self._compact_after_id)
+            except Exception:
+                pass
+            self._compact_after_id = None
+        if compact:
+            self._telemetry_row.grid_remove()
+            self._ops_row.grid_remove()
+            self._compact_strip.grid(row=1, column=0, sticky="ew", padx=16, pady=(12, 8))
+            self._sync_compact_strip()
+        else:
+            self._compact_strip.grid_remove()
+            self._telemetry_row.grid()
+            self._ops_row.grid()
+        icon = app_icon("expand" if compact else "collapse", COLORS["text_secondary"])
+        self.dash_toggle_btn.configure(image=icon, text="" if icon else ("▾" if compact else "▴"))
+        self._dash_toggle_tip.set_text(
+            "Show the full dashboard (F9)" if compact else "Shrink the dashboard to one line for more room (F9)"
+        )
+        if save:
+            self.config_data["compact_dashboard"] = compact
+            self._safe_write_config("layout")
+
+    def _sync_compact_strip(self) -> None:
+        """Mirrors the (hidden) dashboard cards into the compact strip once a second."""
+        self._compact_after_id = None
+        if not self._dashboard_compact or self._shutting_down:
+            return
+        try:
+            b = self.now_dl_badge
+            self.cs_badge.configure(text=b.cget("text"), text_color=b.cget("text_color"), fg_color=b.cget("fg_color"))
+            name = str(self.now_dl_name.cget("text"))
+            self.cs_name.configure(text=name if len(name) <= 90 else name[:87] + "…")
+            self.cs_bar.set(self.now_dl_bar.get())
+            self.cs_bar.configure(progress_color=self.now_dl_bar.cget("progress_color"))
+            self.cs_speed.configure(text=self.card_speed_val.cget("text"), text_color=self.card_speed_val.cget("text_color"))
+            self.cs_queue.configure(text=self.card_speed_sub.cget("text"))
+            self.cs_drive.configure(text=self.card_drive_val.cget("text"), text_color=self.card_drive_val.cget("text_color"))
+            self.cs_nzbs.configure(text=f"{self.card_nzbs_val.cget('text')} NZBs today")
+        except Exception:
+            pass
+        self._compact_after_id = self.after(1000, self._sync_compact_strip)
 
     def _metric_card(self, parent, col: int, title: str, value: str, sub: str, accent: str, return_card: bool = False):
         card = ctk.CTkFrame(
@@ -3153,10 +3623,10 @@ class NzbManagerApp(ctk.CTk):
         )
 
     @staticmethod
-    def _empty_state(parent, title: str, hint: str) -> None:
+    def _empty_state(parent, title: str, hint: str, compact: bool = False) -> None:
         """Centered title + hint used wherever a list has nothing to show."""
         box = ctk.CTkFrame(parent, fg_color="transparent")
-        box.pack(pady=(56, 40))
+        box.pack(pady=(26, 18) if compact else (56, 40))
         ctk.CTkLabel(
             box, text="◇", font=ctk.CTkFont(family=UI_FONT, size=26), text_color=COLORS["border_accent"]
         ).pack()
@@ -3312,20 +3782,24 @@ class NzbManagerApp(ctk.CTk):
         )
         self.indexer_cat_menu.grid(row=0, column=3, padx=4, pady=8)
 
-        ctk.CTkButton(
+        cats_btn = ctk.CTkButton(
             bar,
-            text="↻ Cats",
-            width=70,
+            text="Categories",
+            image=app_icon("refresh", COLORS["text_secondary"], 13),
+            width=112,
             height=34,
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_card_alt"],
             command=lambda: self._refresh_indexer_categories(force=True),
-        ).grid(row=0, column=4, padx=2, pady=8)
+        )
+        cats_btn.grid(row=0, column=4, padx=2, pady=8)
+        Tooltip(cats_btn, "Reload the category list from the selected indexer(s)")
 
         self.search_btn = ctk.CTkButton(
             bar,
             text="Search",
-            width=104,
+            image=app_icon("search", ON_ACCENT),
+            width=110,
             height=38,
             fg_color=COLORS["accent"],
             hover_color=COLORS["accent_hover"],
@@ -3468,7 +3942,8 @@ class NzbManagerApp(ctk.CTk):
         self.batch_send_search_btn = ctk.CTkButton(
             batch_bar,
             text="Send Selected (0)",
-            width=142,
+            image=app_icon("send", ON_ACCENT, 13),
+            width=156,
             height=30,
             fg_color=COLORS["accent"],
             hover_color=COLORS["accent_hover"],
@@ -3480,8 +3955,9 @@ class NzbManagerApp(ctk.CTk):
 
         ctk.CTkButton(
             batch_bar,
-            text="★ Grab Best",
-            width=110,
+            text="Grab Best",
+            image=app_icon("star", COLORS["accent"], 13),
+            width=114,
             height=30,
             fg_color="transparent",
             hover_color=COLORS["bg_card_alt"],
@@ -3586,13 +4062,15 @@ class NzbManagerApp(ctk.CTk):
         self.folder_entry.insert(0, self.config_data["nzb_folder"])
         self.folder_entry.grid(row=0, column=0, sticky="ew", padx=(12, 8), pady=10)
 
-        ctk.CTkButton(top, text="Browse...", width=94, fg_color=COLORS["bg_card"], hover_color=COLORS["bg_card_alt"], command=self._browse_folder).grid(row=0, column=1, padx=4, pady=10)
-        ctk.CTkButton(top, text="Open Folder", width=96, fg_color=COLORS["bg_card"], hover_color=COLORS["bg_card_alt"], command=self._open_local_folder).grid(row=0, column=2, padx=4, pady=10)
-        ctk.CTkButton(top, text="Scan", width=70, fg_color=COLORS["bg_card"], hover_color=COLORS["bg_card_alt"], command=self._scan_local_folder).grid(row=0, column=3, padx=4, pady=10)
+        sec = COLORS["text_secondary"]
+        ctk.CTkButton(top, text="Browse...", image=app_icon("folder_open", sec, 13), width=104, fg_color=COLORS["bg_card"], hover_color=COLORS["bg_card_alt"], command=self._browse_folder).grid(row=0, column=1, padx=4, pady=10)
+        ctk.CTkButton(top, text="Open Folder", image=app_icon("folder", sec, 13), width=112, fg_color=COLORS["bg_card"], hover_color=COLORS["bg_card_alt"], command=self._open_local_folder).grid(row=0, column=2, padx=4, pady=10)
+        ctk.CTkButton(top, text="Scan", image=app_icon("refresh", sec, 13), width=80, fg_color=COLORS["bg_card"], hover_color=COLORS["bg_card_alt"], command=self._scan_local_folder).grid(row=0, column=3, padx=4, pady=10)
         ctk.CTkButton(
             top,
             text="Open .nzb File...",
-            width=124,
+            image=app_icon("file", ON_ACCENT, 13),
+            width=140,
             fg_color=COLORS["accent"],
             hover_color=COLORS["accent_hover"],
             text_color="#041016",
@@ -3631,7 +4109,8 @@ class NzbManagerApp(ctk.CTk):
         self.local_batch_send_btn = ctk.CTkButton(
             local_bar,
             text="Send Selected (0)",
-            width=130,
+            image=app_icon("send", ON_ACCENT, 12),
+            width=144,
             height=26,
             fg_color=COLORS["accent"],
             hover_color=COLORS["accent_hover"],
@@ -3701,33 +4180,53 @@ class NzbManagerApp(ctk.CTk):
         )
         self.local_cat_menu.pack(side="left", padx=(0, 8))
 
-        ctk.CTkButton(
+        self.local_send_btn = ctk.CTkButton(
             actions,
             text="Send to SABnzbd",
+            image=app_icon("send", ON_ACCENT, 13),
             fg_color=COLORS["accent"],
             hover_color=COLORS["accent_hover"],
             text_color="#041016",
             font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
             command=self._upload_selected_nzb,
-        ).pack(side="left", padx=(0, 8))
+        )
+        self.local_send_btn.pack(side="left", padx=(0, 8))
 
-        ctk.CTkButton(
+        self.local_popout_btn = ctk.CTkButton(
             actions,
             text="Pop-out / XML",
-            width=106,
+            image=app_icon("code", COLORS["text_secondary"], 13),
+            width=122,
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_card_alt"],
             command=self._open_selected_nzb_popup,
-        ).pack(side="left")
+        )
+        self.local_popout_btn.pack(side="left")
 
-        ctk.CTkButton(
+        self.local_delete_btn = ctk.CTkButton(
             actions,
             text="Delete File",
-            width=96,
+            image=app_icon("delete", "#FFFFFF", 13),
+            width=108,
             fg_color=COLORS["red"],
             hover_color="#DC2626",
             command=self._delete_selected_nzb,
-        ).pack(side="right")
+        )
+        self.local_delete_btn.pack(side="right")
+        self._set_local_actions(False)
+
+    def _set_local_actions(self, has_file: bool, parsed: bool = True) -> None:
+        """The inspector's buttons only light up once a file is selected (Delete stays muted until then)."""
+        state = "normal" if has_file else "disabled"
+        self.local_send_btn.configure(
+            state=state, fg_color=COLORS["accent"] if has_file else COLORS["bg_card"],
+            image=app_icon("send", ON_ACCENT if has_file else COLORS["text_muted"], 13),
+        )
+        self.local_popout_btn.configure(state="normal" if has_file and parsed else "disabled")
+        self.local_delete_btn.configure(
+            state=state, fg_color=COLORS["red"] if has_file else COLORS["bg_card"],
+            image=app_icon("delete", "#FFFFFF" if has_file else COLORS["text_muted"], 13),
+        )
 
     def _build_sab_tab(self) -> None:
         self.tab_sab.grid_rowconfigure(1, weight=1)
@@ -3739,7 +4238,7 @@ class NzbManagerApp(ctk.CTk):
 
         self.sab_summary_label = ctk.CTkLabel(
             ctrl,
-            text="ACTIVE QUEUE  •  0 B left  •  ETA 0:00:00  •  0 B/s",
+            text="ACTIVE QUEUE  •  Connecting…",
             font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
             text_color=COLORS["accent"],
         )
@@ -3766,7 +4265,8 @@ class NzbManagerApp(ctk.CTk):
         ctk.CTkButton(
             ctrl,
             text="Refresh",
-            width=80,
+            image=app_icon("refresh", COLORS["text_secondary"], 13),
+            width=92,
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_card_alt"],
             command=self._refresh_sab_all,
@@ -3873,7 +4373,8 @@ class NzbManagerApp(ctk.CTk):
         ctk.CTkButton(
             top,
             text="Clear Log",
-            width=84,
+            image=app_icon("delete", COLORS["text_secondary"], 12),
+            width=98,
             height=28,
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_card_alt"],
@@ -4173,11 +4674,11 @@ class NzbManagerApp(ctk.CTk):
     def _set_search_busy(self, busy: bool) -> None:
         self._search_in_flight = busy
         if busy:
-            self.search_btn.configure(text="Cancel", fg_color=COLORS["red"], hover_color="#DC2626", text_color="#FFFFFF")
+            self.search_btn.configure(text="Cancel", image=app_icon("cancel", "#FFFFFF"), fg_color=COLORS["red"], hover_color="#DC2626", text_color="#FFFFFF")
             self.search_progress.grid(row=3, column=0, sticky="ew", padx=6, pady=(2, 2))
             self.search_progress.start()
         else:
-            self.search_btn.configure(text="Search", fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"], text_color="#041016")
+            self.search_btn.configure(text="Search", image=app_icon("search", ON_ACCENT), fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"], text_color="#041016")
             self.search_progress.stop()
             self.search_progress.grid_forget()
 
@@ -4624,6 +5125,9 @@ class NzbManagerApp(ctk.CTk):
             )
             return
 
+        max_bytes = max((int(it.get("size_bytes") or 0) for it in items), default=0)
+        glyph_font = icon_font_family()
+
         for item in items:
             is_selected = item["uid"] in self.selected_search_uids
             card = ctk.CTkFrame(
@@ -4651,22 +5155,38 @@ class NzbManagerApp(ctk.CTk):
                 command=on_toggle,
             ).pack(side="left", padx=(14, 2))
 
-            art_frame = ctk.CTkFrame(card, fg_color=COLORS["bg_panel"], corner_radius=8)
+            # Placeholder until (or instead of) a poster: what kind of release it is + its resolution.
+            kind_icon, kind_color_key, kind_label = release_kind(item)
+            kind_color = COLORS[kind_color_key]
+            art_frame = ctk.CTkFrame(card, fg_color=_tint(kind_color, 0.12, COLORS["bg_panel"]), corner_radius=8)
             art_frame.pack(side="left", padx=(6, 4), pady=10)
 
             poster_lbl = ctk.CTkLabel(
                 art_frame,
-                text="NO\nART" if PIL_AVAILABLE else "NZB",
+                text=ICON_GLYPHS[kind_icon] if glyph_font else kind_label,
                 width=58,
                 height=84,
                 fg_color="transparent",
-                font=ctk.CTkFont(family=UI_FONT, size=9, weight="bold"),
-                text_color=COLORS["text_muted"],
+                font=ctk.CTkFont(family=glyph_font, size=24) if glyph_font else ctk.CTkFont(family=UI_FONT, size=10, weight="bold"),
+                text_color=kind_color,
             )
             poster_lbl.pack(padx=0, pady=0)
+            res_txt = {"2160p / 4K": "4K", "1080p": "1080p", "720p": "720p"}.get(item.get("quality", ""), "")
+            res_lbl = None
+            if res_txt:
+                res_lbl = ctk.CTkLabel(
+                    art_frame, text=res_txt, height=14, fg_color="transparent", text_color=kind_color,
+                    font=ctk.CTkFont(family=UI_FONT, size=9, weight="bold"),
+                )
+                res_lbl.place(relx=0.5, rely=1.0, y=-5, anchor="s")
 
-            def apply_art(ctk_img, lbl=poster_lbl):
-                self._post_ui(lambda: lbl.winfo_exists() and lbl.configure(image=ctk_img, text=""))
+            def apply_art(ctk_img, lbl=poster_lbl, extra=res_lbl):
+                def show():
+                    if lbl.winfo_exists():
+                        lbl.configure(image=ctk_img, text="")
+                        if extra is not None and extra.winfo_exists():
+                            extra.destroy()
+                self._post_ui(show)
 
             self.artwork.get_or_fetch(item, apply_art)
 
@@ -4683,15 +5203,18 @@ class NzbManagerApp(ctk.CTk):
                 text_color=COLORS["text_secondary"],
             )
             ctk.CTkButton(
-                btns, text="View", width=64, command=lambda it=item: self._view_indexer_nzb(it), **ghost
+                btns, text="View", image=app_icon("view", COLORS["text_secondary"], 13), width=76,
+                command=lambda it=item: self._view_indexer_nzb(it), **ghost
             ).pack(side="left", padx=(0, 6))
             ctk.CTkButton(
-                btns, text="Save", width=64, command=lambda it=item: self._save_indexer_nzb(it), **ghost
+                btns, text="Save", image=app_icon("save", COLORS["text_secondary"], 13), width=76,
+                command=lambda it=item: self._save_indexer_nzb(it), **ghost
             ).pack(side="left", padx=(0, 6))
             ctk.CTkButton(
                 btns,
                 text="Send to SAB",
-                width=110,
+                image=app_icon("send", ON_ACCENT, 13),
+                width=124,
                 height=32,
                 fg_color=COLORS["accent"],
                 hover_color=COLORS["accent_hover"],
@@ -4722,7 +5245,31 @@ class NzbManagerApp(ctk.CTk):
                 font=ctk.CTkFont(family=UI_FONT_SEMIBOLD, size=11),
                 text_color=COLORS["accent"],
             ).pack(side="left")
-            facts = [item["size_human"], item["age"], item["category"]]
+
+            # Size, coloured by how plausible it is for the resolution, with a bar relative to the
+            # biggest result on screen.
+            verdict = size_verdict(item)
+            size_color_key, size_hint = SIZE_VERDICT_STYLE[verdict]
+            size_color = COLORS[size_color_key]
+            ctk.CTkLabel(meta, text="   ·   ", font=ctk.CTkFont(family=UI_FONT, size=11), text_color=COLORS["text_secondary"]).pack(side="left")
+            size_lbl = ctk.CTkLabel(
+                meta,
+                text=item["size_human"],
+                font=ctk.CTkFont(family=UI_FONT_SEMIBOLD if verdict in ("tiny", "small", "large") else UI_FONT, size=11),
+                text_color=size_color,
+            )
+            size_lbl.pack(side="left")
+            if size_hint:
+                Tooltip(size_lbl, size_hint)
+            if max_bytes > 0 and item.get("size_bytes"):
+                frac = math.sqrt(int(item["size_bytes"]) / max_bytes)  # sqrt: 68 GB vs 9 GB reads as ~3x, not 8x
+                size_bar = ctk.CTkProgressBar(
+                    meta, width=46, height=5, fg_color=COLORS["bg_panel"],
+                    progress_color=size_color if verdict in ("tiny", "small", "large") else COLORS["accent"],
+                )
+                size_bar.set(max(0.04, min(1.0, frac)))
+                size_bar.pack(side="left", padx=(7, 0))
+            facts = [item["age"], item["category"]]
             if item["grabs"]:
                 facts.append(f"{item['grabs']} grabs")
             if item.get("files_count"):
@@ -4775,6 +5322,8 @@ class NzbManagerApp(ctk.CTk):
                         pill.configure(cursor="hand2")
                         pill.bind("<Button-1>", lambda _e, s=tip_summary: self._set_status(s))
 
+            self._bind_context_menu(card, lambda e, it=item: self._show_result_menu(e, it))
+
         # "Load more" under the last page when an indexer has results past the first page(s).
         total_pages = max(1, (len(self.filtered_search_results) + SEARCH_PAGE_SIZE - 1) // SEARCH_PAGE_SIZE)
         if self.search_page + 1 >= total_pages and self._search_has_more():
@@ -4793,6 +5342,71 @@ class NzbManagerApp(ctk.CTk):
 
         # breathing room under the last card
         ctk.CTkFrame(self.search_results_frame, height=8, fg_color="transparent").pack()
+
+    @staticmethod
+    def _bind_context_menu(root_widget, handler) -> None:
+        """Right-click anywhere on a card (including its labels and pills) opens its menu."""
+        stack = [root_widget]
+        while stack:
+            w = stack.pop()
+            try:
+                tk.Misc.bind(w, "<Button-3>", handler, "+")
+            except Exception:
+                pass
+            stack.extend(w.winfo_children())
+
+    def _show_result_menu(self, event, item: dict) -> None:
+        menu = tk.Menu(
+            self, tearoff=0, bg=COLORS["bg_card_alt"], fg=COLORS["text_primary"],
+            activebackground=COLORS["accent"], activeforeground=ON_ACCENT,
+            disabledforeground=COLORS["text_muted"], bd=0, relief="flat", font=(UI_FONT, 10),
+        )
+        menu.add_command(label="Send to SABnzbd", command=lambda: self._send_url_to_sab(item, self.search_cat_var.get()))
+        menu.add_command(label="View NZB contents", command=lambda: self._view_indexer_nzb(item))
+        menu.add_command(label="Save .nzb file", command=lambda: self._save_indexer_nzb(item))
+        menu.add_separator()
+        menu.add_command(label="Copy title", command=lambda: self._copy_to_clipboard(item["title"], "Copied release title."))
+        menu.add_command(
+            label="Copy NZB link",
+            command=lambda: self._copy_to_clipboard(
+                item.get("nzb_url", ""), "Copied NZB link. It contains your indexer API key, so don't share it."
+            ),
+        )
+        menu.add_command(label="Search for similar releases", command=lambda: self._search_similar(item))
+        details = item.get("details_url", "")
+        menu.add_command(
+            label="Open on indexer website",
+            state="normal" if details else "disabled",
+            command=lambda: details and webbrowser.open(details),
+        )
+        menu.add_separator()
+        selected = item["uid"] in self.selected_search_uids
+        menu.add_command(label="Deselect" if selected else "Select", command=lambda: self._set_result_selected(item, not selected))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _copy_to_clipboard(self, text: str, message: str) -> None:
+        if not text:
+            return
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self._set_status(message)
+
+    def _set_result_selected(self, item: dict, selected: bool) -> None:
+        self._toggle_search_selection(item["uid"], selected)
+        self._apply_filters_and_render(reset_page=False)
+
+    def _search_similar(self, item: dict) -> None:
+        if self._search_in_flight:
+            self._set_status("A search is still running. Wait for it (or cancel it) first.")
+            return
+        name, year, _hint = parse_title_for_artwork(item.get("title", ""), item.get("category", ""))
+        query = f"{name} {year}".strip() or item.get("title", "")
+        self.search_entry.delete(0, "end")
+        self.search_entry.insert(0, query)
+        self._on_search_button()
 
     def _view_indexer_nzb(self, item: dict) -> None:
         self._set_status(f"Fetching NZB preview for '{item['title']}'...")
@@ -4912,7 +5526,12 @@ class NzbManagerApp(ctk.CTk):
         entries.sort(key=lambda e: e[1].st_mtime, reverse=True)
         self.local_nzbs = [p for p, _st in entries]
         if not self.local_nzbs:
-            ctk.CTkLabel(self.local_list_frame, text="No .nzb files found in this folder.", text_color=COLORS["text_muted"]).pack(pady=20)
+            self._empty_state(
+                self.local_list_frame,
+                "No .nzb files here",
+                "Save NZBs from Indexer Search, or turn on Auto-send to send new ones automatically.",
+                compact=True,
+            )
             self._update_local_batch_btn()
             return
 
@@ -4972,6 +5591,7 @@ class NzbManagerApp(ctk.CTk):
         self.inspector_box.delete("1.0", "end")
         self.inspector_box.configure(state="disabled")
         self._highlight_local_row(None)
+        self._set_local_actions(False)
 
     def _update_local_batch_btn(self) -> None:
         count = sum(1 for v in self.local_row_vars.values() if v.get())
@@ -5022,6 +5642,7 @@ class NzbManagerApp(ctk.CTk):
         self.inspector_box.delete("1.0", "end")
         self.inspector_box.insert("1.0", text)
         self.inspector_box.configure(state="disabled")
+        self._set_local_actions(True, parsed=self.selected_nzb_meta is not None)
 
     def _open_selected_nzb_popup(self) -> None:
         if not self.selected_nzb_meta:
@@ -5147,6 +5768,11 @@ class NzbManagerApp(ctk.CTk):
     def _refresh_sab_all(self, silent: bool = False) -> None:
         if not self.config_data.get("sab_api_key"):
             self.sab_status_pill.configure(text="●  SABnzbd: Add API Key", text_color=COLORS["amber"])
+            self._show_sab_unavailable(
+                "SABnzbd isn't connected yet",
+                "Add your SABnzbd URL and API key in Settings (or click the SABnzbd pill at the top).",
+                badge="SETUP", color=COLORS["amber"],
+            )
             return
         if self._sab_refresh_in_flight:
             return
@@ -5179,11 +5805,38 @@ class NzbManagerApp(ctk.CTk):
         def err(exc):
             self._sab_refresh_in_flight = False
             self.sab_status_pill.configure(text="●  SABnzbd: Offline", text_color=COLORS["red"])
+            self._show_sab_unavailable(
+                "SABnzbd is offline",
+                "Check that SABnzbd is running and the URL in Settings is right. Retrying automatically.",
+                badge="OFFLINE", color=COLORS["red"],
+            )
             self._update_local_drive_space()
             if not silent:
                 self._set_status(f"SABnzbd error: {exc}", log=True, level="ERROR")
 
         self._run_bg(fetch, on_ok=ok, on_err=err)
+
+    def _show_sab_unavailable(self, title: str, hint: str, badge: str, color: str) -> None:
+        """Dashboard + queue/history placeholders while SABnzbd isn't configured or can't be reached."""
+        self.card_speed_val.configure(text="—", text_color=COLORS["text_muted"])
+        self.card_speed_sub.configure(text="Offline, retrying…" if badge == "OFFLINE" else "Not connected")
+        self.now_dl_badge.configure(text=badge, text_color=color, fg_color=_tint(color))
+        self.now_dl_name.configure(text=title)
+        self.now_dl_stats.configure(text="—")
+        self.now_dl_bar.set(0)
+        self.sab_summary_label.configure(text=f"ACTIVE QUEUE  •  {title}", text_color=COLORS["text_muted"])
+        key = ("unavailable", title)
+        if self._last_queue_sig == key:
+            return
+        self._last_queue_sig = self._last_history_sig = key
+        for frame in (self.queue_frame, self.history_frame):
+            for w in frame.winfo_children():
+                w.destroy()
+        self._empty_state(self.queue_frame, title, hint, compact=True)
+        self._empty_state(self.history_frame, "No history to show", "Finished downloads appear here once SABnzbd is connected.", compact=True)
+
+    def _move_queue_item(self, nzo_id: str, position: int) -> None:
+        self._run_bg(lambda: self.sab.move_queue_item(nzo_id, position), on_ok=lambda _r: self._refresh_sab_all())
 
     def _render_sab_queue(self, queue_data: dict) -> None:
         status = queue_data.get("status", "Idle")
@@ -5205,7 +5858,11 @@ class NzbManagerApp(ctk.CTk):
         self.sab_paused = status.lower() == "paused"
         self._sab_queue_keys = {normalize_release_key(s.get("filename", "")) for s in slots if s.get("filename")}
 
-        self.pause_all_btn.configure(text="Resume Queue" if self.sab_paused else "Pause Queue")
+        self.pause_all_btn.configure(
+            text="Resume Queue" if self.sab_paused else "Pause Queue",
+            image=app_icon("play" if self.sab_paused else "pause", COLORS["text_primary"]),
+        )
+        eta = time_left if slots and time_left not in ("", "0:00:00") else "—"
         downloading_slot = next((s for s in slots if s.get("status", "").lower() == "downloading"), None)
         color = (
             COLORS["amber"] if self.sab_paused
@@ -5214,7 +5871,9 @@ class NzbManagerApp(ctk.CTk):
 
         self.sab_status_pill.configure(text=f"●  SABnzbd: {status} ({speed})", text_color=color)
         self.card_speed_val.configure(text=speed, text_color=color)
-        self.card_speed_sub.configure(text=f"{len(slots)} queued  •  {size_left} left  •  ETA {time_left}")
+        self.card_speed_sub.configure(
+            text=f"{len(slots)} queued  •  {size_left} left  •  ETA {eta}" if slots else "Queue empty"
+        )
 
         if downloading_slot:
             pct = safe_float(downloading_slot.get("percentage"))
@@ -5243,8 +5902,8 @@ class NzbManagerApp(ctk.CTk):
             self.now_dl_bar.configure(progress_color=COLORS["sky"])
         else:
             self.now_dl_badge.configure(text="IDLE", text_color=COLORS["text_muted"], fg_color=_tint(COLORS["text_muted"]))
-            self.now_dl_name.configure(text="No active download in SABnzbd")
-            self.now_dl_stats.configure(text=f"0%  •  0 B left  •  ETA 0:00:00  •  {speed}")
+            self.now_dl_name.configure(text="Nothing downloading")
+            self.now_dl_stats.configure(text="Idle")
             self.now_dl_bar.set(0)
 
         d1 = queue_data.get("diskspace1")
@@ -5277,7 +5936,10 @@ class NzbManagerApp(ctk.CTk):
             self._update_local_drive_space()
 
         self.sab_summary_label.configure(
-            text=f"ACTIVE QUEUE ({len(slots)})  •  {size_left} remaining  •  ETA {time_left}  •  {speed}",
+            text=(
+                f"ACTIVE QUEUE ({len(slots)})  •  {size_left} remaining  •  ETA {eta}  •  {speed}"
+                if slots else "ACTIVE QUEUE  •  Empty"
+            ),
             text_color=color,
         )
 
@@ -5308,7 +5970,12 @@ class NzbManagerApp(ctk.CTk):
             w.destroy()
 
         if not slots:
-            ctk.CTkLabel(self.queue_frame, text="Queue is empty.", text_color=COLORS["text_muted"]).pack(pady=24)
+            self._empty_state(
+                self.queue_frame,
+                "Queue is empty",
+                "Send releases from Indexer Search or Local NZB Files and they'll show up here.",
+                compact=True,
+            )
             return
 
         cat_choices = list(self.sab_categories) if self.sab_categories else ["*"]
@@ -5403,7 +6070,8 @@ class NzbManagerApp(ctk.CTk):
             ctk.CTkButton(
                 bottom,
                 text="Delete",
-                width=66,
+                image=app_icon("delete", "#FFFFFF", 12),
+                width=78,
                 height=26,
                 fg_color=COLORS["red"],
                 hover_color="#DC2626",
@@ -5416,7 +6084,8 @@ class NzbManagerApp(ctk.CTk):
             ctk.CTkButton(
                 bottom,
                 text="Resume" if is_item_paused else "Pause",
-                width=74,
+                image=app_icon("play" if is_item_paused else "pause", COLORS["text_primary"], 12),
+                width=86,
                 height=26,
                 fg_color=COLORS["bg_card_alt"],
                 hover_color=COLORS["border"],
@@ -5426,19 +6095,26 @@ class NzbManagerApp(ctk.CTk):
                 ),
             ).pack(side="right", padx=3)
 
+            try:
+                pos = int(slot.get("index", slot_idx))
+            except (TypeError, ValueError):
+                pos = slot_idx
+            move_buttons = []
+            if slot_idx < len(slots) - 1:
+                move_buttons.append(("down", "▼", "Move down one place", lambda nid=nzo_id, p=pos: self._move_queue_item(nid, p + 1)))
             if slot_idx > 0:
-                ctk.CTkButton(
-                    bottom,
-                    text="↑ Top",
-                    width=54,
-                    height=26,
-                    fg_color=COLORS["bg_panel"],
-                    hover_color=COLORS["border"],
-                    command=lambda nid=nzo_id: self._run_bg(
-                        lambda: self.sab.move_queue_item_top(nid),
-                        on_ok=lambda _r: self._refresh_sab_all(),
-                    ),
-                ).pack(side="right", padx=3)
+                move_buttons.append(("up", "▲", "Move up one place", lambda nid=nzo_id, p=pos: self._move_queue_item(nid, p - 1)))
+                move_buttons.append(("top", "⤒", "Move to the top of the queue", lambda nid=nzo_id: self._run_bg(
+                    lambda: self.sab.move_queue_item_top(nid), on_ok=lambda _r: self._refresh_sab_all()
+                )))
+            for icon_name, fallback, hint, cmd in move_buttons:
+                ico = app_icon(icon_name, COLORS["text_secondary"], 12)
+                mb = ctk.CTkButton(
+                    bottom, text="" if ico else fallback, image=ico, width=30, height=26,
+                    fg_color=COLORS["bg_panel"], hover_color=COLORS["border"], command=cmd,
+                )
+                mb.pack(side="right", padx=2)
+                Tooltip(mb, hint)
 
             prio_var = ctk.StringVar(value=prio_label)
             ctk.CTkOptionMenu(
@@ -5528,7 +6204,9 @@ class NzbManagerApp(ctk.CTk):
             w.destroy()
 
         if not slots:
-            ctk.CTkLabel(self.history_frame, text="No recent history.", text_color=COLORS["text_muted"]).pack(pady=18)
+            self._empty_state(
+                self.history_frame, "No recent history", "Finished and failed downloads will be listed here.", compact=True
+            )
             return
 
         for slot in slots:
@@ -5557,7 +6235,8 @@ class NzbManagerApp(ctk.CTk):
             ctk.CTkButton(
                 row,
                 text="Remove",
-                width=68,
+                image=app_icon("delete", COLORS["text_secondary"], 12),
+                width=82,
                 height=24,
                 fg_color=COLORS["bg_card_alt"],
                 hover_color=COLORS["border"],
@@ -5571,7 +6250,8 @@ class NzbManagerApp(ctk.CTk):
                 ctk.CTkButton(
                     row,
                     text="Retry",
-                    width=58,
+                    image=app_icon("refresh", ON_ACCENT, 12),
+                    width=72,
                     height=24,
                     fg_color=COLORS["amber"],
                     hover_color="#D97706",
@@ -5673,6 +6353,11 @@ class NzbManagerApp(ctk.CTk):
 
 
 def main() -> None:
+    if _SYS == "Windows":
+        try:  # group under our own icon on the taskbar instead of python.exe's
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("NZBCommandCenter.App")
+        except Exception:
+            pass
     app = NzbManagerApp()
     app.mainloop()
 
