@@ -22,3 +22,6 @@ screenshots/
 
 # Local backup copies (e.g. mobile_server.py.before-restyle)
 *.before-*
+
+# System Command Center: per-machine settings and window position
+system_center_config.json
