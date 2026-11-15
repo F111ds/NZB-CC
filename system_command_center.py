@@ -1020,8 +1020,9 @@ class CpuPage(Page):
             self._sens_labels = {}
             if not temps and not fans:
                 msg = ("Windows doesn't report CPU temperature or fan speeds by itself. Run the free, open-source "
-                       "LibreHardwareMonitor in the background and they appear here automatically "
-                       "(NVIDIA GPU temperatures already show on the GPU page).")
+                       "LibreHardwareMonitor in the background, and in it turn on Options > Remote Web Server > Run "
+                       f"(port {self.app.settings.get('lhm_port', 8085)}). The readings then appear here within a few "
+                       "seconds. NVIDIA GPU temperatures already show on the GPU page.")
                 ctk.CTkLabel(body, text=msg, wraplength=900, justify="left", text_color=C["text_secondary"]).pack(anchor="w")
                 small_button(body, "Get LibreHardwareMonitor", lambda: sm.open_path(
                     "https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases"), icon="open").pack(anchor="w", pady=(8, 0))
@@ -1033,7 +1034,7 @@ class CpuPage(Page):
             for i, (kind, s) in enumerate(items[:48]):
                 cell = ctk.CTkFrame(body, fg_color=C["bg_card_alt"], corner_radius=8)
                 cell.grid(row=i // 4, column=i % 4, sticky="ew", padx=4, pady=4)
-                hw = s["hw"].strip("/").split("/")[0].replace("-", " ").upper()
+                hw = s.get("label") or s["hw"].strip("/").split("/")[0].replace("-", " ").upper()
                 ctk.CTkLabel(cell, text=f"{hw} · {s['name']}", text_color=C["text_muted"], font=(UI_FONT, 10),
                              anchor="w").pack(anchor="w", padx=10, pady=(6, 0))
                 val = ctk.CTkLabel(cell, text="", font=(UI_FONT_SEMIBOLD, 15), anchor="w")
@@ -2452,7 +2453,7 @@ class SettingsPage(Page):
             w.destroy()
         self.src_frame.grid_columnconfigure(1, weight=1)
         for r, (k, v) in enumerate(sorted(srcs.items())):
-            good = v.startswith(("active", "yes", "Libre", "Open"))
+            good = v.startswith(("active", "yes"))
             ctk.CTkLabel(self.src_frame, text="●", text_color=C["green"] if good else C["text_muted"]).grid(row=r, column=0, padx=(0, 8))
             ctk.CTkLabel(self.src_frame, text=k, anchor="w", font=(UI_FONT_SEMIBOLD, 12)).grid(row=r, column=1, sticky="w")
             ctk.CTkLabel(self.src_frame, text=v, anchor="w", text_color=C["text_secondary"], wraplength=360,

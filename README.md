@@ -23,5 +23,6 @@ Keep `system_monitor.py` next to it. Pages:
 
 Data sources: psutil; Windows GPU performance counters (any GPU vendor); `nvidia-smi` for NVIDIA temperature, power and clocks;
 PowerShell/CIM for hardware, disk health and security status. Windows doesn't expose CPU temperatures or fan speeds by itself:
-run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) in the background and they appear automatically.
+run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) in the background and turn on its
+**Options > Remote Web Server > Run** (port 8085; the app also reads its WMI feed when that's available).
 Run as administrator to see drive temperatures and wear.

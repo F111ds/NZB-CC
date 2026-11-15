@@ -94,6 +94,71 @@ assert sm.pick_cpu_temp([]) is None
 assert sm.pick_gpu_sensor(sens["temps"], "AMD") == 58 and sm.pick_gpu_sensor(sens["temps"], "Intel") is None
 print("sensors ok")
 
+# LibreHardwareMonitor web server (data.json), shaped like an ASUS Z390 board with a Nuvoton chip
+def _s(text, value, typ=None, sid=None):
+    d = {"Text": text, "Value": value, "Min": "", "Max": "", "Children": []}
+    if typ:
+        d["Type"] = typ
+    if sid:
+        d["SensorId"] = sid
+    return d
+lhm_old = {"Text": "Sensor", "Children": [{"Text": "HAL9000", "Children": [
+    {"Text": "ASUS ROG STRIX Z390-E", "ImageURL": "images_icon/mainboard.png", "Children": [
+        {"Text": "Nuvoton NCT6798D", "ImageURL": "images_icon/chip.png", "Children": [
+            {"Text": "Voltages", "Children": [_s("Vcore", "1.120 V")]},
+            {"Text": "Temperatures", "Children": [_s("CPU Core", "45.0 °C"), _s("Temperature #1", "35,5 °C")]},
+            {"Text": "Fans", "Children": [_s("Fan #1", "1006 RPM"), _s("Fan #3", "0 RPM")]}]}]},
+    {"Text": "NVIDIA GeForce RTX 2080", "ImageURL": "images_icon/nvidia.png", "Children": [
+        {"Text": "Temperatures", "Children": [_s("GPU Core", "52.0 °C")]}]}]}]}
+lhm = sm.parse_lhm_json(lhm_old)
+assert [t["name"] for t in lhm["temps"]] == ["CPU Core", "Temperature #1", "GPU Core"]
+assert lhm["temps"][1]["value"] == 35.5 and lhm["temps"][0]["label"] == "Nuvoton NCT6798D"
+assert lhm["fans"][0]["value"] == 1006 and len(lhm["fans"]) == 2
+assert sm.pick_cpu_temp(lhm["temps"]) == 45.0          # CPU temp listed under the motherboard chip
+assert sm.pick_gpu_sensor(lhm["temps"], "NVIDIA") == 52.0
+lhm_new = {"Text": "Sensor", "Children": [{"Text": "PC", "Children": [
+    {"Text": "Intel Core i9-9900K", "Children": [{"Text": "Temperatures", "Children": [
+        _s("CPU Package", "61.0 °C", "Temperature", "/intelcpu/0/temperature/8"),
+        _s("CPU Core #1", "58.0 °C", "Temperature", "/intelcpu/0/temperature/0")]},
+        {"Text": "Powers", "Children": [_s("CPU Package", "88.1 W", "Power", "/intelcpu/0/power/0")]}]}]}]}
+lhm2 = sm.parse_lhm_json(lhm_new)
+assert lhm2["temps"][0]["hw"] == "/intelcpu/0" and sm.pick_cpu_temp(lhm2["temps"]) == 61.0
+assert lhm2["power"][0]["value"] == 88.1
+assert sm.parse_lhm_json(None) == {"temps": [], "fans": [], "power": []}
+
+import http.server
+class _LHM(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps(lhm_old).encode("utf-8")
+        self.send_response(200 if self.path == "/data.json" else 404)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+srv = http.server.HTTPServer(("127.0.0.1", 0), _LHM)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+got = sm.fetch_lhm_http(srv.server_address[1])
+assert got and sm.pick_cpu_temp(got["temps"]) == 45.0
+srv.shutdown()
+assert sm.fetch_lhm_http(srv.server_address[1], timeout=0.5) is None   # server gone: quietly None
+assert sm.fetch_lhm_http("nope") is None and sm.fetch_lhm_http(0) is None
+
+# monitor: web-server sensors are used when WMI has none, and WMI wins when it has data
+mon = sm.SystemMonitor(settings=dict(sm.DEFAULT_SETTINGS), enable_external=False)
+mon._http_sensors, mon._http_time = lhm, time.monotonic()
+mon._apply_sensors()
+assert mon.snapshot()["sensor_source"] == "LibreHardwareMonitor" and "web server" in mon.sources["Temperatures"]
+mon.sample_fast()
+assert mon.snapshot()["cpu"]["temp"] == 45.0
+mon._wmi_sensors, mon._wmi_src = sm.parse_sensor_lines(["Temperature|/amdcpu/0|Core (Tctl/Tdie)|70"]), "LibreHardwareMonitor"
+mon._apply_sensors()
+assert "WMI" in mon.sources["Temperatures"] and mon.snapshot()["sensors"]["temps"][0]["value"] == 70
+mon._wmi_sensors, mon._http_sensors = None, None
+mon._apply_sensors()
+assert mon.sources["Temperatures"].startswith("not found") and "Remote Web Server" in mon.sources["Temperatures"]
+print("lhm web server ok")
+
 # ---------------- ping / network / power ----------------
 win_en = "Pinging 1.1.1.1 with 32 bytes of data:\r\nReply from 1.1.1.1: bytes=32 time=14ms TTL=57\r\n"
 win_de = "Antwort von 1.1.1.1: Bytes=32 Zeit<1ms TTL=57"

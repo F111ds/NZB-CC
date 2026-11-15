@@ -56,6 +56,7 @@ DEFAULT_SETTINGS = {
     "toasts": True,
     "ping_enabled": True,
     "ping_host": "1.1.1.1",
+    "lhm_port": 8085,         # LibreHardwareMonitor "Remote Web Server" port
     "always_on_top": False,
     "window": "",
     "last_page": "dashboard",
@@ -521,9 +522,12 @@ def parse_sensor_lines(lines: list[str]) -> dict:
 
 
 _CPU_TEMP_NAMES = ("cpu package", "core (tctl/tdie)", "cpu (tctl/tdie)", "tctl/tdie", "core max", "core average", "package")
+_BOARD_CPU_NAMES = ("cpu package", "cpu core", "cpu", "cpu socket", "cputin")
 
 
 def pick_cpu_temp(temps: list[dict]) -> float | None:
+    """CPU temperature: the CPU's own sensors first, else the motherboard's "CPU" reading
+    (on many boards, e.g. Nuvoton chips, LibreHardwareMonitor lists "CPU Core" there)."""
     cpu = [t for t in temps if "cpu" in t["hw"].lower()]
     for wanted in _CPU_TEMP_NAMES:
         for t in cpu:
@@ -531,7 +535,83 @@ def pick_cpu_temp(temps: list[dict]) -> float | None:
                 return t["value"]
     if cpu:
         return max(t["value"] for t in cpu)
-    return None
+    board = [t for t in temps if "cpu" in t["name"].lower() and "gpu" not in t["name"].lower()]
+    for wanted in _BOARD_CPU_NAMES:
+        for t in board:
+            if t["name"].lower() == wanted:
+                return t["value"]
+    return board[0]["value"] if board else None
+
+
+_LHM_KIND = {"temperature": "temps", "fan": "fans", "power": "power"}
+_LHM_ICON_HW = (("cpu", "/cpu"), ("nvidia", "/gpu-nvidia"), ("ati", "/gpu-amd"), ("amd", "/gpu-amd"),
+                ("intel", "/gpu-intel"), ("hdd", "/hdd"), ("nvme", "/nvme"), ("ram", "/ram"),
+                ("chip", "/lpc"), ("mainboard", "/mainboard"))
+
+
+def parse_lhm_json(data) -> dict:
+    """Sensors from LibreHardwareMonitor's web server (http://localhost:8085/data.json).
+
+    The tree is computer > hardware (> sub-hardware) > group ("Temperatures") > sensor. Each
+    sensor dict gets "hw" (an id like "/lpc/nct6798d/0" used to recognise CPU/GPU sensors),
+    "label" (the hardware's display name), "name" and "value".
+    """
+    out = {"temps": [], "fans": [], "power": []}
+
+    def kind_of(node: dict) -> str | None:
+        t = str(node.get("Type") or "").lower()
+        if t:
+            return _LHM_KIND.get(t)
+        v = str(node.get("Value") or "")
+        if "°C" in v:
+            return "temps"
+        if v.endswith("RPM"):
+            return "fans"
+        if v.endswith(" W"):
+            return "power"
+        return None
+
+    def walk(node: dict, parents: list[dict]) -> None:
+        kids = node.get("Children") or []
+        if kids:
+            for k in kids:
+                if isinstance(k, dict):
+                    walk(k, parents + [node])
+            return
+        kind = kind_of(node)
+        value = safe_num(node.get("Value"))
+        if not kind or value is None or len(parents) < 2:
+            return
+        if kind == "temps" and not (-20 < value < 150):
+            return
+        hw_node = parents[-2]  # parents[-1] is the "Temperatures"/"Fans" group
+        sid = str(node.get("SensorId") or "")
+        if sid.count("/") >= 3:
+            hw = "/".join(sid.rstrip("/").split("/")[:-2])
+        else:
+            icon = str(hw_node.get("ImageURL") or "").lower()
+            hw = next((h for key, h in _LHM_ICON_HW if key in icon), "/hw") + "/" + str(hw_node.get("Text") or "")
+        out[kind].append({"hw": hw, "label": str(hw_node.get("Text") or ""), "name": str(node.get("Text") or ""),
+                          "value": value})
+
+    if isinstance(data, dict):
+        walk(data, [])
+    return out
+
+
+def fetch_lhm_http(port: int, timeout: float = 2.0) -> dict | None:
+    """Reads LibreHardwareMonitor's web server on this PC; None if it isn't running."""
+    import urllib.request
+    try:
+        port = int(port)
+        if not 0 < port < 65536:
+            return None
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # localhost: never via a proxy
+        with opener.open(f"http://127.0.0.1:{port}/data.json", timeout=timeout) as resp:
+            data = json.loads(resp.read(8_000_000).decode("utf-8", errors="replace"))
+    except Exception:
+        return None
+    return parse_lhm_json(data)
 
 
 def pick_gpu_sensor(temps: list[dict], vendor: str) -> float | None:
@@ -1049,6 +1129,10 @@ class SystemMonitor:
         self._nvsmi_fields = NVSMI_FIELDS
         self._dxgi: dict = {}
         self._cpuperf: tuple[float, float] | None = None
+        self._wmi_sensors: dict | None = None
+        self._wmi_src = ""
+        self._http_sensors: dict | None = None
+        self._http_time = 0.0
         self._prev_disk = None
         self._prev_net = None
         self._prev_ctx = None
@@ -1070,6 +1154,7 @@ class SystemMonitor:
         if self.enable_external:
             self._dxgi = read_dxgi_adapters()
             self._start_sensor_stream()
+            self._spawn(self._lhm_http_loop, "lhm-http")
             self._start_nvidia_stream()
         else:
             self.sources["GPU counters"] = "Windows only"
@@ -1333,15 +1418,43 @@ class SystemMonitor:
                 base, _, pct = str(perf).partition("|")
                 self._cpuperf = (safe_num(base) or 0.0, safe_num(pct) or 0.0)
             if "sens" in data:
-                self._state["sensors"] = parse_sensor_lines(as_list(data.get("sens")))
-                self._state["sensor_source"] = data.get("sensrc") or ""
+                self._wmi_sensors = parse_sensor_lines(as_list(data.get("sens")))
+                self._wmi_src = data.get("sensrc") or ""
             elif data.get("t", 0) % 3 == 0:
+                self._wmi_sensors = None
+                self._wmi_src = ""
+            self._apply_sensors()
+
+    def _apply_sensors(self) -> None:
+        """Publishes whichever LibreHardwareMonitor feed has data: WMI first, then the web server."""
+        with self._lock:
+            wmi = self._wmi_sensors
+            http_fresh = self._http_sensors is not None and time.monotonic() - self._http_time < 15
+            if wmi and (wmi["temps"] or wmi["fans"]):
+                self._state["sensors"], self._state["sensor_source"] = wmi, self._wmi_src
+                self.sources["Temperatures"] = f"active ({self._wmi_src}, WMI)"
+            elif http_fresh and (self._http_sensors["temps"] or self._http_sensors["fans"]):
+                self._state["sensors"] = self._http_sensors
+                self._state["sensor_source"] = "LibreHardwareMonitor"
+                self.sources["Temperatures"] = f"active (LibreHardwareMonitor web server, port {self.settings.get('lhm_port', 8085)})"
+            else:
                 self._state["sensors"] = {"temps": [], "fans": [], "power": []}
                 self._state["sensor_source"] = ""
-            src = self._state["sensor_source"]
-            self.sources["Temperatures"] = {"LibreHardwareMonitor": "LibreHardwareMonitor",
-                                            "OpenHardwareMonitor": "OpenHardwareMonitor"}.get(
-                src, "not available (run LibreHardwareMonitor for CPU temps and fans)")
+                self.sources["Temperatures"] = (
+                    "not found. In LibreHardwareMonitor turn on Options > Remote Web Server > Run "
+                    f"(port {self.settings.get('lhm_port', 8085)}), or run this app as administrator")
+
+    def _lhm_http_loop(self) -> None:
+        """Polls LibreHardwareMonitor's web server: works when WMI is blocked or switched off."""
+        while not self._stop.is_set():
+            res = fetch_lhm_http(self.settings.get("lhm_port", 8085))
+            with self._lock:
+                if res is not None:
+                    self._http_sensors, self._http_time = res, time.monotonic()
+                else:
+                    self._http_sensors = None
+            self._apply_sensors()
+            self._stop.wait(2.0 if res is not None else 8.0)
 
     def _start_nvidia_stream(self) -> None:
         exe = find_nvidia_smi()
