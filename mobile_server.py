@@ -575,16 +575,82 @@ def sab_categories(force: bool = False) -> list[str]:
     return list(cats)
 
 
+# Picking a SABnzbd category from the release, the same way the desktop app's "Auto (Match)" does,
+# so phone downloads land in the same folders (movies/, tv/, ...) as desktop ones.
+CATEGORY_ALIASES = {
+    "movies": {"movie", "movies", "film", "films", "cinema"},
+    "tv": {"tv", "series", "show", "shows", "television", "episode"},
+    "anime": {"anime"},
+    "audio": {"audio", "music", "mp3", "flac", "lossless", "soundtrack"},
+    "audiobooks": {"audiobook", "audiobooks"},
+    "books": {"book", "books", "ebook", "ebooks", "comic", "comics", "magazine", "magazines"},
+    "software": {"pc", "software", "app", "apps", "0day", "iso", "mac"},
+    "games": {"game", "games", "console", "ps3", "ps4", "ps5", "xbox", "wii", "nds", "psp", "switch"},
+    "xxx": {"xxx", "adult"},
+}
+NEWZNAB_NUM_DOMAIN = {"1": "games", "2": "movies", "3": "audio", "4": "software", "5": "tv", "6": "xxx", "7": "books"}
+
+
+def infer_domain_and_tokens(item_category: str, title: str) -> tuple[str, set[str]]:
+    cat_tokens = set(re.findall(r"[a-z0-9]+", str(item_category or "").lower()))
+    title_tokens = set(re.findall(r"[a-z0-9]+", str(title or "").lower()))
+    for domain, aliases in CATEGORY_ALIASES.items():
+        if cat_tokens & aliases:
+            return domain, cat_tokens | title_tokens
+    for tok in cat_tokens:
+        if len(tok) == 4 and tok.isdigit():
+            special = {"5070": "anime", "3030": "audiobooks", "4050": "games"}.get(tok)
+            if special or tok[0] in NEWZNAB_NUM_DOMAIN:
+                return special or NEWZNAB_NUM_DOMAIN[tok[0]], cat_tokens | title_tokens
+    t = str(title or "")
+    if re.search(r"\b(S\d{1,2}E\d{1,2}|S\d{1,2}|Season\s*\d+|\d{4}\.\d{2}\.\d{2})\b", t, re.I):
+        return "tv", title_tokens
+    if re.search(r"\b(audiobook|mp3|flac|lossless|320kbps|v0|web-flac)\b", t, re.I):
+        return "audio", title_tokens
+    if re.search(r"\b(epub|mobi|azw3|cbr|cbz)\b", t, re.I):
+        return "books", title_tokens
+    if re.search(r"\b(19\d\d|20\d\d)\b", t) and re.search(
+            r"\b(2160p|1080p|720p|480p|4k|uhd|bluray|bdrip|brrip|web-dl|webdl|webrip|remux|x264|x265|hevc)\b", t, re.I):
+        return "movies", title_tokens
+    return "", cat_tokens | title_tokens
+
+
+def match_sab_category(sab_cats: list[str], item_category: str = "", title: str = "") -> str:
+    """Best SABnzbd category for a release, or "" (SABnzbd's default) when nothing fits well."""
+    candidates = [c for c in sab_cats if c and c != "*"]
+    if not candidates:
+        return ""
+    domain, all_tokens = infer_domain_and_tokens(item_category, title)
+    domains = [domain] + {"anime": ["tv"], "audiobooks": ["audio"]}.get(domain, [])
+    for try_domain in domains:
+        aliases = CATEGORY_ALIASES.get(try_domain, set())
+        best_cat, best_score = "", 0
+        for sab_cat in candidates:
+            low = sab_cat.strip().lower()
+            tokens = set(re.findall(r"[a-z0-9]+", low))
+            if not tokens:
+                continue
+            score = 20 if aliases and (tokens & aliases or low in aliases) else 0
+            score += len(tokens & all_tokens) * 8
+            score -= len(tokens - (all_tokens | aliases)) * 3
+            if score > best_score:
+                best_cat, best_score = sab_cat, score
+        if best_score >= 15:
+            return best_cat
+    return ""
+
+
 def parse_add_options(body: dict) -> tuple[str, str]:
-    """Validates the optional SABnzbd category / priority sent with an add request."""
+    """Validates the optional SABnzbd category / priority sent with an add request.
+
+    Category "" (or missing) means Auto: pick one per release, like the desktop app.
+    "*" means SABnzbd's own default category."""
     category = str(body.get("category") or "").strip()
     if category and category != "*":
         if not re.fullmatch(r"[\w .\-]{1,60}", category):
             raise ValueError("Invalid SABnzbd category.")
         if category not in sab_categories():
             raise ValueError(f"Unknown SABnzbd category '{category}'.")
-    else:
-        category = ""
     raw_priority = body.get("priority")
     priority = "" if raw_priority is None else str(raw_priority).strip()
     if priority and priority not in SAB_PRIORITIES:
@@ -2237,7 +2303,7 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <label class="label" for="sort">Sort</label><select id="sort" class="field"><option value="date_desc">Newest first</option><option value="size_desc">Largest first</option><option value="size_asc">Smallest first</option><option value="date_asc">Oldest first</option><option value="grabs_desc">Most grabs</option><option value="title_asc">Title A–Z</option><option value="title_desc">Title Z–A</option></select>
 <div class="row"><div><label class="label" for="minsize">Min size (MB)</label><input id="minsize" class="field" type="number" min="0" placeholder="Any"></div><div><label class="label" for="maxsize">Max size (MB)</label><input id="maxsize" class="field" type="number" min="0" placeholder="Any"></div></div>
 <label class="label" for="mingrabs">Min grabs</label><input id="mingrabs" class="field" type="number" min="0" placeholder="Any">
-<div class="row"><div><label class="label" for="sabcat">SABnzbd category</label><select id="sabcat" class="field"><option value="">Default</option></select></div><div><label class="label" for="prio">Priority</label><select id="prio" class="field"><option value="">Default</option><option value="-1">Low</option><option value="0">Normal</option><option value="1">High</option><option value="2">Force</option></select></div></div>
+<div class="row"><div><label class="label" for="sabcat">SABnzbd category</label><select id="sabcat" class="field"><option value="">Auto (match)</option></select></div><div><label class="label" for="prio">Priority</label><select id="prio" class="field"><option value="">Default</option><option value="-1">Low</option><option value="0">Normal</option><option value="1">High</option><option value="2">Force</option></select></div></div>
 <div class="row"><button class="btn ghost sm" id="selvisible">Select visible</button><button class="btn ghost sm" id="selnone">Clear selection</button></div>
 <p class="hint" style="margin:10px 0 0">Up to 10 at a time. Releases found on several indexers are grouped, and a failed download falls back to the other indexer automatically.</p>
 </div></details>
@@ -2352,7 +2418,7 @@ function fillSearchCategories(keep){
   }
   sel.innerHTML=h;sel.value=[...sel.options].some(o=>o.value===cur)?cur:'';
 }
-function fillCategories(cats){sabCats=cats;const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(cats.includes(keep))sel.value=keep}
+function fillCategories(cats){sabCats=cats;const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Auto (match)</option><option value="*">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(keep==='*'||cats.includes(keep))sel.value=keep}
 
 function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':t;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi()}
 
@@ -2456,7 +2522,7 @@ async function search(extra){
 }
 async function addResult(id,btn){
   btn.disabled=true;btn.textContent='Adding…';
-  try{const d=await api('/api/add',Object.assign({id},addOptions()));added.add(id);selected.delete(id);toast('Added to SABnzbd'+(d.indexer?' (from '+d.indexer+')':''));renderResults();refreshQueue(true)}
+  try{const d=await api('/api/add',Object.assign({id},addOptions()));added.add(id);selected.delete(id);toast('Added to SABnzbd'+(d.category?' → '+d.category:'')+(d.indexer?' (from '+d.indexer+')':''));renderResults();refreshQueue(true)}
   catch(e){btn.disabled=false;btn.textContent='Add to SABnzbd';toast(e.message,true)}
 }
 async function addSelected(){
@@ -3346,10 +3412,17 @@ class MobileHandler(BaseHTTPRequestHandler):
         item = get_cached_result(result_id)
         if not item:
             raise ValueError("That search result expired. Search again and retry.")
+        if not category:  # Auto
+            try:
+                category = match_sab_category(sab_categories(), item.get("category", ""), item["title"])
+            except UpstreamError:
+                category = ""  # couldn't list categories: let SABnzbd use its default
+        elif category == "*":
+            category = ""
         nzb_data, used = download_indexer_nzb(item)
         sab_addfile(nzb_data, item["title"], category, priority)
         log.info("add ip=%s title=%r indexer=%s cat=%s prio=%s bytes=%d", self.ip, item["title"], used, category or "-", priority or "-", len(nzb_data))
-        return {"id": result_id, "title": item["title"], "bytes": len(nzb_data), "indexer": used}
+        return {"id": result_id, "title": item["title"], "bytes": len(nzb_data), "indexer": used, "category": category}
 
     def _post_add(self, body: dict) -> None:
         if self._limited(ADD_LIMITER, "add"):
