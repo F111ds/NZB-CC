@@ -217,10 +217,17 @@ e2 = sm.AlertEngine()
 s = dict(sm.DEFAULT_SETTINGS, alert_sustain_s=0)
 e2.evaluate(snap, s, now=5000)
 keys = {a["key"] for a in e2.items}
-assert {"cpu", "cpu_temp", "gpu_temp:g", "vram:g", "vol:D:", "health:1", "disktemp:1", "battery"} <= keys, keys
+assert {"cpu", "cpu_temp", "gpu_temp:g", "vram:g", "vol:D:", "health:1", "battery"} <= keys, keys
 assert "ram" not in keys
 e2.clear()
 assert not e2.items and e2.unread == 0
+nvme = {"bus_name": "NVMe", "name": "Samsung SSD 970 EVO Plus"}
+assert sm.disk_temp_limit(nvme, 55) == 70 and sm.disk_temp_limit({"bus_name": "SATA"}, 55) == 55
+e3 = sm.AlertEngine()
+hot = {"inventory": {"disks": [dict(nvme, id="0", temp=51), {"id": "1", "name": "WD", "bus_name": "SATA", "temp": 58}]}}
+e3.evaluate(hot, dict(sm.DEFAULT_SETTINGS), now=0)
+e3.evaluate(hot, dict(sm.DEFAULT_SETTINGS), now=200)    # must stay hot for 2 minutes
+assert {a["key"] for a in e3.items} == {"disktemp:1"}    # 51 °C NVMe is fine, 58 °C hard drive is not
 print("alerts ok")
 
 # ---------------- settings ----------------

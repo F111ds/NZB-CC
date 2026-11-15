@@ -50,7 +50,7 @@ DEFAULT_SETTINGS = {
     "gpu_temp_alert": 85,     # °C
     "vram_alert": 95,         # %
     "drive_free_alert": 10,   # % free left on a volume
-    "disk_temp_alert": 60,    # °C
+    "disk_temp_alert": 55,    # °C for hard drives and SATA SSDs; NVMe drives get +15 (see disk_temp_limit)
     "battery_alert": 15,      # % while discharging
     "alert_sustain_s": 30,    # how long CPU/RAM/temperature must stay high before alerting
     "toasts": True,
@@ -651,6 +651,17 @@ def health_name(v) -> str:
     return _HEALTH.get(s, s or "Unknown")
 
 
+NVME_TEMP_EXTRA = 15  # NVMe SSDs are rated to ~70 °C and run 40-55 °C idle: their limit is higher
+
+
+def disk_temp_limit(disk: dict, setting: float) -> float:
+    """Alert temperature for a physical disk. Hard drives and SATA SSDs like to stay cooler
+    than NVMe drives, which routinely run at 50-65 °C under load."""
+    if disk.get("bus_name") == "NVMe" or "nvme" in str(disk.get("name", "")).lower():
+        return setting + NVME_TEMP_EXTRA
+    return setting
+
+
 def parse_firewall_enabled(v) -> bool:
     return str(v).strip().lower() in ("true", "1")
 
@@ -1022,8 +1033,9 @@ class AlertEngine:
                        f"{d.get('name')} reports health: {health}. Back up its data.", 0, 24 * 3600, now=now)
             t = safe_num(d.get("temp"))
             if t:
-                self.check(f"disktemp:{d.get('id')}", t >= s["disk_temp_alert"], "warning", "Drive running hot",
-                           f"{d.get('name')} is at {t:.0f}°C.", 0, 3600, now=now)
+                limit = disk_temp_limit(d, s["disk_temp_alert"])
+                self.check(f"disktemp:{d.get('id')}", t >= limit, "warning", "Drive running hot",
+                           f"{d.get('name')} is at {t:.0f}°C (limit {limit:.0f}°C).", 120, 3600, now=now)
         bat = snap.get("battery")
         if bat and bat.get("percent") is not None:
             self.check("battery", (not bat.get("plugged")) and bat["percent"] <= s["battery_alert"], "warning",

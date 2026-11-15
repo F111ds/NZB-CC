@@ -137,6 +137,11 @@ def temp_color(t: float | None, warn: float = 75, crit: float = 88) -> str:
     return C["red"] if t >= crit else C["amber"] if t >= warn else C["green"]
 
 
+def disk_temp_color(t: float, limit: float) -> str:
+    """Green well below the drive's limit, amber in the last 10 °C, red at or above it."""
+    return C["red"] if t >= limit else C["amber"] if t >= limit - 10 else C["green"]
+
+
 def fmt_mhz(mhz: float | None) -> str:
     if not mhz:
         return "—"
@@ -1424,7 +1429,7 @@ class DrivesPage(Page):
             w["kv"].set("Size", fmt_bytes(d.get("size"), 0) if d.get("size") else None)
             admin_hint = "run as admin" if sm.IS_WINDOWS and not snap.get("admin") and d.get("media_name") else None
             w["kv"].set("Temperature", fmt_temp(temp) if temp else admin_hint,
-                        temp_color(temp, 50, self.app.settings["disk_temp_alert"]) if temp else C["text_muted"])
+                        disk_temp_color(temp, sm.disk_temp_limit(d, self.app.settings["disk_temp_alert"])) if temp else C["text_muted"])
             wear = sm.safe_num(d.get("wear"))
             w["kv"].set("Wear", f"{wear:.0f}% used" if wear is not None else (admin_hint if d.get("media_name") == "SSD" else None),
                         level_color(wear, 70, 90) if wear is not None else C["text_muted"])
@@ -2367,7 +2372,7 @@ class SettingsPage(Page):
         ("gpu_temp_alert", "GPU temperature", 60, 100, "°C"),
         ("vram_alert", "GPU memory", 50, 100, "%"),
         ("drive_free_alert", "Drive free space below", 1, 40, "%"),
-        ("disk_temp_alert", "Drive temperature", 40, 80, "°C"),
+        ("disk_temp_alert", "HDD / SATA SSD temp (NVMe +15)", 40, 75, "°C"),
         ("battery_alert", "Battery below", 5, 50, "%"),
         ("alert_sustain_s", "Must stay high for", 5, 300, " s"),
     ]
