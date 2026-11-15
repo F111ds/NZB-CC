@@ -58,7 +58,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import zlib
-from collections import deque
+from collections import OrderedDict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from email.utils import parsedate_to_datetime
@@ -1134,11 +1134,16 @@ def kodi_missing_episodes(cap: int = 400) -> list[dict]:
 # 4. NEWZNAB SEARCH
 # ==============================================================================
 
-def _item_from_fields(indexer: dict, title, category, pub_date, nzb_url, size, grabs) -> dict | None:
+COVER_ATTRS = ("coverurl", "poster", "thumb", "backdropurl")  # Newznab attrs some indexers use for artwork
+
+
+def _item_from_fields(indexer: dict, title, category, pub_date, nzb_url, size, grabs, cover="") -> dict | None:
     nzb_url = str(nzb_url or "").strip()
     if not nzb_url:
         return None
+    cover = str(cover or "").strip()
     return {
+        "cover_url": cover[:1000] if cover.lower().startswith(("http://", "https://")) else "",
         "title": str(title or "Untitled release").strip(),
         "category": str(category or "General").strip(),
         "size_bytes": to_int(size),
@@ -1164,7 +1169,7 @@ def parse_newznab_xml(raw: bytes, indexer: dict) -> list[dict]:
         enclosure = item.find("enclosure")
         link = (item.findtext("link") or "").strip()
         size = to_int(enclosure.attrib.get("length")) if enclosure is not None else 0
-        grabs = 0
+        grabs, cover = 0, ""
         for child in item:
             if child.tag.split("}")[-1].lower() == "attr":
                 name = child.attrib.get("name", "").lower()
@@ -1173,9 +1178,11 @@ def parse_newznab_xml(raw: bytes, indexer: dict) -> list[dict]:
                     size = to_int(val)
                 elif name == "grabs":
                     grabs = to_int(val)
+                elif name in COVER_ATTRS and not cover and val.strip().lower().startswith(("http://", "https://")):
+                    cover = val.strip()
         parsed = _item_from_fields(
             indexer, item.findtext("title"), item.findtext("category"), item.findtext("pubDate"),
-            (enclosure.attrib.get("url") if enclosure is not None else "") or link, size, grabs,
+            (enclosure.attrib.get("url") if enclosure is not None else "") or link, size, grabs, cover,
         )
         if parsed:
             results.append(parsed)
@@ -1214,6 +1221,7 @@ def parse_newznab_json(raw: bytes, indexer: dict) -> list[dict]:
         parsed = _item_from_fields(
             indexer, item.get("title"), item.get("category"), item.get("pubDate"),
             enc.get("url") or item.get("link"), to_int(enc.get("length")) or to_int(attrs.get("size")), attrs.get("grabs"),
+            next((attrs[k] for k in COVER_ATTRS if str(attrs.get(k, "")).lower().startswith(("http://", "https://"))), ""),
         )
         if parsed:
             results.append(parsed)
@@ -1334,6 +1342,8 @@ def merge_duplicate_results(items: list[dict]) -> list[dict]:
         if all(s["indexer_id"] != source["indexer_id"] for s in entry["sources"]):
             entry["sources"].append(source)
             entry["also_found"].append(source["indexer_name"])
+        if not entry.get("cover_url") and item.get("cover_url"):
+            entry["cover_url"] = item["cover_url"]
         entry["size_bytes"] = max(entry["size_bytes"], item["size_bytes"])
         entry["grabs"] = max(entry["grabs"], item["grabs"])
         entry["pub_ts"] = max(entry["pub_ts"], item["pub_ts"])
@@ -1361,8 +1371,158 @@ def cache_results(items: list[dict]) -> list[dict]:
                 "category": item["category"], "size": format_bytes(item["size_bytes"]),
                 "size_bytes": item["size_bytes"], "date": item["date"], "pub_ts": item["pub_ts"],
                 "grabs": item["grabs"], "also_found": item["also_found"],
+                "kind": release_kind(item["title"], item["category"]), "res": release_resolution(item["title"]),
+                "art": bool(item.get("cover_url") or artwork_query(item["title"], item["category"])[0]),
             })
     return out
+
+
+# ---- Search-result artwork (same sources as the desktop app) ---------------------
+MAX_ART_BYTES = 2 * 1024 * 1024        # per image
+ART_CACHE_BYTES = 40 * 1024 * 1024     # all cached images together
+ART_FAIL_TTL = 300                     # don't retry a failed lookup for 5 minutes
+ART_LOOKUP_WORKERS = 4                 # TVmaze / iTunes rate-limit, so few lookups at once
+_art_lock = threading.Lock()
+_art_cache: "OrderedDict[str, tuple[bytes, str]]" = OrderedDict()
+_art_state = {"bytes": 0}
+_art_failed: dict[str, float] = {}
+_art_inflight: dict[str, threading.Event] = {}
+_art_slots = threading.BoundedSemaphore(ART_LOOKUP_WORKERS)
+
+
+def release_kind(title: str, category: str = "") -> str:
+    """What a release is, for the placeholder icon (mirrors the desktop app's release_kind)."""
+    cat, title = str(category or "").lower(), str(title or "")
+    if re.search(r"audio|music|mp3|flac|lossless", cat):
+        return "music"
+    if re.search(r"book|comic|magazine", cat):
+        return "book"
+    if re.search(r"console|game", cat):
+        return "game"
+    if re.search(r"\bpc\b|\bapps?\b|software", cat):
+        return "app"
+    if "tv" in cat or re.search(r"\b(S\d{1,2}([\s._-]?E\d{1,3})?|\d{1,2}x\d{2}|Season[\s._-]?\d+)\b", title, re.I):
+        return "tv"
+    if "movie" in cat or re.search(r"\b(19|20)\d{2}\b", title):
+        return "movie"
+    return "package"
+
+
+def release_resolution(title: str) -> str:
+    t = str(title or "")
+    if re.search(r"\b(2160p|4k|uhd)\b", t, re.I):
+        return "4K"
+    m = re.search(r"\b(1080p|720p|480p)\b", t, re.I)
+    return m.group(1).lower() if m else ""
+
+
+def artwork_query(title: str, category: str = "") -> tuple[str, str, str]:
+    """(clean name, year, "tv" / "movie") to look a poster up by (mirrors the desktop app)."""
+    raw = str(title or "").replace(".", " ").replace("_", " ").strip()
+    kind = release_kind(title, category)
+    if kind in ("music", "book", "game", "app"):
+        return "", "", ""  # the poster services only know films and shows
+    tv = re.search(r"\b(S\d{1,2}E\d{1,3}|S\d{1,2}|Season\s*\d+)\b", raw, re.I)
+    if tv or "tv" in str(category or "").lower():
+        clean = raw[: tv.start()].strip(" -") if tv else raw
+        return re.sub(r"\b(19\d\d|20\d\d)\b", "", clean).strip(" -([")[:100], "", "tv"
+    year = re.search(r"\b(19\d\d|20\d\d)\b", raw)
+    if year:
+        return raw[: year.start()].strip(" -([")[:100], year.group(1), "movie"
+    clean = re.split(r"\b(2160p|1080p|720p|480p|4k|uhd|bluray|bdrip|web-dl|webdl|webrip|hdtv|hdr|x264|x265|hevc|remux)\b",
+                     raw, maxsplit=1, flags=re.I)[0].strip(" -([")
+    return clean[:100], "", "movie"
+
+
+def _image_type(raw: bytes) -> str:
+    for magic, ctype in IMAGE_MAGIC:
+        if raw.startswith(magic):
+            return ctype
+    return "image/webp" if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP" else ""
+
+
+def _fetchable_image_url(url: str, allowed_hosts: set[str]) -> bool:
+    """An image URL this server may download: http(s), and either a known indexer host or a public address."""
+    p = urllib.parse.urlsplit(str(url or ""))
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return False
+    return p.hostname.lower() in allowed_hosts or host_is_public(p.hostname)
+
+
+def lookup_poster_url(clean: str, year: str, hint: str) -> str:
+    """Poster URL from TVmaze (shows) or the iTunes catalogue (films), like the desktop app. "" if none."""
+    if not clean:
+        return ""
+    try:
+        if hint == "tv":
+            raw = http_fetch("https://api.tvmaze.com/singlesearch/shows?" + urllib.parse.urlencode({"q": clean}),
+                             timeout=5, max_bytes=512 * 1024)
+            image = _kdict(_kdict(json.loads(raw.decode("utf-8", errors="replace"))).get("image"))
+            return str(image.get("medium") or image.get("original") or "")
+        raw = http_fetch("https://itunes.apple.com/search?" + urllib.parse.urlencode(
+            {"term": f"{clean} {year}".strip(), "media": "movie", "limit": 1}), timeout=5, max_bytes=512 * 1024)
+        results = _kdict(json.loads(raw.decode("utf-8", errors="replace"))).get("results") or []
+        art = str(_kdict(results[0]).get("artworkUrl100") or "") if results else ""
+        return art.replace("100x100bb", "300x300bb")
+    except (UpstreamError, ValueError):  # 404 = no such show, bad JSON, offline, rate limited...
+        return ""
+
+
+def release_artwork(item: dict) -> tuple[bytes, str] | None:
+    """Poster bytes for a cached search result: the indexer's own cover if it sent one, else a lookup.
+    Shared by every result for the same title, cached, and never retried within ART_FAIL_TTL after a miss."""
+    cover = str(item.get("cover_url") or "")
+    clean, year, hint = artwork_query(item.get("title", ""), item.get("category", ""))
+    if not cover and not clean:
+        return None
+    key = cover or f"{hint}:{clean.lower()}:{year}"
+    with _art_lock:
+        if key in _art_cache:
+            _art_cache.move_to_end(key)
+            return _art_cache[key]
+        if _art_failed.get(key, 0) > time.monotonic():
+            return None
+        waiting = _art_inflight.get(key)
+        if waiting is None:
+            _art_inflight[key] = threading.Event()
+    if waiting is not None:  # someone else is already fetching this poster
+        waiting.wait(20)
+        with _art_lock:
+            return _art_cache.get(key)
+
+    def download(url: str) -> tuple[bytes, str] | None:
+        try:
+            raw = http_fetch(url, timeout=8, max_bytes=MAX_ART_BYTES, headers={"Accept": "image/*"})
+        except UpstreamError:
+            return None
+        ctype = _image_type(raw)
+        return (raw, ctype) if ctype else None
+
+    result = None
+    try:
+        hosts = {(urllib.parse.urlsplit(s.get("indexer_url", "")).hostname or "").lower() for s in item.get("sources", [])}
+        with _art_slots:
+            if cover and _fetchable_image_url(cover, hosts):
+                result = download(cover)
+            if result is None and clean:  # no usable cover from the indexer: look the title up
+                url = lookup_poster_url(clean, year, hint)
+                if url and _fetchable_image_url(url, set()):
+                    result = download(url)
+    finally:
+        with _art_lock:
+            if result:
+                _art_cache[key] = result
+                _art_state["bytes"] += len(result[0])
+                while _art_state["bytes"] > ART_CACHE_BYTES and len(_art_cache) > 1:
+                    _, (old, _) = _art_cache.popitem(last=False)
+                    _art_state["bytes"] -= len(old)
+                _art_failed.pop(key, None)
+            else:
+                _art_failed[key] = time.monotonic() + ART_FAIL_TTL
+                if len(_art_failed) > 5000:
+                    _art_failed.clear()
+            _art_inflight.pop(key).set()
+    return result
 
 
 def get_cached_result(result_id: str) -> dict | None:
@@ -2044,6 +2204,10 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 .eprow{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #0E1F26}.eprow .n{font:600 12px var(--mono);color:var(--muted);width:30px;flex:none}.eprow .info{flex:1;min-width:0}.eprow .t{font-size:14px;overflow-wrap:anywhere}.eprow .m{font-size:12px;color:var(--soft);margin-top:2px}.eprow.w .t{color:var(--soft)}
 .miss{background:#2E2410;color:var(--amber);border-radius:10px;padding:8px 10px 8px 12px;font-size:13px;margin:8px 0;display:flex;align-items:center;gap:10px}.miss span{flex:1;min-width:0;overflow-wrap:anywhere}.miss .btn{background:transparent;color:var(--amber);border:1px solid #5A4512;flex:none}
 .badge.up{background:#0B2230;color:var(--sky)}
+.rtop{display:flex;gap:12px;align-items:flex-start;margin-bottom:10px}.rtop .rbody{flex:1;min-width:0}.rtop .details{margin-bottom:0}
+.rart{width:52px;height:78px;flex:none;border-radius:8px;position:relative;overflow:hidden;background:var(--deep);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;color:var(--teal)}
+.rart small{font:700 9px var(--mono);letter-spacing:.04em;color:var(--soft)}.rart img.art{position:absolute;inset:0}
+.rart.k-tv,.rart.k-app{color:var(--sky)}.rart.k-music{color:var(--purple)}.rart.k-book{color:var(--amber)}.rart.k-game{color:var(--red)}.rart.k-package{color:var(--muted)}
 .tiles.two{grid-template-columns:repeat(2,minmax(0,1fr))}
 .pills{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}.pills button{border:1px solid var(--line);background:transparent;color:var(--text);border-radius:18px;padding:0 14px;min-height:38px;font-size:13px;font-weight:600}.pills button.on{background:var(--teal);color:var(--ink);border-color:var(--teal)}
 </style></head><body>
@@ -2207,6 +2371,17 @@ function updateBatchButton(){const n=selected.size;$('batchcount').textContent=n
 
 function relAge(ts){if(!ts)return '';const s=Date.now()/1000-ts;if(s<3600)return Math.max(1,Math.round(s/60))+'m ago';if(s<86400)return Math.round(s/3600)+'h ago';if(s<86400*30)return Math.round(s/86400)+'d ago';return new Date(ts*1000).toLocaleDateString()}
 function qualityTags(title){const t=String(title),out=[];const q=t.match(/\b(2160p|1080p|720p)\b/i);if(q)out.push(q[1].toLowerCase());if(/\b(dv|dovi|dolby.?vision)\b/i.test(t))out.push('DV');else if(/\bhdr/i.test(t))out.push('HDR');if(/\b(x265|h\.?265|hevc)\b/i.test(t))out.push('HEVC');else if(/\b(x264|h\.?264)\b/i.test(t))out.push('x264');if(/\bremux\b/i.test(t))out.push('REMUX');else if(/\b(bluray|bdrip)\b/i.test(t))out.push('BluRay');else if(/\bweb/i.test(t))out.push('WEB');return out.slice(0,4)}
+// Placeholder "clipart" per kind of release (shown until, or instead of, a poster) - same kinds as the desktop app.
+const KI=p=>'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+p+'</svg>';
+const KINDS={
+  movie:[KI('<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M3 10h18M7 6l2 4M12 6l2 4M17 6l2 4"/>'),'MOVIE'],
+  tv:[KI('<rect x="3" y="7" width="18" height="12" rx="2"/><path d="M8 3l4 4 4-4"/>'),'TV'],
+  music:[KI('<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>'),'MUSIC'],
+  book:[KI('<path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/>'),'BOOK'],
+  game:[KI('<rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 11v3M5.5 12.5h3"/><circle cx="16" cy="11.5" r=".8"/><circle cx="18" cy="13.5" r=".8"/>'),'GAME'],
+  app:[KI('<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M9 9l-2 2 2 2M15 9l2 2-2 2"/>'),'APP'],
+  package:[KI('<path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/>'),'NZB']
+};
 function resultCard(x){
   const done=added.has(x.id);
   const details=[x.indexer,x.size,(x.grabs||0)+' grabs',relAge(x.pub_ts)||x.date].filter(Boolean).map(esc).join(' · ');
@@ -2214,14 +2389,16 @@ function resultCard(x){
   if(x.in_library)badges='<span class="badge lib">'+(x.in_library==='episode'?'Episode already in Kodi':'Already in Kodi')+'</span>'+badges;
   if(x.also_found&&x.also_found.length)badges+='<span class="badge purple">Also on '+esc(x.also_found.join(', '))+'</span>';
   if(upgradeFrom&&isUpgrade(x.title))badges='<span class="badge up">Better than your '+esc(upgradeFrom.q||'copy')+'</span>'+badges;
-  return '<article class="result" data-id="'+esc(x.id)+'"><label class="check" aria-label="Select"><input type="checkbox" data-act="sel"'+(selected.has(x.id)?' checked':'')+(done?' disabled':'')+'></label><h3>'+esc(x.title)+'</h3><div class="details">'+details+'</div>'+(badges?'<div class="badges">'+badges+'</div>':'')+'<button class="btn full'+(done?' added':'')+'" data-act="add"'+(done?' disabled':'')+'>'+(done?'Added ✓':'Add to SABnzbd')+'</button></article>';
+  const kind=KINDS[x.kind]?x.kind:'package';
+  const art='<div class="rart k-'+kind+'" role="img" aria-label="'+esc(KINDS[kind][1]+(x.res?' '+x.res:''))+'">'+KINDS[kind][0]+'<small>'+esc(x.res||KINDS[kind][1])+'</small>'+(x.art?'<img class="art" data-art="r:'+esc(x.id)+'" alt="">':'')+'</div>';
+  return '<article class="result" data-id="'+esc(x.id)+'"><label class="check" aria-label="Select"><input type="checkbox" data-act="sel"'+(selected.has(x.id)?' checked':'')+(done?' disabled':'')+'></label><div class="rtop">'+art+'<div class="rbody"><h3>'+esc(x.title)+'</h3><div class="details">'+details+'</div></div></div>'+(badges?'<div class="badges">'+badges+'</div>':'')+'<button class="btn full'+(done?' added':'')+'" data-act="add"'+(done?' disabled':'')+'>'+(done?'Added ✓':'Add to SABnzbd')+'</button></article>';
 }
 function renderResults(){
   $('resulttools').style.display=results.length?'block':'none';
   const a=filterSort(results,currentFilter());
   if(results.length)$('searchstatus').textContent='Showing '+a.length+' of '+results.length+' result(s)'+searchNote;
   $('results').innerHTML=a.map(resultCard).join('')||(results.length?empty('Nothing matches these filters','Clear the size or grabs limits to see all '+results.length+' result(s).'):'');
-  updateBatchButton();
+  hydrateArt($('results'));updateBatchButton();
 }
 function recentList(){try{const a=JSON.parse(LS.get('nzb_mobile_recent','[]'));return Array.isArray(a)?a:[]}catch{return []}}
 function rememberSearch(){
@@ -2406,17 +2583,20 @@ function artURL(ref){
 function pumpArt(){
   while(artActive<4&&artQueue.length){
     const j=artQueue.shift();artActive++;
-    fetch('/api/kodi/art?u='+encodeURIComponent(j.ref),{headers:{'X-Mobile-Token':token}})
-      .then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.blob()}).then(b=>{const u=URL.createObjectURL(b);artReady.set(j.ref,u);j.res(u)})
+    // "r:<id>" = a search result's poster (the server picks the source); anything else = Kodi artwork.
+    const src=j.ref.startsWith('r:')?'/api/search/art?id='+encodeURIComponent(j.ref.slice(2)):'/api/kodi/art?u='+encodeURIComponent(j.ref);
+    fetch(src,{headers:{'X-Mobile-Token':token}})
+      .then(r=>{if(r.status===404)return null;if(!r.ok)throw new Error('HTTP '+r.status);return r.blob()})
+      .then(b=>{if(!b){j.res(null);return}const u=URL.createObjectURL(b);artReady.set(j.ref,u);j.res(u)})  // null = no poster: keep the placeholder, don't ask again
       .catch(e=>{artCache.delete(j.ref);j.rej(e)}).finally(()=>{artActive--;pumpArt()});
   }
 }
 const artReady=new Map();
 function artTag(ref){if(!ref)return '';const u=artReady.get(ref);return u?'<img class="art loaded" data-art="'+esc(ref)+'" src="'+u+'" alt="">':'<img class="art" data-art="'+esc(ref)+'" alt="">'}
 const artObserver='IntersectionObserver' in window?new IntersectionObserver(es=>{for(const e of es)if(e.isIntersecting){artObserver.unobserve(e.target);showArt(e.target)}},{rootMargin:'300px'}):null;
-function showArt(img){artURL(img.dataset.art).then(u=>{img.onload=()=>img.classList.add('loaded');img.src=u}).catch(()=>{})}
+function showArt(img){artURL(img.dataset.art).then(u=>{if(!u)return;img.onload=()=>img.classList.add('loaded');img.src=u}).catch(()=>{})}
 function hydrateArt(root){root.querySelectorAll('img[data-art]:not([src])').forEach(img=>artObserver?artObserver.observe(img):showArt(img))}
-function openViewer(ref){if(!ref)return;artURL(ref).then(u=>{$('viewerimg').src=u;$('viewer').classList.remove('hidden')}).catch(()=>toast('Couldn\'t load the picture',true))}
+function openViewer(ref){if(!ref)return;artURL(ref).then(u=>{if(!u)throw new Error('none');$('viewerimg').src=u;$('viewer').classList.remove('hidden')}).catch(()=>toast('Couldn\'t load the picture',true))}
 
 // ---------- Movie details sheet ----------
 let sheetOpen=false,detailMovie=null;
@@ -2878,6 +3058,15 @@ class MobileHandler(BaseHTTPRequestHandler):
             ref = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("u", [""])[0]
             raw, ctype = kodi_art(ref)
             self._send(200, raw, ctype, {"Cache-Control": "private, max-age=604800"})
+        elif path == "/api/search/art":
+            # The phone only ever names a search result; the server decides what (if anything) to download.
+            result_id = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0]
+            item = get_cached_result(result_id) if NZB_ID_RE.match(result_id) else None
+            art = release_artwork(item) if item else None
+            if not art:
+                self.send_json(404, {"error": "No artwork for this release."})
+                return
+            self._send(200, art[0], art[1], {"Cache-Control": "private, max-age=86400"})
         elif path == "/api/kodi/movie":
             movieid = to_int(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
             if movieid <= 0:
