@@ -108,6 +108,8 @@ if ($out -match 'INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match') {
 }
 Tv 'rm -f /data/local/tmp/nzbcc-launcher.apk' | Out-Null
 if ($out -notmatch 'Success') { throw 'pm install failed (see above).' }
+$ver = (Tv "dumpsys package $pkg | grep -m1 versionName").Trim()
+Write-Host "Launcher on the TV now: $ver" -ForegroundColor Green
 
 # ---- settings: wallpaper off, glass dock, Kodi row -----------------------------------------------
 Step 'Turning the wallpaper off and pointing the Kodi row at this PC'

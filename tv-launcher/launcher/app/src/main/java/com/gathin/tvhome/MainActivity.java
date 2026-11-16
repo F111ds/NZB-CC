@@ -829,9 +829,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
-                if (kodiBlock.getVisibility() != View.VISIBLE) return;
+                // A single row only scrolls sideways: the shelf stays put. (Setting the translation from here
+                // used to drop it to the top of the screen, over the clock, whenever the dock scrolled.)
+                if (kodiBlock.getVisibility() != View.VISIBLE || singleRow) return;
                 int shift = rv.canScrollVertically(-1) ? rv.computeVerticalScrollOffset() : 0;
-                kodiBlock.setTranslationY(-shift);
+                kodiBlock.setY(kodiBaseY - shift);
                 kodiBlock.setAlpha(Math.max(0f, 1f - shift / (float) Math.max(1, kodiBlock.getHeight() / 2)));
             }
         });
@@ -2967,6 +2969,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (kodiRow != null) kodiRow.refreshIfStale();
     }
 
+    /** Where layoutKodiRow puts the shelf (screen y); the scroll listener moves it from here. */
+    private float kodiBaseY;
+
     private boolean kodiRowShown() {
         return kodiRow != null && kodiRow.hasItems() && dockRow;
     }
@@ -3006,7 +3011,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         int shown = Math.min(posterH, (int) (175 * density));
         kodiRow.setPosterHeight(shown);
         // Centred in the open space between the header and the name above the dock.
-        kodiBlock.setY(top + Math.max(0, (posterH - shown) / 2));
+        kodiBaseY = top + Math.max(0, (posterH - shown) / 2);
+        int shift = !singleRow && grid.canScrollVertically(-1) ? grid.computeVerticalScrollOffset() : 0;
+        kodiBlock.setY(kodiBaseY - shift);
         kodiCount.setVisibility(View.GONE);
         if (kodiBlock.getVisibility() != View.VISIBLE) {
             kodiBlock.setVisibility(View.VISIBLE);
