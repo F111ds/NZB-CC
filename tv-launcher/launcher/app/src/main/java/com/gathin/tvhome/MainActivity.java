@@ -602,8 +602,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         kodiCount = findViewById(R.id.kodiCount);
         kodiFocusTitle = findViewById(R.id.kodiFocusTitle);
         kodiFocusMeta = findViewById(R.id.kodiFocusMeta);
-        RecyclerView kodiList = findViewById(R.id.kodiRow);   // not in every layout variant (layout-iw)
-        kodiRow = kodiList == null || kodiBlock == null ? null : new KodiRow(this, extras, handler, kodiList, this);
+        View kodiList = findViewById(R.id.kodiRow);   // not in every layout variant (layout-iw)
+        kodiRow = !(kodiList instanceof RecyclerView) || kodiBlock == null ? null
+                : new KodiRow(this, extras, handler, (RecyclerView) kodiList, this);
         // The rotation runs on the clock that never jumps: setting the TV's time must not stall or stretch a turn.
         rotationStart = SystemClock.elapsedRealtime();
         showStats = cfg.showStats;

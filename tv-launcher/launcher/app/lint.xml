@@ -4,4 +4,7 @@
     <!-- A string missing from a values-* folder falls back to English by design: translations arrive
          one language at a time from contributors, and a partial one is better than none. -->
     <issue id="MissingTranslation" severity="informational" />
+    <!-- NZB-CC: the app grid is match_parent; this check misreads the layout once the Kodi row (a
+         wrap_content RecyclerView) is in it, and failed the release build. -->
+    <issue id="InvalidSetHasFixedSize" severity="ignore" />
 </lint>
