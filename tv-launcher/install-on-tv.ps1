@@ -1,0 +1,141 @@
+<#
+Puts the NZB-CC TV launcher on the TV: the CleanYourTV home screen with the weather in the top bar,
+the Kodi row (the newest movies, one press to play) and the wallpaper off.
+
+Run on HAL9000 (the PC that runs mobile_server.py), from this folder, in PowerShell:
+
+    powershell -ExecutionPolicy Bypass -File .\install-on-tv.ps1 -TvHost 192.168.1.50
+
+What it does, in order:
+  1. checks the phone server (mobile_server.py) answers on this PC, and reads its access code
+  2. saves a copy of the TV's current launcher settings (config.json) in .\backup
+  3. installs NZB-CC-TV-Launcher.apk over the launcher on the TV
+  4. turns the wallpaper off, turns on the glass dock, and points the Kodi row at this PC
+  5. restarts Home
+
+Needs: Python 3 (py launcher) and Network debugging (ADB) on the TV - the same as CleanYourTV.
+#>
+param(
+    [Parameter(Mandatory = $true)][string]$TvHost,
+    [int]$ServerPort = 8765,
+    [string]$Apk = "$PSScriptRoot\NZB-CC-TV-Launcher.apk"
+)
+$ErrorActionPreference = 'Stop'
+Set-Location $PSScriptRoot
+$env:TV_HOST = $TvHost
+$pkg = 'com.gathin.tvhome'
+$tvDir = "/sdcard/Android/data/$pkg/files"
+
+function Step($text) { Write-Host "`n== $text" -ForegroundColor Cyan }
+
+# ---- tools ----------------------------------------------------------------------------------------
+$py = '.\tools\venv\Scripts\python.exe'
+if (-not (Test-Path $py)) {
+    Step 'Setting up the TV tools (once)'
+    py -3 -m venv tools\venv
+    & .\tools\venv\Scripts\pip.exe install -q -r tools\requirements.txt
+    if ($LASTEXITCODE -ne 0) { throw 'Installing the TV tools failed (see above). Nothing was changed on the TV.' }
+}
+function Tv([string]$cmd) {
+    $out = & $py -I tools\tv.py $cmd 2>&1
+    return ($out | Out-String)
+}
+
+Step "Connecting to the TV at $TvHost"
+$probe = & $py -I tools\tv.py --probe 2>&1 | Out-String
+Write-Host $probe.Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw 'Could not reach the TV. Check its IP address, that Network debugging is on, and accept the prompt on the TV. Nothing was changed.'
+}
+
+# ---- the phone server on this PC ------------------------------------------------------------------
+Step 'Checking NZB Command Center''s phone server on this PC'
+$keyFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'mobile_access_key.txt'
+if (-not (Test-Path $keyFile)) {
+    throw "No access code at $keyFile. Start the phone server once (python mobile_server.py --install-autostart) and run this again."
+}
+$token = (Get-Content $keyFile -Raw).Trim()
+try {
+    $row = Invoke-RestMethod -Uri "http://127.0.0.1:$ServerPort/api/tv/recent" -Headers @{ 'X-Mobile-Token' = $token } -TimeoutSec 60
+    Write-Host "The phone server answers: $(@($row.items).Count) movies for the Kodi row."
+} catch {
+    throw "The phone server isn't answering on port $ServerPort ($($_.Exception.Message)). Start it (python mobile_server.py) and run this again. Nothing was changed on the TV."
+}
+# This PC's address on the network the TV is on.
+$pcIp = & $py -I -c "import socket,sys; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect((sys.argv[1].split(':')[0], 5555)); print(s.getsockname()[0])" $TvHost
+$server = "http://$($pcIp.Trim()):$ServerPort"
+Write-Host "The TV will read the Kodi row from $server"
+
+# ---- back up the TV's settings ----------------------------------------------------------------------
+Step 'Saving a copy of the launcher settings on the TV'
+New-Item -ItemType Directory -Force -Path backup | Out-Null
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$backup = "backup\config-$stamp.json"
+& $py -I tools\tv.py --pull "$tvDir/config.json" $backup 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0 -and (Test-Path $backup)) {
+    Write-Host "Saved $backup"
+    $cfgText = Get-Content $backup -Raw -Encoding UTF8
+} else {
+    Write-Host 'The TV has no theme settings yet; starting from an empty one.'
+    $cfgText = '{}'
+}
+
+# ---- install --------------------------------------------------------------------------------------
+Step 'Installing the launcher'
+if (-not (Test-Path $Apk)) { throw "Missing $Apk" }
+& $py -I tools\b64push.py $Apk /data/local/tmp/nzbcc-launcher.apk
+if ($LASTEXITCODE -ne 0) { throw 'Copying the APK to the TV failed. Nothing was installed.' }
+$out = Tv 'pm install -r /data/local/tmp/nzbcc-launcher.apk'
+Write-Host $out.Trim()
+if ($out -match 'INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match') {
+    Write-Host ''
+    Write-Host 'The launcher on the TV was built with a different signing key, so Android will only take this one' -ForegroundColor Yellow
+    Write-Host 'after the old one is removed. Your theme settings are saved and put back; the dock order, apps you' -ForegroundColor Yellow
+    Write-Host 'added or hid in the App library, and module-card answers are kept inside the old app and will reset.' -ForegroundColor Yellow
+    $ok = Read-Host 'Remove the old launcher and install this one? (y/n)'
+    if ($ok -notmatch '^(y|yes)$') {
+        Tv 'rm -f /data/local/tmp/nzbcc-launcher.apk' | Out-Null
+        throw 'Stopped. Nothing was changed on the TV.'
+    }
+    $out = Tv "pm uninstall $pkg; pm install /data/local/tmp/nzbcc-launcher.apk"
+    Write-Host $out.Trim()
+}
+Tv 'rm -f /data/local/tmp/nzbcc-launcher.apk' | Out-Null
+if ($out -notmatch 'Success') { throw 'pm install failed (see above).' }
+
+# ---- settings: wallpaper off, glass dock, Kodi row -----------------------------------------------
+Step 'Turning the wallpaper off and pointing the Kodi row at this PC'
+$cfg = $cfgText | ConvertFrom-Json
+if ($null -eq $cfg) { $cfg = New-Object PSObject }
+function SetKey($name, $value) {
+    if ($cfg.PSObject.Properties[$name]) { $cfg.$name = $value }
+    else { $cfg | Add-Member -NotePropertyName $name -NotePropertyValue $value }
+}
+SetKey 'wallpaper' $false
+SetKey 'background_color' '#070B14'
+SetKey 'dock_glass' $true
+SetKey 'kodi_row' $true
+SetKey 'kodi_row_server' $server
+SetKey 'kodi_row_token' $token
+SetKey 'weather' $true
+$newCfg = Join-Path $env:TEMP "nzbcc-config-$stamp.json"
+[IO.File]::WriteAllText($newCfg, ($cfg | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding $false))
+Tv "mkdir -p $tvDir" | Out-Null
+& $py -I tools\b64push.py $newCfg "$tvDir/config.json"
+if ($LASTEXITCODE -ne 0) { throw 'Writing the settings to the TV failed. The launcher is installed; run this again.' }
+Remove-Item $newCfg -ErrorAction SilentlyContinue
+
+# ---- Home ---------------------------------------------------------------------------------------
+Step 'Restarting Home'
+@(
+    "pm grant $pkg android.permission.ACCESS_FINE_LOCATION 2>/dev/null; echo granted",
+    "cmd package set-home-activity --user 0 $pkg/.MainActivity",
+    "am force-stop $pkg",
+    "am start -W -a android.intent.action.MAIN -c android.intent.category.HOME -n $pkg/.MainActivity"
+) | & $py -I tools\tv.py --batch | Out-Null
+$homeNow = (Tv 'cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME').Trim()
+Write-Host "Home is now: $($homeNow.Split("`n")[-1])"
+Write-Host ''
+Write-Host 'Done. The Kodi row fills in within a few seconds; the weather appears in the top bar once it is read.' -ForegroundColor Green
+Write-Host "Your previous settings are in $backup. To undo the look: put that file back with" -ForegroundColor Green
+Write-Host "  .\tools\venv\Scripts\python.exe -I tools\b64push.py $backup $tvDir/config.json" -ForegroundColor Green

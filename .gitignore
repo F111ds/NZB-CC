@@ -25,3 +25,14 @@ screenshots/
 
 # System Command Center: per-machine settings and window position
 system_center_config.json
+
+# TV home row: the phone server's saved row and posters
+tv_recent.json
+tv_art/
+
+# TV launcher build output
+tv-launcher/launcher/.gradle/
+tv-launcher/launcher/build/
+tv-launcher/launcher/app/build/
+tv-launcher/launcher/local.properties
+tv-launcher/tools/venv/
