@@ -596,6 +596,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         gameDay = GameDay.create(this, cfg.gameDay, handler, this::updatePanel);
         extras = HomeExtras.load(this);
         AppAdapter.tileScale = extras.dockTileScale;
+        AppAdapter.compactDock = cfg.singleRow && cfg.dockRow;
+        if (AppAdapter.compactDock && hero != null) {
+            // The focused app's name centred above the centred dock, not at the screen's left edge.
+            FrameLayout.LayoutParams hlp = (FrameLayout.LayoutParams) hero.getLayoutParams();
+            hlp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+            hlp.setMarginStart(0);
+            hero.setLayoutParams(hlp);
+            ((LinearLayout) hero).setGravity(Gravity.CENTER_HORIZONTAL);
+        }
         weatherPill = findViewById(R.id.weatherPill);
         if (extras.weather) weatherNow = new WeatherNow(this, extras, handler, this::updateWeatherPill);
         updateWeatherPill();
@@ -729,8 +738,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         grid.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             int h = b - t;
             // Item height follows the tile size, which follows the columns and the rows that must fit (AppAdapter.tileWidthPx).
-            int inner = (r - l) - grid.getPaddingLeft() - grid.getPaddingRight();
+            int inner = AppAdapter.sizingWidthPx(r - l, grid.getPaddingLeft(), grid.getPaddingRight(), density);
             int tileW = AppAdapter.tileWidthPx(inner, h, COLUMNS, rowsBelowDock, cfg.dockTitle, cfg.dockRow, density);
+            if (AppAdapter.compactDock && adapter != null) {
+                // NZB-CC: the compact row in the middle of the screen; once it is wider than the screen it
+                // scrolls sideways from the usual 10dp sides.
+                int cells = adapter.appCount() + (adapter.isLibraryAt(adapter.appCount()) ? 1 : 0);
+                int rowW = cells * AppAdapter.compactCellPx(tileW, density);
+                int side = Math.max((int) (10 * density), ((r - l) - rowW) / 2);
+                if (grid.getPaddingLeft() != side || grid.getPaddingRight() != side) {
+                    grid.setPadding(side, grid.getPaddingTop(), side, grid.getPaddingBottom());
+                }
+            }
             int itemH = AppAdapter.itemHeightPx(AppAdapter.tileHeightPx(tileW), density);
             int dockRow = itemH + (int) (AppAdapter.DOCK_EXTRA_DP * density);   // item height plus DockDecoration offsets
             int gridRows = itemH * (kodiRowShown() ? 0 : rowsBelowDock);   // the Kodi row: no grid row peeks under the dock
@@ -2983,8 +3002,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         // shelf padding (9 + 2), the header line (~20) and the cards' margins (8 + 8)
         int posterH = bottom - top - (int) (47 * density);
         // NZB-CC: five smaller posters, centred; the shelf is no taller than they need.
-        kodiRow.setPosterHeight(Math.min(posterH, (int) (150 * density)));
-        kodiBlock.setY(top);
+        int shown = Math.min(posterH, (int) (150 * density));
+        kodiRow.setPosterHeight(shown);
+        // Centred in the open space between the header and the name above the dock.
+        kodiBlock.setY(top + Math.max(0, (posterH - shown) / 2));
         kodiCount.setVisibility(View.GONE);
         if (kodiBlock.getVisibility() != View.VISIBLE) {
             kodiBlock.setVisibility(View.VISIBLE);
@@ -3165,13 +3186,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             // so Ethernet always shows the icon and the badge alone.
             // The space stays even then: a line holding only the span gets no font metrics and collapses.
             boolean stub = name.length() < text.length() && name.length() < 5;
-            text = stub || icon == R.drawable.ic_ethernet ? "" : name;
+            // NZB-CC: never the network name, just the icon and the VPN capsule (more room for the clock and date).
+            btnWifi.setContentDescription(text);
+            text = stub || icon == R.drawable.ic_ethernet || NAMELESS_WIFI ? "" : name;
             SpannableString label = new SpannableString(text + " " + badge);
             label.setSpan(span, text.length() + 1, label.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             if (!TextUtils.equals(btnWifi.getText(), label)) btnWifi.setText(label);
+        } else if (NAMELESS_WIFI) {
+            btnWifi.setContentDescription(text);
+            if (btnWifi.getText().length() > 0) btnWifi.setText(null);
         } else if (!TextUtils.equals(btnWifi.getText(), text)) {
             btnWifi.setText(text);
         }
+        if (NAMELESS_WIFI && !wifiIconOnly) fitNamelessWifi();
         if (wifiIconOnly) {
             btnWifi.setContentDescription(btnWifi.getText());
             btnWifi.setText(null);
@@ -3191,6 +3218,24 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             if (wifiOnlineTint != null && btnWifi.getCompoundDrawableTintList() != tint) {
                 btnWifi.setCompoundDrawableTintList(tint);
             }
+        }
+    }
+
+    /** NZB-CC: the network pill shows the Wi-Fi (or Ethernet) icon and the VPN capsule, never the network name. */
+    private static final boolean NAMELESS_WIFI = true;
+
+    /** The Wi-Fi pill as a 34dp circle with just its icon, or a snug pill around the icon and the VPN capsule. */
+    private void fitNamelessWifi() {
+        boolean badge = btnWifi.getText() != null && btnWifi.getText().length() > 0;
+        int pad = Math.round((badge ? 10 : 8) * density);
+        int width = badge ? ViewGroup.LayoutParams.WRAP_CONTENT : Math.round(34 * density);
+        int gap = badge ? Math.round(4 * density) : 0;
+        if (btnWifi.getPaddingStart() != pad || btnWifi.getPaddingEnd() != pad) btnWifi.setPaddingRelative(pad, 0, pad, 0);
+        if (btnWifi.getCompoundDrawablePadding() != gap) btnWifi.setCompoundDrawablePadding(gap);
+        ViewGroup.LayoutParams lp = btnWifi.getLayoutParams();
+        if (lp.width != width) {
+            lp.width = width;
+            btnWifi.setLayoutParams(lp);
         }
     }
 
@@ -3904,7 +3949,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         // Inputs opens its own list once this one has closed.
         if (showInputsMenuRow) addInputRow(rows, popup, R.drawable.ic_input, getString(R.string.inputs), -1, () -> root.post(this::showInputs));
         addInputRow(rows, popup, R.drawable.ic_wifi, getString(R.string.quick_network), -1, this::openNetworkPill);
-        CharSequence network = wifiIconOnly ? btnWifi.getContentDescription() : btnWifi.getText();
+        CharSequence network = wifiIconOnly || NAMELESS_WIFI ? btnWifi.getContentDescription() : btnWifi.getText();
         if (!TextUtils.isEmpty(network)) {
             TextView status = rows.getChildAt(rows.getChildCount() - 1).findViewById(R.id.status);
             status.setText(network);

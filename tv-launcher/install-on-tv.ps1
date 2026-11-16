@@ -125,6 +125,7 @@ SetKey 'dock_band_all' $true       # the glass band runs behind the whole row
 SetKey 'rows_below_dock' 0
 SetKey 'date_below_clock' $false   # clock and date on one line
 SetKey 'kodi_row_size' 5           # five posters: recently watched
+SetKey 'dock_tile_scale' 0.5       # small app tiles in a compact row, centred
 SetKey 'kodi_row' $true
 SetKey 'kodi_row_server' $server
 SetKey 'kodi_row_token' $token

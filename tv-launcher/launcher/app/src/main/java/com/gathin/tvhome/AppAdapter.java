@@ -155,6 +155,22 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
      */
     /** HomeExtras dock_tile_scale: the tiles at this share of their usual size (1 = unchanged). */
     static float tileScale = 1f;
+    /**
+     * NZB-CC: a single row sized to its tiles rather than spread over the screen. Each cell is a tile plus
+     * COMPACT_GAP_DP, and MainActivity centres the row with the grid's side padding. Tile sizes are worked out
+     * from the grid's width less its usual 10dp sides, so that centring padding never feeds back into them.
+     */
+    static boolean compactDock = false;
+    static final float COMPACT_GAP_DP = 22;
+
+    static int compactCellPx(int tileWidthPx, float density) {
+        return tileWidthPx + Math.round(COMPACT_GAP_DP * density);
+    }
+
+    /** The width tiles are sized from: the grid's own, less its side padding (fixed 10dp sides for compactDock). */
+    static int sizingWidthPx(int gridWidthPx, int paddingLeft, int paddingRight, float density) {
+        return compactDock ? gridWidthPx - Math.round(20 * density) : gridWidthPx - paddingLeft - paddingRight;
+    }
 
     static int tileWidthPx(int innerWidthPx, int gridHeightPx, int columns, int rowsBelowDock, boolean dockTitle,
                            boolean dockRow, float density) {
@@ -423,7 +439,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_app, parent, false);
         float density = parent.getResources().getDisplayMetrics().density;
         int width = parent.getWidth() > 0 ? parent.getWidth() : parent.getMeasuredWidth();
-        int inner = width - parent.getPaddingLeft() - parent.getPaddingRight();
+        int inner = sizingWidthPx(width, parent.getPaddingLeft(), parent.getPaddingRight(), density);
         int w = tileWidthPx(inner, parent.getHeight(), dockSize, rowsBelowDock, dockTitle, dockRow, density), h = tileHeightPx(w);
         View card = v.findViewById(R.id.card);
         ViewGroup.LayoutParams cardLp = card.getLayoutParams();
@@ -442,7 +458,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
         name.setLayoutParams(nameLp);
         // A sideways row would stretch a match_parent item across the whole screen: give it a grid column's width.
-        if (singleRow) v.getLayoutParams().width = inner / dockSize;
+        if (singleRow) v.getLayoutParams().width = compactDock ? compactCellPx(w, density) : inner / dockSize;
         if (uniformTiles) {
             // tvOS-style tile: a large centred mark, no caption inside the card.
             View icon = v.findViewById(R.id.icon);
