@@ -1,6 +1,6 @@
 <#
-Lists what is installed on the TV, so the ad, tracking and junk apps can be picked out before anything is
-switched off. READ-ONLY: it only asks the TV questions; nothing on the TV is changed.
+Lists what is installed on the TV (so the ad, tracking and junk apps can be picked out before anything is
+switched off) and how its sound output is set up (for a TV speakers / audio system switch on Home). READ-ONLY: it only asks the TV questions; nothing on the TV is changed.
 
 Run on HAL9000, from this folder, in PowerShell:
 
@@ -37,6 +37,9 @@ $commands = @(
     'echo "== System apps, switched on"; pm list packages -s -e | sed "s/^package://" | sort',
     'echo "== Apps already switched off"; pm list packages -d | sed "s/^package://" | sort',
     'echo "== Apps you installed"; pm list packages -3 | sed "s/^package://" | sort',
+    'echo "== Sound output settings (TV speakers / audio system)"; for t in global system secure; do settings list $t | grep -i -E "speaker|audio|sound|arc|cec|hdmi_control|system_audio|output" | sed "s/^/$t: /"; done; echo "(end)"',
+    'echo "== HDMI control"; dumpsys hdmi_control | grep -i -E "system audio|arc|audio system|speaker|power" | head -n 40',
+    'echo "== Sound settings screens"; cmd package query-activities -a android.settings.SOUND_SETTINGS | grep -i -E "name=|packageName" | head -n 10',
     'echo "== Settings that may relate to ads, usage data or viewing data"; settings list global | grep -i -E "ad_|ads|usage|diagnos|analytic|samba|acr|interactive|promo|recommend" ; settings list secure | grep -i -E "ad_|ads|usage|diagnos|analytic|samba|acr|interactive|promo|recommend"; echo "(end)"'
 )
 # Sent on stdin (batch mode), one command per line: Windows PowerShell mangles quotes inside arguments.
