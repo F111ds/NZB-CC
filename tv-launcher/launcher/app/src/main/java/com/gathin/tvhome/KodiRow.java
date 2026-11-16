@@ -198,6 +198,16 @@ final class KodiRow {
 
     // ---- data ---------------------------------------------------------------------------------
 
+    private volatile boolean freshNext;
+
+    /** Home came back (from Kodi, say): read the list now, with the PC reading Kodi right away too. */
+    void refreshNow() {
+        if (!enabled() || busy || System.currentTimeMillis() - readAt < 15_000L) return;
+        freshNext = true;
+        readAt = 0;
+        refreshIfStale();
+    }
+
     void refreshIfStale() {
         if (!enabled() || busy || System.currentTimeMillis() - readAt < REFRESH_MS) return;
         busy = true;
@@ -236,8 +246,10 @@ final class KodiRow {
     }
 
     private List<Item> readFromPc() throws Exception {
-        JSONObject j = new JSONObject(new String(http("GET", extras.kodiServer + "/api/tv/watched", null, true, 8000),
-                StandardCharsets.UTF_8));
+        boolean fresh = freshNext;
+        freshNext = false;
+        JSONObject j = new JSONObject(new String(http("GET", extras.kodiServer + "/api/tv/watched" + (fresh ? "?fresh=1" : ""),
+                null, true, fresh ? 20000 : 8000), StandardCharsets.UTF_8));
         JSONArray a = j.getJSONArray("items");
         List<Item> out = new ArrayList<>();
         for (int i = 0; i < a.length() && out.size() < extras.kodiRowSize; i++) {

@@ -1178,6 +1178,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         super.onResume();
         resumed = true;
         if (newsTicker != null) newsTicker.start();
+        if (kodiRow != null) kodiRow.refreshNow();   // NZB-CC: what was just watched shows within seconds
         // A festival that started or ended while Home was in the background: rebuild with or without it.
         if (festive != festival.active(LocalDate.now())) {
             recreate();

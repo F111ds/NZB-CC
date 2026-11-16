@@ -2726,15 +2726,26 @@ def tv_watched_refresh() -> dict:
         return state
 
 
-def tv_watched_row(background: bool = True) -> dict:
-    """Recently watched as the TV reads it; a stale list is returned at once and re-read on a worker thread."""
+def tv_watched_row(background: bool = True, fresh: bool = False) -> dict:
+    """Recently watched as the TV reads it; a stale list is returned at once and re-read on a worker thread.
+    fresh: read Kodi now (the TV asks this when Home comes back, so what was just watched shows at once);
+    at most every 10 seconds, and the saved list when Kodi doesn't answer."""
     state = tv_watched_load()
+    if fresh and time.time() - state["updated"] > 10:
+        try:
+            return tv_watched_row_from(tv_watched_refresh())
+        except Exception:
+            log.exception("Reading Kodi's recently watched list failed")
     if time.time() - state["updated"] > TV_WATCHED_REFRESH_SECS:
         if background and state["items"]:
             if not _tv_watched_refreshing.locked():
                 threading.Thread(target=tv_watched_refresh, name="tv-watched", daemon=True).start()
         else:
             state = tv_watched_refresh()
+    return tv_watched_row_from(state)
+
+
+def tv_watched_row_from(state: dict) -> dict:
     keys = ("id", "title", "episode_title", "year", "season", "episode", "runtime", "quality", "watched",
             "progress", "remaining", "movieid", "episodeid", "lastplayed")
     items = [{k: it.get(k) for k in keys} | {"poster": f"/api/tv/poster?id={it['id']}"} for it in state["items"]]
@@ -4108,7 +4119,8 @@ class MobileHandler(BaseHTTPRequestHandler):
         elif path == "/api/tv/recent":
             self.send_json(200, tv_row())
         elif path == "/api/tv/watched":
-            self.send_json(200, tv_watched_row())
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            self.send_json(200, tv_watched_row(fresh=q.get("fresh", [""])[0] == "1"))
         elif path == "/api/tv/finished":
             self.send_json(200, tv_finished())
         elif path == "/api/tv/photos":

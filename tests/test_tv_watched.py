@@ -95,3 +95,14 @@ for bad in ("k1", "m", "../e1"):
     except ValueError:
         pass
 print("test_tv_watched part 2 OK")
+
+# fresh=1 reads Kodi right away even when the saved list is recent
+m.kodi_call = _old
+before = m.tv_watched_load()["updated"]
+import time as _t
+st = m.tv_watched_load(); st["updated"] = _t.time() - 30
+m.TV_WATCHED_FILE.write_text(__import__("json").dumps(st))
+row = m.tv_watched_row(fresh=True)
+assert row["updated"] > _t.time() - 5, row["updated"]
+assert [it["id"] for it in row["items"]][:1] == ["e42"]
+print("test_tv_watched part 3 OK")
