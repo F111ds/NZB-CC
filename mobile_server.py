@@ -1875,6 +1875,277 @@ def run_saved_search(search_id: str, notify: bool = True) -> dict:
     return {"new": len(fresh), "error": error}
 
 
+# ---- TV home row: the newest movies, for the TV launcher ------------------------------
+# The TV's home screen shows the newest movies with their posters and starts one in Kodi in
+# one press, even when Kodi was not running. Kodi only answers while it runs, so this server
+# keeps the row: Kodi's recently added movies (whenever Kodi is reachable, remembered for when
+# it isn't) merged with finished SABnzbd movie downloads Kodi hasn't scanned yet. Posters are
+# saved on disk next to this file, so the row survives restarts of this server and of Kodi.
+TV_ROW_SIZE = 12
+TV_REFRESH_SECS = 300
+TV_PLAY_WAIT_SECS = 45              # how long /api/tv/play waits for a Kodi that was just started
+TV_STATE_FILE = BASE_DIR / "tv_recent.json"
+TV_ART_DIR = BASE_DIR / "tv_art"
+TV_ID_RE = re.compile(r"[ks][A-Za-z0-9_]{1,80}")
+VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".mpg", ".mpeg", ".webm", ".iso"}
+TV_KODI_PROPS = ["title", "year", "runtime", "file", "art", "thumbnail", "dateadded", "playcount", "streamdetails"]
+_tv_lock = threading.Lock()
+_tv_refreshing = threading.Lock()
+
+
+def tv_load_state() -> dict:
+    try:
+        data = json.loads(TV_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    return {"updated": to_float(data.get("updated")), "kodi": [x for x in data.get("kodi") or [] if isinstance(x, dict)],
+            "items": [x for x in data.get("items") or [] if isinstance(x, dict)],
+            "path_map": [p for p in data.get("path_map") or [] if isinstance(p, list) and len(p) == 2]}
+
+
+def tv_save_state(state: dict) -> None:
+    tmp = TV_STATE_FILE.with_name(TV_STATE_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, TV_STATE_FILE)
+
+
+def _split_path(path: str) -> list[str]:
+    return [p for p in re.split(r"[\\/]+", str(path or "")) if p]
+
+
+def tv_learn_prefix(local_folder: str, kodi_file: str) -> tuple[str, str] | None:
+    """('D:\\Movies', 'smb://HAL9000/Movies') from a download folder and the file Kodi plays from it.
+
+    Both paths contain the download's folder ("Movie (2020)"); what comes before it is how Kodi
+    reaches this PC's folder. None when Kodi's path doesn't contain it."""
+    m = re.match(r"^([a-z][a-z0-9+.-]*://[^/]*)(/.*)?$", kodi_file or "", re.I)
+    head, rest = (m.group(1), m.group(2) or "") if m else ("", kodi_file or "")
+    k_parts = _split_path(rest)[:-1]          # Kodi's folders, without the file name
+    l_parts = _split_path(local_folder)
+    if len(l_parts) < 2:
+        return None
+    # The download's own folder ("Movie (2020)") is the distinctive part; the video can sit in a
+    # subfolder of it on Kodi's side. Everything before that folder is how each side reaches it.
+    job = l_parts[-1].lower()
+    at = max((i for i, part in enumerate(k_parts) if part.lower() == job), default=-1)
+    if at < 0:
+        return None
+    common = 1
+    k_parts = k_parts[: at + 1]
+    local_prefix = "\\".join(l_parts[: len(l_parts) - common]) if "\\" in local_folder or ":" in l_parts[0] else \
+        "/" + "/".join(l_parts[: len(l_parts) - common])
+    kodi_prefix = head + "/" + "/".join(k_parts[: len(k_parts) - common]) if head else \
+        "/".join(k_parts[: len(k_parts) - common])
+    return local_prefix, kodi_prefix.rstrip("/")
+
+
+def tv_map_path(local_path: str, path_map: list) -> str:
+    """The path Kodi plays a local file by, using the learned prefixes ("" when none fits)."""
+    norm = str(local_path or "").replace("/", "\\").lower()
+    for local_prefix, kodi_prefix in sorted(path_map, key=lambda p: -len(p[0])):
+        lp = str(local_prefix).replace("/", "\\").rstrip("\\").lower()
+        if norm == lp or norm.startswith(lp + "\\"):
+            tail = str(local_path)[len(lp):].replace("\\", "/").lstrip("/")
+            sep = "/" if "://" in kodi_prefix or kodi_prefix.startswith("/") else "\\"
+            return kodi_prefix.rstrip("/\\") + sep + (tail if sep == "/" else tail.replace("/", "\\"))
+    return ""
+
+
+def tv_video_file(storage: str) -> str:
+    """The main video file of a finished download (the largest video in its folder), or ""."""
+    p = Path(str(storage or ""))
+    try:
+        if p.is_file():
+            return str(p) if p.suffix.lower() in VIDEO_EXTS else ""
+        best, size = "", 0
+        for root, dirs, files in os.walk(p):
+            if root[len(str(p)):].count(os.sep) >= 2:
+                dirs[:] = []
+            for f in files:
+                if Path(f).suffix.lower() in VIDEO_EXTS and "sample" not in f.lower():
+                    s = (Path(root) / f).stat().st_size
+                    if s > size:
+                        best, size = str(Path(root) / f), s
+        return best
+    except OSError:
+        return ""
+
+
+def _kodi_time(text: str) -> float:
+    try:
+        return time.mktime(time.strptime(str(text or "")[:19], "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return 0.0
+
+
+def tv_kodi_recent(limit: int = TV_ROW_SIZE) -> list[dict]:
+    res = _kdict(kodi_call("VideoLibrary.GetRecentlyAddedMovies",
+                           {"properties": TV_KODI_PROPS, "limits": {"start": 0, "end": limit}}, timeout=10))
+    out = []
+    for mv in res.get("movies") or []:
+        if not isinstance(mv, dict) or to_int(mv.get("movieid")) <= 0:
+            continue
+        art = _kdict(mv.get("art"))
+        quality, _hdr = video_quality(mv.get("streamdetails"))
+        out.append({"id": f"k{to_int(mv.get('movieid'))}", "movieid": to_int(mv.get("movieid")),
+                    "title": str(mv.get("title") or "Untitled"), "year": to_int(mv.get("year")) or None,
+                    "runtime": to_int(mv.get("runtime")) // 60, "quality": "4K" if quality == "2160p" else quality,
+                    "added": _kodi_time(mv.get("dateadded")), "watched": to_int(mv.get("playcount")) > 0,
+                    "file": str(mv.get("file") or ""), "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail"))})
+    return out
+
+
+def _same_movie(a: dict, b: dict) -> bool:
+    if _norm_title(a.get("title")) != _norm_title(b.get("title")):
+        return False
+    ya, yb = to_int(a.get("year")), to_int(b.get("year"))
+    return not ya or not yb or abs(ya - yb) <= 1
+
+
+def tv_sab_movies(limit: int = 60) -> list[dict]:
+    slots = sab_request("history", {"limit": limit}).get("history", {}).get("slots", [])
+    out = []
+    for x in slots:
+        name, cat = str(x.get("name") or ""), str(x.get("category") or "")
+        if str(x.get("status", "")).lower() != "completed" or release_kind(name, cat) != "movie":
+            continue
+        clean, year, _hint = artwork_query(name, cat)
+        nzo = re.sub(r"[^A-Za-z0-9_]", "", str(x.get("nzo_id") or ""))[:80]
+        if not clean or not nzo:
+            continue
+        out.append({"id": f"s{nzo}", "title": clean, "year": to_int(year) or None, "added": float(to_int(x.get("completed"))),
+                    "quality": release_resolution(name), "storage": str(x.get("storage") or ""), "watched": False})
+    return out
+
+
+def _tv_save_poster(item: dict) -> bool:
+    TV_ART_DIR.mkdir(exist_ok=True)
+    dest = TV_ART_DIR / f"{item['id']}.img"
+    if dest.exists():
+        return True
+    raw = None
+    try:
+        if item.get("art_ref"):
+            raw = kodi_art(item["art_ref"])[0]
+        else:
+            url = lookup_poster_url(item["title"], str(item.get("year") or ""), "movie")
+            if url and _fetchable_image_url(url, set()):
+                raw = http_fetch(url, timeout=8, max_bytes=MAX_ART_BYTES, headers={"Accept": "image/*"})
+    except (UpstreamError, ValueError, ConfigError):
+        raw = None
+    if not raw or not _image_type(raw):
+        return False
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_bytes(raw)
+    os.replace(tmp, dest)
+    return True
+
+
+def tv_refresh() -> dict:
+    """Rebuilds the row. Never raises for an offline Kodi or SABnzbd: the last good part is kept."""
+    with _tv_refreshing:
+        state = tv_load_state()
+        kodi_items, kodi_ok = state["kodi"], False
+        try:
+            if kodi_configured():
+                kodi_items, kodi_ok = tv_kodi_recent(), True
+        except (UpstreamError, ConfigError):
+            pass
+        try:
+            sab_items = tv_sab_movies()
+        except (UpstreamError, ConfigError):
+            sab_items = []
+        path_map = [tuple(p) for p in state["path_map"]]
+        for s in sab_items:          # learn how Kodi reaches this PC's folders from downloads it already has
+            k = next((k for k in kodi_items if _same_movie(s, k) and k.get("file")), None)
+            pair = tv_learn_prefix(s["storage"], k["file"]) if k and s["storage"] else None
+            if pair and pair not in path_map:
+                path_map.append(pair)
+        merged = list(kodi_items)
+        for s in sab_items:
+            if any(_same_movie(s, k) for k in kodi_items):
+                continue
+            video = tv_video_file(s["storage"])
+            s["file"] = tv_map_path(video, path_map) if video else ""
+            merged.append(s)
+        merged.sort(key=lambda x: -to_float(x.get("added")))
+        items = merged[:TV_ROW_SIZE]
+        newest_kodi = max((to_float(k.get("added")) for k in kodi_items), default=0.0)
+        for it in items:
+            it.pop("storage", None)
+            it["poster"] = _tv_save_poster(it)
+            it["in_kodi"] = bool(it.get("movieid"))
+            it["new"] = not it.get("watched") and to_float(it.get("added")) >= time.time() - 3 * 86400
+        if TV_ART_DIR.exists():   # forget posters the row no longer shows
+            keep = {f"{it['id']}.img" for it in items} | {f"{k['id']}.img" for k in kodi_items}
+            for f in TV_ART_DIR.glob("*.img"):
+                if f.name not in keep:
+                    f.unlink(missing_ok=True)
+        state = {"updated": time.time(), "kodi_online": kodi_ok, "newest_kodi": newest_kodi,
+                 "kodi": kodi_items, "items": items, "path_map": [list(p) for p in path_map][-20:]}
+        with _tv_lock:
+            tv_save_state(state)
+        return state
+
+
+def tv_row(background: bool = True) -> dict:
+    """The row as the TV reads it; a stale row is returned at once and rebuilt on a worker thread."""
+    state = tv_load_state()
+    if time.time() - state["updated"] > TV_REFRESH_SECS:
+        if background and state["items"]:
+            if not _tv_refreshing.locked():
+                threading.Thread(target=tv_refresh, name="tv-row", daemon=True).start()
+        else:
+            state = tv_refresh()
+    items = [{k: it.get(k) for k in ("id", "title", "year", "runtime", "quality", "added", "watched", "new",
+                                      "in_kodi", "movieid", "file")}
+             | {"poster": f"/api/tv/poster?id={it['id']}" if it.get("poster") else ""} for it in state["items"]]
+    return {"updated": state["updated"], "items": items}
+
+
+def tv_poster(item_id: str) -> bytes | None:
+    if not TV_ID_RE.fullmatch(item_id or ""):
+        raise ValueError("Invalid item.")
+    try:
+        return (TV_ART_DIR / f"{item_id}.img").read_bytes()
+    except OSError:
+        return None
+
+
+def tv_play(item_id: str, wait: float = TV_PLAY_WAIT_SECS) -> dict:
+    """Plays a row item in Kodi. The TV starts Kodi first, so this waits for Kodi to answer."""
+    if not TV_ID_RE.fullmatch(item_id or ""):
+        raise ValueError("Invalid item.")
+    item = next((x for x in tv_load_state()["items"] if x.get("id") == item_id), None)
+    if not item:
+        raise ValueError("That movie isn't in the row any more.")
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            kodi_call("JSONRPC.Ping", timeout=3)
+            break
+        except UpstreamError:
+            if time.monotonic() >= deadline:
+                raise UpstreamError("Kodi didn't start in time.")
+            time.sleep(1.5)
+    target = None
+    if item.get("movieid"):
+        target = {"movieid": int(item["movieid"])}
+    else:   # a download Kodi hadn't scanned: look for it now, else play the file itself
+        res = _kdict(kodi_call("VideoLibrary.GetMovies", {"properties": ["title", "year"], "filter": {
+            "field": "title", "operator": "is", "value": item["title"]}}, timeout=10))
+        hit = next((m for m in res.get("movies") or [] if _same_movie(item, m)), None)
+        if hit:
+            target = {"movieid": to_int(hit.get("movieid"))}
+        elif item.get("file"):
+            target = {"file": item["file"]}
+    if not target:
+        raise ValueError("Kodi can't find this movie yet. Update Kodi's library and try again.")
+    kodi_call("Player.Open", {"item": target})
+    return {"ok": True, "played": target}
+
+
 class BackgroundWorker:
     """Sends download alerts and runs saved searches while the server is up."""
 
@@ -1884,6 +2155,7 @@ class BackgroundWorker:
     def __init__(self):
         self._seen: set[str] | None = None
         self._next_history = 0.0
+        self._next_tv = 0.0
         self._stop = threading.Event()
 
     def start(self) -> None:
@@ -1905,6 +2177,12 @@ class BackgroundWorker:
         if settings["ntfy_url"] and now >= self._next_history:
             self._next_history = now + self.HISTORY_EVERY
             self.check_history(settings)
+        if now >= self._next_tv:
+            self._next_tv = now + TV_REFRESH_SECS
+            try:
+                tv_refresh()
+            except Exception:
+                log.exception("Refreshing the TV row failed")
         due = due_saved_search(settings, now)
         if due:  # one per tick spreads indexer API use out
             run_saved_search(due["id"], notify=True)
@@ -3160,6 +3438,14 @@ class MobileHandler(BaseHTTPRequestHandler):
                     "eta": x.get("timeleft", ""), "cat": x.get("cat", ""), "priority": str(x.get("priority") or ""),
                 } for x in slots],
             })
+        elif path == "/api/tv/recent":
+            self.send_json(200, tv_row())
+        elif path == "/api/tv/poster":
+            raw = tv_poster(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
+            if not raw:
+                self.send_json(404, {"error": "No poster for this movie."})
+                return
+            self._send(200, raw, _image_type(raw) or "image/jpeg", {"Cache-Control": "private, max-age=604800"})
         elif path == "/api/history":
             h = sab_request("history", {"limit": 25}).get("history", {})
             self.send_json(200, {"slots": [{
@@ -3214,6 +3500,10 @@ class MobileHandler(BaseHTTPRequestHandler):
             kodi_call("Player.Open", {"item": item, "options": {"resume": bool(body.get("resume"))}})
             log.info("kodi play %s resume=%s ip=%s", item, bool(body.get("resume")), self.ip)
             self.send_json(200, {"ok": True})
+        elif path == "/api/tv/play":
+            result = tv_play(str(body.get("id") or ""))
+            log.info("tv play %s ip=%s", result.get("played"), self.ip)
+            self.send_json(200, result)
         elif path == "/api/kodi/control":
             kodi_control(str(body.get("action") or ""), to_int(body.get("playerid"), -1), body.get("value"))
             self.send_json(200, {"ok": True})
