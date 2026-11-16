@@ -2515,6 +2515,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             int last = adapter.focusablePosition(count - 1);
             if (forward && position >= last) {
                 if (adapter.isLibraryAt(count)) focusLibrary();
+                // NZB-CC: no pill at the row's end; Right past the last app opens the App library, where the
+                // rest of the apps are (the grid button in the top bar opens it too).
+                else if (appLibraryEnabled) {
+                    grid.playSoundEffect(SoundEffectConstants.NAVIGATION_RIGHT);
+                    onLibraryRequested();
+                }
                 return true;
             }
             return !forward && position == 0;
