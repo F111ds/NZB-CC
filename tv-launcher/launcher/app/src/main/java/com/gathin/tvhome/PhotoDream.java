@@ -164,6 +164,7 @@ public class PhotoDream extends DreamService {
         FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
         plp.setMargins(0, 0, dp(56), dp(48));
         root.addView(caption, plp);
+        caption.setVisibility(View.GONE);   // NZB-CC: no file name or date over the photos
         return root;
     }
 
