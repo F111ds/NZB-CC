@@ -22,7 +22,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      # ubuntu-latest comes with the Android SDK (ANDROID_HOME); accept its licences for platform 34.
+      - name: Android SDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - name: Build the preview APK
         working-directory: tv-launcher/launcher
         run: bash gradlew assembleRelease -PlauncherApplicationId=com.gathin.tvhome.preview --no-daemon --console=plain
