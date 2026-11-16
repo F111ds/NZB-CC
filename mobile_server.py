@@ -2165,6 +2165,85 @@ def tv_play(item_id: str, wait: float = TV_PLAY_WAIT_SECS) -> dict:
     return {"ok": True, "played": target}
 
 
+# Screensaver photos (GET /api/tv/photos, /api/tv/photo): pictures from a folder on this PC, which
+# the TV's screensaver shows one after another. The folder is the first line of tv_photos_folder.txt
+# next to this file, else the user's Pictures folder (or OneDrive's). Only files found by walking that
+# folder can be served, by an id derived from their path; nothing else on the PC is reachable.
+TV_PHOTOS_FILE = BASE_DIR / "tv_photos_folder.txt"
+TV_PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+TV_PHOTO_MAX_FILES = 5000
+TV_PHOTO_MAX_BYTES = 40 * 1024 * 1024
+TV_PHOTO_ID_RE = re.compile(r"[0-9a-f]{16}")
+_tv_photo_lock = threading.Lock()
+_tv_photo_index: dict = {"at": 0.0, "folder": "", "items": {}}
+
+
+def tv_photos_folder() -> Path | None:
+    try:
+        line = TV_PHOTOS_FILE.read_text(encoding="utf-8-sig").strip().splitlines()[0].strip().strip('"')
+        if line and Path(line).is_dir():
+            return Path(line)
+    except (OSError, IndexError):
+        pass
+    home = Path.home()
+    for cand in (home / "Pictures", home / "OneDrive" / "Pictures", home / "OneDrive" / "Imágenes", home / "Imágenes"):
+        if cand.is_dir():
+            return cand
+    return None
+
+
+def tv_photo_index(max_age: float = 600) -> dict:
+    """{id: (path, mtime)} for the pictures in the folder, re-walked at most every max_age seconds."""
+    folder = tv_photos_folder()
+    key = str(folder or "")
+    with _tv_photo_lock:
+        if _tv_photo_index["folder"] == key and time.time() - _tv_photo_index["at"] < max_age:
+            return _tv_photo_index["items"]
+        items: dict = {}
+        if folder:
+            for root, dirs, files in os.walk(folder):
+                dirs[:] = sorted(d for d in dirs if not d.startswith((".", "$")))
+                for f in sorted(files):
+                    if Path(f).suffix.lower() not in TV_PHOTO_EXTS or f.startswith("."):
+                        continue
+                    full = Path(root) / f
+                    try:
+                        st = full.stat()
+                    except OSError:
+                        continue
+                    if not 0 < st.st_size <= TV_PHOTO_MAX_BYTES:
+                        continue
+                    rel = str(full.relative_to(folder)).replace("\\", "/")
+                    items[hashlib.sha1(rel.encode("utf-8")).hexdigest()[:16]] = (str(full), st.st_mtime)
+                    if len(items) >= TV_PHOTO_MAX_FILES:
+                        break
+                if len(items) >= TV_PHOTO_MAX_FILES:
+                    break
+        _tv_photo_index.update(at=time.time(), folder=key, items=items)
+        return items
+
+
+def tv_photos_list() -> dict:
+    items = tv_photo_index()
+    folder = tv_photos_folder()
+    return {"folder": folder.name if folder else "", "count": len(items),
+            "items": [{"id": pid, "name": Path(path).stem[:80], "date": time.strftime("%Y-%m-%d", time.localtime(mtime))}
+                      for pid, (path, mtime) in sorted(items.items(), key=lambda kv: -kv[1][1])]}
+
+
+def tv_photo(photo_id: str) -> bytes | None:
+    if not TV_PHOTO_ID_RE.fullmatch(photo_id or ""):
+        raise ValueError("Invalid photo.")
+    hit = tv_photo_index().get(photo_id)
+    if not hit:
+        return None
+    try:
+        raw = Path(hit[0]).read_bytes()
+    except OSError:
+        return None
+    return raw if _image_type(raw) else None
+
+
 _tv_watched_refreshing = threading.Lock()
 _TV_SEEN_FILTER = {"or": [{"field": "inprogress", "operator": "true", "value": ""},
                           {"field": "playcount", "operator": "greaterthan", "value": "0"}]}
@@ -3595,6 +3674,14 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, tv_row())
         elif path == "/api/tv/watched":
             self.send_json(200, tv_watched_row())
+        elif path == "/api/tv/photos":
+            self.send_json(200, tv_photos_list())
+        elif path == "/api/tv/photo":
+            raw = tv_photo(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
+            if not raw:
+                self.send_json(404, {"error": "No such photo."})
+                return
+            self._send(200, raw, _image_type(raw) or "image/jpeg", {"Cache-Control": "private, max-age=86400"})
         elif path == "/api/tv/poster":
             raw = tv_poster(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
             if not raw:

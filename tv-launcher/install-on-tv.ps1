@@ -19,6 +19,8 @@ Needs: Python 3 (py launcher) and Network debugging (ADB) on the TV - the same a
 param(
     [Parameter(Mandatory = $true)][string]$TvHost,
     [int]$ServerPort = 8765,
+    # The folder of pictures for the screensaver (saved in tv_photos_folder.txt); default: your Pictures folder.
+    [string]$PhotosFolder = '',
     [string]$Apk = ''
 )
 # Windows PowerShell can leave $PSScriptRoot empty inside param() defaults, so the APK path is set here.
@@ -66,6 +68,19 @@ try {
         throw "The phone server on port $ServerPort is an older version (no /api/tv/watched). Restart it from this folder's parent (pythonw mobile_server.py) and run this again. Nothing was changed on the TV."
     }
     throw "The phone server isn't answering on port $ServerPort ($($_.Exception.Message)). Start it (python mobile_server.py) and run this again. Nothing was changed on the TV."
+}
+# Screensaver photos: the folder the phone server reads them from.
+if ($PhotosFolder) {
+    if (-not (Test-Path $PhotosFolder -PathType Container)) { throw "No folder at $PhotosFolder. Nothing was changed on the TV." }
+    $photosFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'tv_photos_folder.txt'
+    [IO.File]::WriteAllText($photosFile, (Resolve-Path $PhotosFolder).Path, (New-Object System.Text.UTF8Encoding $false))
+}
+try {
+    $photos = Invoke-RestMethod -Uri "http://127.0.0.1:$ServerPort/api/tv/photos" -Headers @{ 'X-Mobile-Token' = $token } -TimeoutSec 120
+    Write-Host "Screensaver: $($photos.count) photos in your '$($photos.folder)' folder."
+    if ($photos.count -eq 0) { Write-Host "  (No pictures found. Run this again with -PhotosFolder 'D:\Some\Folder' to pick the folder.)" -ForegroundColor Yellow }
+} catch {
+    Write-Host 'Screensaver: the phone server has no photo list yet (restart it from the new mobile_server.py).' -ForegroundColor Yellow
 }
 # This PC's address on the network the TV is on.
 $pcIp = & $py -I -c "import socket,sys; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect((sys.argv[1].split(':')[0], 5555)); print(s.getsockname()[0])" $TvHost
@@ -148,6 +163,8 @@ Step 'Restarting Home'
 @(
     "pm grant $pkg android.permission.ACCESS_FINE_LOCATION 2>/dev/null; echo granted",
     "cmd package set-home-activity --user 0 $pkg/.MainActivity",
+    "settings put secure screensaver_components $pkg/.PhotoDream",
+    "settings put secure screensaver_enabled 1",
     "am force-stop $pkg",
     "am start -W -a android.intent.action.MAIN -c android.intent.category.HOME -n $pkg/.MainActivity"
 ) | & $py -I tools\tv.py --batch | Out-Null
