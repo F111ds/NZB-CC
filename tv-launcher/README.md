@@ -39,6 +39,10 @@ TV's `config.json` (every other setting is kept):
 | `kodi_row_server` | `http://<this PC>:8765` |
 | `kodi_row_token` | the phone server's access code |
 
+Live exchange rate: add `-FxKey <AllRatesToday key>` to the install command once; it is saved in
+`..\fx_api_key.txt` (git-ignored) and written to the TV as `fx_key`. `fx_refresh_minutes` (default 10) sets how
+often it is read while Home is on screen. Without a key, or if the key runs out, the TV shows the daily ECB rate.
+
 Other optional keys: `weather_lat`, `weather_lon` (Querétaro City by default), `weather_unit` (`c`/`f`),
 `dock_tile_scale` (0.6-1), `kodi_package` (`org.xbmc.kodi`), `kodi_local_url`
 (`http://127.0.0.1:8080`), `kodi_local_user`, `kodi_local_password`.
