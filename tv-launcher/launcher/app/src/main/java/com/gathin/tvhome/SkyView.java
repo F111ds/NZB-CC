@@ -36,6 +36,9 @@ public class SkyView extends View {
         return false;
     }
 
+    /** NZB-CC: where the sun times come from when config.xml has no latitude/longitude (the weather's place). */
+    static double placeLat = Double.NaN, placeLon = Double.NaN;
+
     private static final int TEX_W = 480;
     private static final int TEX_H = 270;
 
@@ -72,6 +75,9 @@ public class SkyView extends View {
     /** Today's sunrise and sunset at the configured place, or null without one (fixed reference day). */
     @Nullable
     private int[] sunTimes() {
+        if (!Double.isNaN(placeLat) && !Double.isNaN(placeLon)) {   // NZB-CC: the weather's place
+            return Sun.riseAndSet(LocalDate.now(), placeLat, placeLon, ZoneId.systemDefault());
+        }
         String lat = getContext().getString(R.string.latitude);
         String lon = getContext().getString(R.string.longitude);
         if (lat.isEmpty() || lon.isEmpty()) return null;

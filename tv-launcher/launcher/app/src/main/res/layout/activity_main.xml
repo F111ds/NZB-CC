@@ -333,13 +333,12 @@
                 android:clipToPadding="false"
                 android:orientation="horizontal">
 
-                <!-- The weather now (WeatherNow): just the temperature, not focusable. Gone until there is a reading. -->
+                <!-- The weather now (WeatherNow); OK opens the forecast. Gone until there is a reading. -->
                 <TextView
                     android:id="@+id/weatherPill"
                     style="@style/TopButton"
-                    android:focusable="false"
-                    android:clickable="false"
                     android:singleLine="true"
+                    android:nextFocusDown="@+id/grid"
                     android:visibility="gone" />
 
                 <TextView

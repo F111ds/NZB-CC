@@ -597,6 +597,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         extras = HomeExtras.load(this);
         AppAdapter.tileScale = extras.dockTileScale;
         AppAdapter.compactDock = cfg.singleRow && cfg.dockRow;
+        SkyView.placeLat = extras.weatherLat;
+        SkyView.placeLon = extras.weatherLon;
+        sky.setIntensity(cfg.skyIntensity);   // draw again with the real sunrise and sunset
         AppAdapter.homeApps = extras.homeApps;
         if (AppAdapter.compactDock && hero != null) {
             // The focused app's name centred above the centred dock, not at the screen's left edge.
@@ -964,13 +967,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
                 focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
                 return true;
             }
-            int firstButton = btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : firstTopButton().getId();
+            int firstButton = weatherPill.getVisibility() == View.VISIBLE ? R.id.weatherPill
+                    : btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : firstTopButton().getId();
             int leftButton = rtlMenuBar ? R.id.btnSettings : firstButton;
             int rightButton = rtlMenuBar ? firstButton : R.id.btnSettings;
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return v.getId() == leftButton;
             return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
         };
         btnInputs.setOnKeyListener(pillKeys);
+        weatherPill.setOnKeyListener(pillKeys);
+        weatherPill.setOnClickListener(v -> showForecast());
         btnWifi.setOnKeyListener(pillKeys);
         btnVpn.setOnKeyListener(pillKeys);
         btnSettings.setOnKeyListener(pillKeys);
@@ -978,7 +984,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         btnLibraryTop.setOnKeyListener(pillKeys);
         for (View button : topAppButtons) button.setOnKeyListener(pillKeys);
         if (advancedEffects) {
-            List<View> pills = new ArrayList<>(Arrays.asList(btnInputs, btnWifi, btnVpn, btnReorder, btnLibraryTop, btnSettings));
+            List<View> pills = new ArrayList<>(Arrays.asList(weatherPill, btnInputs, btnWifi, btnVpn, btnReorder, btnLibraryTop, btnSettings));
             pills.addAll(topAppButtons);
             for (View button : pills) {
                 button.setOnFocusChangeListener((view, focused) -> view.animate()
@@ -3675,6 +3681,79 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         ComponentName component = InputSources.isComponent(inputAction)
                 ? ComponentName.unflattenFromString(inputAction) : null;
         return component != null ? new Intent().setComponent(component) : new Intent(inputAction);
+    }
+
+    /** NZB-CC: the forecast under the weather pill: now, then today and the next four days. */
+    private void showForecast() {
+        if (weatherNow == null) return;
+        View anchor = weatherPill;
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        int pad = (int) (14 * density);
+        TextView place = new TextView(this);
+        place.setText(extras.weatherPlace.isEmpty() ? "Weather" : extras.weatherPlace);
+        place.setTextColor(Color.WHITE);
+        place.setTextSize(15);
+        place.setTypeface(UiFont.get(this, R.string.font_medium));
+        place.setPadding(pad, (int) (10 * density), pad, 0);
+        rows.addView(place);
+        if (!weatherNow.now.isEmpty()) {
+            TextView now = new TextView(this);
+            now.setText(weatherNow.now);
+            now.setTextColor(0xBFFFFFFF);
+            now.setTextSize(12);
+            now.setTypeface(UiFont.get(this, R.string.font_regular));
+            now.setPadding(pad, (int) (2 * density), pad, (int) (8 * density));
+            rows.addView(now);
+        }
+        addSeparator(rows);
+        java.time.LocalDate today = java.time.LocalDate.now();
+        for (WeatherNow.Day d : weatherNow.days) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(pad, (int) (9 * density), pad, (int) (9 * density));
+            String name;
+            try {
+                java.time.LocalDate date = java.time.LocalDate.parse(d.date);
+                name = date.equals(today) ? "Today" : date.equals(today.plusDays(1)) ? "Tomorrow"
+                        : date.getDayOfWeek().getDisplayName(java.time.format.TextStyle.FULL, Locale.getDefault());
+            } catch (Exception e) {
+                name = d.date;
+            }
+            row.addView(forecastText(name, 13, Color.WHITE, R.string.font_medium), new LinearLayout.LayoutParams((int) (92 * density), -2));
+            row.addView(forecastText(WeatherNow.icon(d.code, true), 16, Color.WHITE, R.string.font_regular), new LinearLayout.LayoutParams((int) (28 * density), -2));
+            row.addView(forecastText(WeatherNow.condition(d.code, true), 12, 0xBFFFFFFF, R.string.font_regular), new LinearLayout.LayoutParams(0, -2, 1f));
+            if (d.rain > 0) row.addView(forecastText("\u2602 " + d.rain + "%", 12, 0xFF8FD3FF, R.string.font_regular), new LinearLayout.LayoutParams(-2, -2));
+            TextView temps = forecastText(d.hi + "°  " + d.lo + "°", 13, Color.WHITE, R.string.font_medium);
+            temps.setGravity(Gravity.END);
+            row.addView(temps, new LinearLayout.LayoutParams((int) (72 * density), -2));
+            rows.addView(row);
+        }
+        // Nothing in it takes focus: OK or Back closes it.
+        panel.setFocusable(true);
+        panel.setOnKeyListener((v, key, event) -> {
+            if (event.getAction() == KeyEvent.ACTION_UP && (key == KeyEvent.KEYCODE_DPAD_CENTER
+                    || key == KeyEvent.KEYCODE_ENTER || key == KeyEvent.KEYCODE_DPAD_UP)) {
+                if (openPopup != null) openPopup.dismiss();
+                return true;
+            }
+            return false;
+        });
+        PopupWindow popup = glassPopup(panel, (int) (380 * density));
+        dropIn(popup, panel, anchor, Gravity.START);
+        panel.requestFocus();
+    }
+
+    private TextView forecastText(String text, float sp, int color, int font) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        t.setSingleLine(true);
+        t.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        t.setTypeface(UiFont.get(this, font));
+        return t;
     }
 
     /** Dropdown menu under the Inputs pill: HDMI ports (with connection state), AV and Live TV. */
