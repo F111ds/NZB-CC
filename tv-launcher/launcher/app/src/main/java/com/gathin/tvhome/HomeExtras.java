@@ -26,6 +26,8 @@ import java.nio.charset.StandardCharsets;
  * "home_apps": ["com.netflix.ninja", "Prime Video", "YouTube", "Kodi"],   only these on Home, in order
  *                                     (package names or labels; [] shows every app; default: these four)
  * "fx": true, "fx_from": "USD", "fx_to": "MXN",   the exchange rate under the clock
+ * "news": true, "news_feeds": ["https://feeds.bbci.co.uk/news/world/rss.xml", "https://feeds.npr.org/1001/rss.xml"],
+ *                                     the scrolling headlines above the Kodi row
  * "dock_tile_scale": 0.5,               the app tiles at half their usual size, in a compact centred row
  * "kodi_package": "org.xbmc.kodi",
  * "kodi_local_url": "http://127.0.0.1:8080", "kodi_local_user": "kodi", "kodi_local_password": ""
@@ -44,6 +46,9 @@ final class HomeExtras {
     final float dockTileScale;
     /** The exchange rate under the clock ("fx": true), from fx_from to fx_to (USD to MXN by default). */
     final boolean fx;
+    /** The news ticker above the Kodi row ("news": true) and its RSS feeds (BBC News World and NPR News by default). */
+    final boolean news;
+    final java.util.List<String> newsFeeds = new java.util.ArrayList<>();
     final String fxFrom, fxTo;
     /** The only apps on Home, in order (package names or labels); empty shows every app. */
     final java.util.List<String> homeApps = new java.util.ArrayList<>();
@@ -76,6 +81,17 @@ final class HomeExtras {
             }
         }
         fx = j.optBoolean("fx", true);
+        news = j.optBoolean("news", true);
+        org.json.JSONArray nf = j.optJSONArray("news_feeds");
+        if (nf == null) {
+            newsFeeds.add("https://feeds.bbci.co.uk/news/world/rss.xml");
+            newsFeeds.add("https://feeds.npr.org/1001/rss.xml");
+        } else {
+            for (int i = 0; i < nf.length(); i++) {
+                String u = nf.optString(i, "").trim();
+                if (u.startsWith("https://") || u.startsWith("http://")) newsFeeds.add(u);
+            }
+        }
         String from = j.optString("fx_from", "USD").trim().toUpperCase(java.util.Locale.ROOT);
         String to = j.optString("fx_to", "MXN").trim().toUpperCase(java.util.Locale.ROOT);
         fxFrom = from.matches("[A-Z]{3}") ? from : "USD";

@@ -204,6 +204,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private HomeExtras extras;
     private WeatherNow weatherNow;
     private ExchangeRate exchangeRate;
+    private NewsFeed newsFeed;
+    private TickerView newsTicker;
     private TextView fxLine;
     private TextView weatherPill;
     private KodiRow kodiRow;
@@ -616,6 +618,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         fxLine = findViewById(R.id.fxLine);
         if (extras.fx) exchangeRate = new ExchangeRate(this, extras, handler, this::updateFxLine);
         updateFxLine();
+        newsTicker = findViewById(R.id.newsTicker);
+        if (extras.news && !extras.newsFeeds.isEmpty()) newsFeed = new NewsFeed(this, extras.newsFeeds, handler, this::updateNews);
+        updateNews();
         updateWeatherPill();
         kodiBlock = findViewById(R.id.kodiBlock);
         kodiCount = findViewById(R.id.kodiCount);
@@ -1160,6 +1165,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     protected void onResume() {
         super.onResume();
         resumed = true;
+        if (newsTicker != null) newsTicker.start();
         // A festival that started or ended while Home was in the background: rebuild with or without it.
         if (festive != festival.active(LocalDate.now())) {
             recreate();
@@ -1377,6 +1383,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     protected void onPause() {
         super.onPause();
         resumed = false;
+        if (newsTicker != null) newsTicker.stop();
         // No UP reaches a paused Home, so a vendor-key hold it saw go down would still open its app later.
         // Only Home's own share is dropped: a key service that saw the same DOWN keeps its hold.
         RemoteKeys.release(this);
@@ -1463,6 +1470,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (gameDay != null) gameDay.shutdown();
         if (weatherNow != null) weatherNow.shutdown();
         if (exchangeRate != null) exchangeRate.shutdown();
+        if (newsFeed != null) newsFeed.shutdown();
         if (kodiRow != null) kodiRow.shutdown();
         unregisterReceiver(packageReceiver);
         if (openOnStartOnWake) unregisterReceiver(wakeReceiver);
@@ -2989,8 +2997,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (kodiBlock != null) root.post(this::layoutKodiRow);
     }
 
+    /** The ticker's headlines; it scrolls only while Home is resumed. */
+    private void updateNews() {
+        if (newsTicker == null) return;
+        if (newsFeed != null && newsFeed.hasHeadlines()) {
+            newsTicker.setHeadlines(newsFeed.headlines);
+            if (resumed) newsTicker.start();
+        }
+        if (root != null) root.post(this::layoutKodiRow);
+    }
+
     private void refreshExtras() {
         if (!resumed) return;
+        if (newsFeed != null) newsFeed.refreshIfStale();
         if (weatherNow != null) weatherNow.refreshIfStale();
         if (exchangeRate != null) exchangeRate.refreshIfStale();
         if (kodiRow != null) kodiRow.refreshIfStale();
@@ -3012,17 +3031,23 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     /** Places the shelf between the clock (or a race or game panel under it) and the name above the dock, and
      *  sizes the posters to the room there. */
+    /**
+     * Places the news ticker and the Kodi shelf in the space between the header (clock, exchange rate, or a race or
+     * game panel) and the app's name above the dock, with even gaps between them (NZB-CC), and sizes the posters to
+     * the room there (175dp tall at most).
+     */
     private void layoutKodiRow() {
         if (kodiBlock == null || isDestroyed()) return;
-        if (!kodiRowShown()) {
-            kodiBlock.setVisibility(View.GONE);
-            return;
-        }
+        boolean kodi = kodiRowShown();
+        boolean news = newsTicker != null && newsFeed != null && newsFeed.hasHeadlines() && dockRow;
+        if (!kodi) kodiBlock.setVisibility(View.GONE);
+        if (newsTicker != null && !news) newsTicker.setVisibility(View.GONE);
+        if (!kodi && !news) return;
         Rect r = new Rect(0, 0, grid.getWidth(), grid.getHeight());
         root.offsetDescendantRectToMyCoords(grid, r);
         int dockTop = r.top + grid.getPaddingTop();
         int heroH = Math.max(hero.getHeight(), (int) (24 * density));
-        int bottom = dockTop - (int) (40 * density) - heroH - (int) (8 * density);   // showHero's place for the name
+        int bottom = dockTop - (int) (40 * density) - heroH;   // showHero's place for the name
         int top;
         if (racePanel.getVisibility() == View.VISIBLE) {
             top = racePanel.getBottom();
@@ -3036,14 +3061,35 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
                 top = Math.max(top, f.bottom);
             }
         }
-        top += (int) (16 * density);
+        int tickerH = news ? (int) (30 * density) : 0;
+        int blocks = (news ? 1 : 0) + (kodi ? 1 : 0);
+        int minGap = (int) (14 * density);
         // shelf padding (9 + 2), the header line (~20) and the cards' margins (8 + 8)
-        int posterH = bottom - top - (int) (47 * density);
-        // NZB-CC: five smaller posters, centred; the shelf is no taller than they need.
-        int shown = Math.min(posterH, (int) (175 * density));
-        kodiRow.setPosterHeight(shown);
-        // Centred in the open space between the header and the name above the dock.
-        kodiBaseY = top + Math.max(0, (posterH - shown) / 2);
+        int shelfExtra = (int) (47 * density);
+        int shown = 0;
+        if (kodi) {
+            int room = bottom - top - tickerH - shelfExtra - (blocks + 1) * minGap;
+            shown = Math.min(room, (int) (175 * density));
+            kodiRow.setPosterHeight(shown);
+        }
+        int kodiH = kodi ? shown + shelfExtra : 0;
+        int gap = Math.max(minGap, (bottom - top - tickerH - kodiH) / (blocks + 1));
+        int y = top + gap;
+        if (news) {
+            int cards = kodi ? Math.min(5, Math.max(1, kodiRow.count())) : 5;
+            int posterW = (kodi ? shown : (int) (175 * density)) * 2 / 3;
+            int width = Math.max((int) (360 * density), cards * (posterW + (int) (12 * density)));
+            FrameLayout.LayoutParams tlp = (FrameLayout.LayoutParams) newsTicker.getLayoutParams();
+            if (tlp.width != width) {
+                tlp.width = width;
+                newsTicker.setLayoutParams(tlp);
+            }
+            newsTicker.setY(y);
+            if (newsTicker.getVisibility() != View.VISIBLE) newsTicker.setVisibility(View.VISIBLE);
+            y += tickerH + gap;
+        }
+        if (!kodi) return;
+        kodiBaseY = y;
         int shift = !singleRow && grid.canScrollVertically(-1) ? grid.computeVerticalScrollOffset() : 0;
         kodiBlock.setY(kodiBaseY - shift);
         kodiCount.setVisibility(View.GONE);

@@ -431,6 +431,18 @@
         </FrameLayout>
     </LinearLayout>
 
+    <!-- NZB-CC news ticker (NewsFeed + TickerView): headlines scrolling in a faint glass strip above the Kodi row.
+         Placed and sized in code (MainActivity.layoutKodiRow); gone until there are headlines. -->
+    <com.gathin.tvhome.TickerView
+        android:id="@+id/newsTicker"
+        android:layout_width="632dp"
+        android:layout_height="30dp"
+        android:layout_gravity="top|center_horizontal"
+        android:background="@drawable/news_strip"
+        android:focusable="false"
+        android:importantForAccessibility="no"
+        android:visibility="gone" />
+
     <!-- Kodi row (KodiRow): what was watched last in Kodi, on a glass shelf between the weather and the dock. Placed and
          sized in code (MainActivity.layoutKodiRow); gone until it has movies. -->
     <LinearLayout
