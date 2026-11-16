@@ -93,15 +93,32 @@ final class KodiRow {
             } else if (year > 0) {
                 b.append(year);
             }
-            boolean partway = progress > 0f && progress < 0.97f;
-            if (partway && remaining > 0) b.append(b.length() > 0 ? " · " : "").append(duration(remaining)).append(" left");
-            else if (!partway && runtime > 0) b.append(b.length() > 0 ? " · " : "").append(duration(runtime));
+            boolean partway = partway();
+            int left = minutesLeft();
+            if (partway && left > 0) {
+                b.append(b.length() > 0 ? " · " : "").append(duration(left)).append(" left");
+                if (runtime > 0) b.append(" of ").append(duration(runtime));
+            } else if (runtime > 0) {
+                b.append(b.length() > 0 ? " · " : "").append(duration(runtime));
+            }
+            if (!partway && progress >= 0.97f) b.append(b.length() > 0 ? " · " : "").append("Watched");
             if (!quality.isEmpty()) b.append(b.length() > 0 ? " · " : "").append(quality);
             b.append(b.length() > 0 ? " · " : "").append(partway ? "OK to resume in Kodi" : "OK to play in Kodi");
             return b.toString();
         }
 
-        private static String duration(int minutes) {
+        boolean partway() {
+            return progress > 0f && progress < 0.97f;
+        }
+
+        /** Minutes still to watch: Kodi's own count, else worked out from the running time and the bar. */
+        int minutesLeft() {
+            if (!partway()) return 0;
+            if (remaining > 0) return remaining;
+            return runtime > 0 ? Math.max(1, Math.round(runtime * (1f - progress))) : 0;
+        }
+
+        static String duration(int minutes) {
             return (minutes / 60 > 0 ? (minutes / 60) + "h " : "") + String.format(Locale.US, "%02dm", minutes % 60);
         }
     }
@@ -614,6 +631,21 @@ final class KodiRow {
         track.addView(fill, new FrameLayout.LayoutParams(0, -1, Gravity.START));
         card.addView(track, new FrameLayout.LayoutParams(-1, dp(4), Gravity.BOTTOM));
 
+        // Time left, on the poster just above the bar; shown while the poster has focus.
+        TextView left = new TextView(ctx);
+        left.setTextColor(Color.WHITE);
+        left.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+        left.setTypeface(UiFont.get(ctx, R.string.font_medium));
+        left.setPadding(dp(6), dp(2), dp(6), dp(2));
+        GradientDrawable lb = new GradientDrawable();
+        lb.setColor(0xCC000000);
+        lb.setCornerRadius(dp(9));
+        left.setBackground(lb);
+        left.setAlpha(0f);
+        FrameLayout.LayoutParams llp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
+        llp.setMargins(0, 0, dp(6), dp(10));
+        card.addView(left, llp);
+
         View ring = new View(ctx);
         GradientDrawable rd = new GradientDrawable();
         rd.setCornerRadius(dp(8));
@@ -624,12 +656,13 @@ final class KodiRow {
         card.addView(ring, new FrameLayout.LayoutParams(-1, -1));
 
         cell.addView(card);
-        cell.setTag(new View[]{card, title, img, badge, seen, ring, track, fill});
+        cell.setTag(new View[]{card, title, img, badge, seen, ring, track, fill, left});
         return cell;
     }
 
     private final class Holder extends RecyclerView.ViewHolder {
         final View card, ring, badge, seen, track, fill;
+        final TextView left;
         final TextView title;
         final ImageView img;
         Item item;
@@ -645,10 +678,12 @@ final class KodiRow {
             ring = v[5];
             track = v[6];
             fill = v[7];
+            left = (TextView) v[8];
             cell.setOnFocusChangeListener((view, has) -> {
                 float s = has ? 1.1f : 1f;
                 card.animate().scaleX(s).scaleY(s).translationZ(has ? dp(6) : 0).setDuration(140).start();
                 ring.animate().alpha(has ? 1f : 0f).setDuration(140).start();
+                left.animate().alpha(has && left.getText().length() > 0 ? 1f : 0f).setDuration(140).start();
                 if (has && item != null) {
                     lastIndex = getBindingAdapterPosition();
                     host.onKodiItemFocused(item);
@@ -692,6 +727,9 @@ final class KodiRow {
             badge.setVisibility(View.GONE);
             seen.setVisibility(it.progress >= 0.97f ? View.VISIBLE : View.GONE);
             track.setVisibility(it.progress > 0f ? View.VISIBLE : View.GONE);
+            int minutes = it.minutesLeft();
+            left.setText(minutes > 0 ? Item.duration(minutes) + " left" : "");
+            left.setAlpha(itemView.hasFocus() && minutes > 0 ? 1f : 0f);
             fill.getLayoutParams().width = Math.round(posterW * Math.min(1f, it.progress));
             fill.requestLayout();
             Bitmap bm = null;
