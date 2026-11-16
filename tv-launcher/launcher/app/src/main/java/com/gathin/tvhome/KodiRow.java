@@ -680,7 +680,7 @@ final class KodiRow {
             fill = v[7];
             left = (TextView) v[8];
             cell.setOnFocusChangeListener((view, has) -> {
-                float s = has ? 1.1f : 1f;
+                float s = has ? 1.06f : 1f;   // NZB-CC: the bigger posters grow less, clear of the heading
                 card.animate().scaleX(s).scaleY(s).translationZ(has ? dp(6) : 0).setDuration(140).start();
                 ring.animate().alpha(has ? 1f : 0f).setDuration(140).start();
                 left.animate().alpha(has && left.getText().length() > 0 ? 1f : 0f).setDuration(140).start();

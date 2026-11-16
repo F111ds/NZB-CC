@@ -212,8 +212,8 @@
                         android:format12Hour="h:mm"
                         android:format24Hour="HH:mm"
                         android:textColor="#FFFFFFFF"
-                        android:textSize="36sp"
-                        android:fontFamily="@string/font_light"
+                        android:textSize="14sp"
+                        android:fontFamily="@string/font_regular"
                         android:letterSpacing="-0.04"
                         android:fontFeatureSettings="tnum"
                         android:includeFontPadding="false" />
@@ -224,11 +224,11 @@
                         android:layout_height="wrap_content"
                         android:layout_marginStart="6dp"
                         android:layout_gravity="bottom"
-                        android:layout_marginBottom="5dp"
+                        android:layout_marginBottom="0dp"
                         android:format12Hour="a"
                         android:format24Hour=""
                         android:textColor="#B3FFFFFF"
-                        android:textSize="11sp"
+                        android:textSize="10sp"
                         android:fontFamily="@string/font_medium"
                         android:letterSpacing="0.08"
                         android:textAllCaps="true" />
@@ -236,19 +236,18 @@
                     <View
                         android:id="@+id/clockDivider"
                         android:layout_width="1dp"
-                        android:layout_height="20dp"
+                        android:layout_height="14dp"
                         android:layout_gravity="bottom"
                         android:layout_marginStart="12dp"
                         android:layout_marginEnd="12dp"
-                        android:layout_marginBottom="5dp"
+                        android:layout_marginBottom="0dp"
                         android:background="#33FFFFFF" />
 
                     <LinearLayout
-                        android:layout_width="0dp"
-                        android:layout_weight="1"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_gravity="bottom"
-                        android:layout_marginBottom="5dp"
+                        android:layout_marginBottom="0dp"
                         android:orientation="vertical">
 
                         <!-- Shamsi date ("27 Mehr 1405"), shown when shamsi_date is on. -->
@@ -299,6 +298,31 @@
                             android:textAllCaps="true"
                             android:visibility="gone" />
                     </LinearLayout>
+
+                    <!-- NZB-CC: the exchange rate (ExchangeRate) on the same line as the time and date. -->
+                    <View
+                        android:id="@+id/fxDivider"
+                        android:layout_width="1dp"
+                        android:layout_height="14dp"
+                        android:layout_marginStart="12dp"
+                        android:layout_marginEnd="12dp"
+                        android:background="#33FFFFFF"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/fxLine"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:gravity="left"
+                        android:singleLine="true"
+                        android:ellipsize="end"
+                        android:textColor="#A6FFFFFF"
+                        android:textSize="13sp"
+                        android:fontFamily="@string/font_regular"
+                        android:letterSpacing="0.06"
+                        android:focusable="false"
+                        android:visibility="gone" />
                 </LinearLayout>
 
             </LinearLayout>
@@ -319,24 +343,6 @@
                 android:textSize="14sp"
                 android:fontFamily="@string/font_medium"
                 android:letterSpacing="0.04"
-                android:focusable="false"
-                android:visibility="gone" />
-
-            <!-- NZB-CC: the exchange rate (ExchangeRate), a small line under the clock. Outside leftBlock, like the
-                 stats line, so the top buttons stay level with the clock; gone until there is a rate. -->
-            <TextView
-                android:id="@+id/fxLine"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_below="@id/leftBlock"
-                android:layout_alignStart="@id/leftBlock"
-                android:layout_marginStart="2dp"
-                android:layout_marginTop="4dp"
-                android:singleLine="true"
-                android:textColor="#B3FFFFFF"
-                android:textSize="12sp"
-                android:fontFamily="@string/font_regular"
-                android:letterSpacing="0.02"
                 android:focusable="false"
                 android:visibility="gone" />
 

@@ -640,6 +640,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         greetingName = cfg.greetingName;
         if (cfg.dateBelowClock) moveDateBelowClock();
         oneLineDate();
+        if (!cfg.dateBelowClock) oneLineHeader();
         if (cfg.dateBelowClock && cfg.iconOnlyButtons && !cfg.topMenu
                 && !getResources().getBoolean(R.bool.rtl_menu_bar)) {
             alignDateBelowIconsWithClock();
@@ -1003,6 +1004,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             }
         }
         if (festive) applyFestiveSkin((TextView) btnInputs, (TextView) btnSettings);
+        // NZB-CC: Inputs and Settings as round icons, so the bar is the weather and four icons.
+        if (!topMenu) {
+            if (btnSettings.getLayoutParams().width != Math.round(34 * density)) makeIconOnly((TextView) btnSettings);
+            if (btnInputs.getLayoutParams().width != Math.round(34 * density)) makeIconOnly((TextView) btnInputs);
+        }
         shrinkPillIcons();
         insetTopBarLikeClock();
 
@@ -2619,6 +2625,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
      * NZB-CC: the whole date on one short line beside the clock, "Sunday, Nov 16" (or the language's own order,
      * "domingo, 16 nov"), so the top bar never cuts it off.
      */
+    /** NZB-CC: the time, date and exchange rate on one small line, everything centred on it. */
+    private void oneLineHeader() {
+        centerCompactHeader();
+        int[] ids = {R.id.ampm, R.id.clockDivider, R.id.fxDivider, R.id.fxLine};
+        for (int id : ids) {
+            View v = findViewById(id);
+            LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) v.getLayoutParams();
+            lp.gravity = Gravity.CENTER_VERTICAL;
+            lp.bottomMargin = 0;
+            v.setLayoutParams(lp);
+        }
+    }
+
     private void oneLineDate() {
         TextClock date = findViewById(R.id.date);
         String pattern = android.text.format.DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEEdMMM");
@@ -2994,6 +3013,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         boolean on = exchangeRate != null && exchangeRate.hasRate();
         if (on) fxLine.setText(exchangeRate.line());
         fxLine.setVisibility(on ? View.VISIBLE : View.GONE);
+        findViewById(R.id.fxDivider).setVisibility(on ? View.VISIBLE : View.GONE);
         if (kodiBlock != null) root.post(this::layoutKodiRow);
     }
 
@@ -3069,7 +3089,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         int shown = 0;
         if (kodi) {
             int room = bottom - top - tickerH - shelfExtra - (blocks + 1) * minGap;
-            shown = Math.min(room, (int) (175 * density));
+            shown = Math.min(room, (int) (205 * density));
             kodiRow.setPosterHeight(shown);
         }
         int kodiH = kodi ? shown + shelfExtra : 0;
@@ -3251,7 +3271,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         // With a VPN app configured, a VPN that is down matters too: show a red "VPN off" capsule then.
         boolean vpnDown = !vpn && online && !vpnApp.isEmpty();
         if (vpnPill) updateVpnPill(vpn);
-        if ((vpn || vpnDown) && !vpnPill) {
+        int lockState = 0;   // NZB-CC: 0 no lock, 1 VPN on (closed green lock), 2 VPN off (open red lock)
+        if ((vpn || vpnDown) && !vpnPill && NAMELESS_WIFI) {
+            btnWifi.setContentDescription(text + (vpn ? " · VPN on" : " · VPN off"));
+            if (btnWifi.getText().length() > 0) btnWifi.setText(null);
+            lockState = vpn ? 1 : 2;
+        } else if ((vpn || vpnDown) && !vpnPill) {
             // Network name, then the green lock-and-VPN (or red "VPN off") capsule drawn in place of the word.
             String badge = getString(vpn ? R.string.vpn : R.string.vpn_off);
             VpnBadge span = new VpnBadge(vpn ? getDrawable(R.drawable.ic_lock) : null, density);
@@ -3284,7 +3309,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         } else if (!TextUtils.equals(btnWifi.getText(), text)) {
             btnWifi.setText(text);
         }
-        if (NAMELESS_WIFI && !wifiIconOnly) fitNamelessWifi();
         if (wifiIconOnly) {
             btnWifi.setContentDescription(btnWifi.getText());
             btnWifi.setText(null);
@@ -3297,6 +3321,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             if (icon != wifiIcon) {
                 wifiIcon = icon;
                 btnWifi.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0);
+                shownLockState = -1;   // the lock went with the old icon: set it again below
             }
             ColorStateList tint = online ? wifiOnlineTint : wifiPlainTint;
             // wifi_status_warnings: orange while connected but not validated (a captive portal), red while offline.
@@ -3305,6 +3330,46 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
                 btnWifi.setCompoundDrawableTintList(tint);
             }
         }
+        if (NAMELESS_WIFI) applyVpnLock(lockState);
+        if (NAMELESS_WIFI && !wifiIconOnly) fitNamelessWifi();
+    }
+
+    private int shownLockState = -1;
+
+    /** The lock after the Wi-Fi icon: closed and green while the VPN is up, open and red while it is down. */
+    private void applyVpnLock(int state) {
+        Drawable[] d = btnWifi.getCompoundDrawablesRelative();
+        boolean has = d[2] != null;
+        if (state == shownLockState && has == (state != 0)) return;
+        shownLockState = state;
+        Drawable lock = null;
+        if (state != 0) {
+            Drawable icon = getDrawable(state == 1 ? R.drawable.ic_lock : R.drawable.ic_lock_open).mutate();
+            icon.setTint(state == 1 ? VpnBadge.GREEN : VpnBadge.RED);
+            lock = new FixedTintDrawable(icon);
+            int px = Math.round(15 * density);
+            lock.setBounds(0, 0, px, px);
+        }
+        btnWifi.setCompoundDrawablesRelative(d[0], d[1], lock, d[3]);
+    }
+
+    /** A drawable that keeps its own colour: the pill's drawableTint would otherwise turn the lock white. */
+    private static final class FixedTintDrawable extends android.graphics.drawable.DrawableWrapper {
+        FixedTintDrawable(Drawable d) {
+            super(d);
+        }
+
+        @Override
+        public void setTintList(android.content.res.ColorStateList tint) {
+        }
+
+        @Override
+        public void setTintMode(android.graphics.PorterDuff.Mode mode) {
+        }
+
+        @Override
+        public void setColorFilter(android.graphics.ColorFilter filter) {
+        }
     }
 
     /** NZB-CC: the network pill shows the Wi-Fi (or Ethernet) icon and the VPN capsule, never the network name. */
@@ -3312,7 +3377,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     /** The Wi-Fi pill as a 34dp circle with just its icon, or a snug pill around the icon and the VPN capsule. */
     private void fitNamelessWifi() {
-        boolean badge = btnWifi.getText() != null && btnWifi.getText().length() > 0;
+        boolean badge = (btnWifi.getText() != null && btnWifi.getText().length() > 0)
+                || btnWifi.getCompoundDrawablesRelative()[2] != null;
         int pad = Math.round((badge ? 10 : 8) * density);
         int width = badge ? ViewGroup.LayoutParams.WRAP_CONTENT : Math.round(34 * density);
         int gap = badge ? Math.round(4 * density) : 0;

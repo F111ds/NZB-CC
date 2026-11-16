@@ -66,10 +66,15 @@ final class ExchangeRate {
     CharSequence line() {
         if (!hasRate()) return "";
         String from = "USD".equals(extras.fxFrom) ? "US$1" : "1 " + extras.fxFrom;
-        String text = String.format(Locale.US, "%s = %.2f %s", from, rate, extras.fxTo);
-        if (Double.isNaN(change) || Math.abs(change) < 0.005) return text;
-        String arrow = String.format(Locale.US, "%s %.2f", change > 0 ? "▲" : "▼", Math.abs(change));
-        android.text.SpannableString s = new android.text.SpannableString(text + "   " + arrow);
+        String num = String.format(Locale.US, "%.2f", rate);
+        String text = from + " = " + num + " " + extras.fxTo;
+        boolean arrowOn = !Double.isNaN(change) && Math.abs(change) >= 0.005;
+        String arrow = arrowOn ? String.format(Locale.US, "%s %.2f", change > 0 ? "▲" : "▼", Math.abs(change)) : "";
+        android.text.SpannableString s = new android.text.SpannableString(arrowOn ? text + "   " + arrow : text);
+        int at = from.length() + 3;
+        s.setSpan(new android.text.style.ForegroundColorSpan(0xFFFFFFFF), at, at + num.length(),
+                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);   // the rate itself in white
+        if (!arrowOn) return s;
         s.setSpan(new android.text.style.ForegroundColorSpan(change > 0 ? 0xFF7BE3A0 : 0xFFFF8A80),
                 text.length() + 3, s.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         return s;

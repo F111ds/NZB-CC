@@ -148,6 +148,8 @@ SetKey 'show_library_pill' $false  # no App library pill after the dock; Right p
 SetKey 'library_ok_opens' $true   # App library: OK opens the app; hold OK for Add to Home
 SetKey 'sky_intensity' 70        # time-of-day sky behind Home (0 turns it off)
 SetKey 'news' $false              # news ticker off (true turns it back on)
+SetKey 'icon_only_inputs' $true    # Inputs as a round icon
+SetKey 'vpn_app' 'com.nordvpn.android'   # the VPN lock: closed green while NordVPN is connected, open red while it is off
 SetKey 'kodi_row' $true
 SetKey 'kodi_row_server' $server
 SetKey 'kodi_row_token' $token
