@@ -71,6 +71,9 @@ final class KodiRow {
         void onKodiRowLeft();
         /** The list changed (it may have become empty or non-empty). */
         void onKodiRowChanged();
+
+        /** OK held on a poster: the options menu (resume, play from the start, mark as watched, remove). */
+        void onKodiItemMenu(Item item, View anchor);
     }
 
     static final class Item {
@@ -250,7 +253,7 @@ final class KodiRow {
                     // no poster this time: left out of the row until it has one
                 }
             }
-            if (it.poster.isFile()) out.add(it);
+            if (it.poster.isFile() && !hiddenIds().contains(it.id)) out.add(it);
         }
         return out;
     }
@@ -314,7 +317,7 @@ final class KodiRow {
                     // left out until the poster can be fetched
                 }
             }
-            if (it.poster.isFile()) out.add(it);
+            if (it.poster.isFile() && !hiddenIds().contains(it.id)) out.add(it);
         }
         return out;
     }
@@ -391,7 +394,7 @@ final class KodiRow {
                 Item it = fromJson(a.getJSONObject(i));
                 if (it.id.isEmpty()) continue;
                 it.poster = posterFile(it.id);
-                if (it.poster.isFile() && out.size() < extras.kodiRowSize) out.add(it);
+                if (it.poster.isFile() && out.size() < extras.kodiRowSize && !hiddenIds().contains(it.id)) out.add(it);
             }
         } catch (Exception ignored) {
             // nothing saved yet
@@ -470,6 +473,11 @@ final class KodiRow {
     // ---- playing ------------------------------------------------------------------------------
 
     void play(Item it) {
+        play(it, false);
+    }
+
+    /** Opens Kodi and plays the item: where it was left, or from the beginning with fromStart. */
+    void play(Item it, boolean fromStart) {
         Intent launch = ctx.getPackageManager().getLaunchIntentForPackage(extras.kodiPackage);
         if (launch == null) launch = ctx.getPackageManager().getLeanbackLaunchIntentForPackage(extras.kodiPackage);
         if (launch == null) {
@@ -487,7 +495,8 @@ final class KodiRow {
             if (!extras.kodiServer.isEmpty()) {
                 try {
                     http("POST", extras.kodiServer + "/api/tv/play",
-                            new JSONObject().put("id", it.id).toString().getBytes(StandardCharsets.UTF_8), true, 60_000);
+                            new JSONObject().put("id", it.id).put("from_start", fromStart).toString()
+                                    .getBytes(StandardCharsets.UTF_8), true, 60_000);
                     done = true;
                 } catch (HttpError e) {
                     // The PC answered: Kodi didn't start in time, or it can't find the movie yet.
@@ -499,7 +508,7 @@ final class KodiRow {
             }
             if (!done) {
                 try {
-                    playHere(it);
+                    playHere(it, fromStart);
                     problem = null;
                 } catch (Exception e) {
                     if (problem == null) problem = e.getMessage();
@@ -512,7 +521,7 @@ final class KodiRow {
         });
     }
 
-    private void playHere(Item it) throws Exception {
+    private void playHere(Item it, boolean fromStart) throws Exception {
         JSONObject item;
         if (it.episodeid > 0) item = new JSONObject().put("episodeid", it.episodeid);
         else if (it.movieid > 0) item = new JSONObject().put("movieid", it.movieid);
@@ -529,7 +538,70 @@ final class KodiRow {
             }
         }
         rpc("Player.Open", new JSONObject().put("item", item)
-                .put("options", new JSONObject().put("resume", it.progress > 0f && it.progress < 0.97f)), 15000);
+                .put("options", new JSONObject().put("resume", !fromStart && it.progress > 0f && it.progress < 0.97f)), 15000);
+    }
+
+    // ---- the hold-OK menu ---------------------------------------------------------------------
+
+    /** Marks the item watched in Kodi (through the PC, else Kodi on this TV) and shows it finished at once. */
+    void markWatched(Item it) {
+        it.progress = 1f;
+        it.remaining = 0;
+        it.watched = true;
+        adapter.notifyDataSetChanged();
+        final Context app = ctx.getApplicationContext();
+        final List<Item> snapshot = new ArrayList<>(items);
+        io.execute(() -> {
+            boolean ok = false;
+            if (!extras.kodiServer.isEmpty()) {
+                try {
+                    http("POST", extras.kodiServer + "/api/tv/mark_watched",
+                            new JSONObject().put("id", it.id).toString().getBytes(StandardCharsets.UTF_8), true, 15000);
+                    ok = true;
+                } catch (Exception ignored) {
+                    // the PC is off: tell Kodi on this TV
+                }
+            }
+            if (!ok) {
+                try {
+                    JSONObject done = new JSONObject().put("playcount", 1)
+                            .put("resume", new JSONObject().put("position", 0).put("total", 0));
+                    if (it.episodeid > 0) {
+                        rpc("VideoLibrary.SetEpisodeDetails", done.put("episodeid", it.episodeid), 6000);
+                        ok = true;
+                    } else if (it.movieid > 0) {
+                        rpc("VideoLibrary.SetMovieDetails", done.put("movieid", it.movieid), 6000);
+                        ok = true;
+                    }
+                } catch (Exception ignored) {
+                    ok = false;
+                }
+            }
+            save(snapshot);
+            if (!ok) main.post(() -> Toast.makeText(app, "Couldn't reach Kodi to mark “" + it.title + "” watched.",
+                    Toast.LENGTH_LONG).show());
+        });
+    }
+
+    /** Takes the item off this row for good (remembered on the TV); it stays in Kodi as it is. */
+    void remove(Item it) {
+        Set<String> hidden = hiddenIds();
+        hidden.add(it.id);
+        ctx.getSharedPreferences("kodi_row", Context.MODE_PRIVATE).edit().putStringSet("hidden", hidden).apply();
+        List<Item> next = new ArrayList<>(items);
+        next.remove(it);
+        items = next;
+        adapter.notifyDataSetChanged();
+        final List<Item> snapshot = new ArrayList<>(items);
+        io.execute(() -> save(snapshot));
+        host.onKodiRowChanged();
+        readAt = 0;   // read again, so the next item moves up into the row
+        refreshIfStale();
+    }
+
+    private Set<String> hiddenIds() {
+        return new HashSet<>(ctx.getSharedPreferences("kodi_row", Context.MODE_PRIVATE)
+                .getStringSet("hidden", new HashSet<>()));
     }
 
     void shutdown() {
@@ -617,19 +689,21 @@ final class KodiRow {
         seen.setGravity(Gravity.CENTER);
         GradientDrawable sb = new GradientDrawable();
         sb.setShape(GradientDrawable.OVAL);
-        sb.setColor(0x99000000);
+        sb.setColor(0x59000000);   // NZB-CC: softer
         seen.setBackground(sb);
-        FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(dp(15), dp(15), Gravity.TOP | Gravity.END);
+        seen.setTextSize(TypedValue.COMPLEX_UNIT_SP, 8);
+        seen.setElevation(dp(1));
+        FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(dp(13), dp(13), Gravity.TOP | Gravity.END);
         slp.setMargins(0, dp(5), dp(5), 0);
         card.addView(seen, slp);
 
         // How far in: a thin track along the poster's foot, filled to the share watched.
         FrameLayout track = new FrameLayout(ctx);
-        track.setBackgroundColor(0x8C000000);
+        track.setBackgroundColor(0x59000000);
         View fill = new View(ctx);
         fill.setBackgroundColor(0xFF17B2E7);
         track.addView(fill, new FrameLayout.LayoutParams(0, -1, Gravity.START));
-        card.addView(track, new FrameLayout.LayoutParams(-1, dp(4), Gravity.BOTTOM));
+        card.addView(track, new FrameLayout.LayoutParams(-1, dp(3), Gravity.BOTTOM));
 
         // Time left, on the poster just above the bar; shown while the poster has focus.
         TextView left = new TextView(ctx);
@@ -695,6 +769,10 @@ final class KodiRow {
             });
             cell.setOnClickListener(view -> {
                 if (item != null) play(item);
+            });
+            cell.setOnLongClickListener(view -> {
+                if (item != null) host.onKodiItemMenu(item, card);
+                return true;
             });
             cell.setOnKeyListener((view, code, e) -> {
                 if (e.getAction() != KeyEvent.ACTION_DOWN) return code == KeyEvent.KEYCODE_DPAD_UP

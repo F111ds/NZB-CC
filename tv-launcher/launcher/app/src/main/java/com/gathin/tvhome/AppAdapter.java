@@ -468,6 +468,13 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         int inner = sizingWidthPx(width, parent.getPaddingLeft(), parent.getPaddingRight(), density);
         int w = tileWidthPx(inner, parent.getHeight(), dockSize, rowsBelowDock, dockTitle, dockRow, density), h = tileHeightPx(w);
         View card = v.findViewById(R.id.card);
+        if (compactDock) {
+            // NZB-CC: the app's banner drawn 30% larger than its tile (the card clips it to its rounded shape),
+            // so the logo in the middle of the banner reads from the couch at the small tile size.
+            View bannerView = v.findViewById(R.id.banner);
+            bannerView.setLayoutParams(new FrameLayout.LayoutParams(Math.round(w * 1.3f), Math.round(tileHeightPx(w) * 1.3f),
+                    android.view.Gravity.CENTER));
+        }
         ViewGroup.LayoutParams cardLp = card.getLayoutParams();
         cardLp.width = w;
         cardLp.height = h;

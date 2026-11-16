@@ -3122,6 +3122,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             y = visibleTop - (int) (9 * density);
         }
         kodiBaseY = y;
+        // NZB-CC: "KODI  Recently watched" starts right above the first poster's left edge. The posters are
+        // centred in the shelf, each in a cell 12dp wider than the poster (6dp each side).
+        int cards = Math.min(5, Math.max(1, kodiRow.count()));
+        int cell = shown * 2 / 3 + (int) (12 * density);
+        int inner = root.getWidth() - (int) (2 * 46 * density) - kodiBlock.getPaddingLeft() - kodiBlock.getPaddingRight();
+        int headStart = Math.max(0, (inner - cards * cell) / 2 + (int) (6 * density));
+        View head = ((ViewGroup) kodiBlock).getChildAt(0);
+        LinearLayout.LayoutParams hlp = (LinearLayout.LayoutParams) head.getLayoutParams();
+        if (hlp.getMarginStart() != headStart) {
+            hlp.setMarginStart(headStart);
+            head.setLayoutParams(hlp);
+        }
         int shift = !singleRow && grid.canScrollVertically(-1) ? grid.computeVerticalScrollOffset() : 0;
         kodiBlock.setY(kodiBaseY - shift);
         kodiCount.setVisibility(View.GONE);
@@ -3138,6 +3150,51 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         hideHero();
         kodiFocusTitle.setText(item.title);
         kodiFocusMeta.setText(item.meta());
+    }
+
+    /** NZB-CC: OK held on a poster: resume, play from the start, mark as watched, or take it off the row. */
+    @Override
+    public void onKodiItemMenu(KodiRow.Item item, View anchor) {
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        TextView title = new TextView(this);
+        title.setText(item.title);
+        title.setTextColor(0x99FFFFFF);
+        title.setTextSize(11);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        title.setTypeface(UiFont.get(this, R.string.font_regular));
+        int pad = (int) (12 * density);
+        title.setPadding(pad, (int) (8 * density), pad, (int) (4 * density));
+        rows.addView(title);
+        PopupWindow popup = glassPopup(panel, (int) (240 * density));
+        boolean partway = item.progress > 0f && item.progress < 0.97f;
+        int left = item.minutesLeft();
+        View first = menuRow(rows, popup, partway && left > 0
+                ? "\u25B6  Resume (" + KodiRow.Item.duration(left) + " left)" : "\u25B6  Play", () -> kodiRow.play(item));
+        if (partway) menuRow(rows, popup, "\u21BA  Play from the start", () -> kodiRow.play(item, true));
+        if (item.progress < 0.97f) menuRow(rows, popup, "\u2713  Mark as watched", () -> kodiRow.markWatched(item));
+        menuRow(rows, popup, "\u2715  Remove from this row", () -> kodiRow.remove(item));
+        popup.setOnDismissListener(() -> {
+            if (openPopup == popup) openPopup = null;
+            if (kodiRowShown()) kodiRow.focus();
+        });
+        popup.showAsDropDown(anchor, anchor.getWidth() + (int) (12 * density), -anchor.getHeight() + (int) (24 * density), Gravity.START);
+        first.requestFocus();
+    }
+
+    private View menuRow(LinearLayout rows, PopupWindow popup, String text, Runnable action) {
+        View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
+        row.findViewById(R.id.icon).setVisibility(View.GONE);
+        row.findViewById(R.id.status).setVisibility(View.GONE);
+        row.findViewById(R.id.dot).setVisibility(View.GONE);
+        ((TextView) row.findViewById(R.id.title)).setText(text);
+        row.setOnClickListener(v -> {
+            popup.dismiss();
+            action.run();
+        });
+        rows.addView(row);
+        return row;
     }
 
     @Override

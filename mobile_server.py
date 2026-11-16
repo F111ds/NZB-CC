@@ -2134,15 +2134,15 @@ def _tv_wait_for_kodi(wait: float) -> None:
             time.sleep(1.5)
 
 
-def tv_play(item_id: str, wait: float = TV_PLAY_WAIT_SECS) -> dict:
+def tv_play(item_id: str, wait: float = TV_PLAY_WAIT_SECS, from_start: bool = False) -> dict:
     """Plays a row item in Kodi. The TV starts Kodi first, so this waits for Kodi to answer."""
     if not TV_ID_RE.fullmatch(item_id or ""):
         raise ValueError("Invalid item.")
-    if TV_WATCHED_ID_RE.fullmatch(item_id):   # recently watched: resume where it was left
+    if TV_WATCHED_ID_RE.fullmatch(item_id):   # recently watched: resume where it was left, or from the start
         _tv_wait_for_kodi(wait)
         kind = "episodeid" if item_id[0] == "e" else "movieid"
         target = {kind: int(item_id[1:])}
-        kodi_call("Player.Open", {"item": target, "options": {"resume": True}})
+        kodi_call("Player.Open", {"item": target, "options": {"resume": not from_start}})
         return {"ok": True, "played": target}
     item = next((x for x in tv_load_state()["items"] if x.get("id") == item_id), None)
     if not item:
@@ -2242,6 +2242,27 @@ def tv_photo(photo_id: str) -> bytes | None:
     except OSError:
         return None
     return raw if _image_type(raw) else None
+
+
+def tv_mark_watched(item_id: str) -> dict:
+    """Marks a recently-watched item as watched in Kodi (play count 1, resume point cleared)."""
+    if not TV_WATCHED_ID_RE.fullmatch(item_id or ""):
+        raise ValueError("Invalid item.")
+    num = int(item_id[1:])
+    done = {"playcount": 1, "resume": {"position": 0, "total": 0}}
+    if item_id[0] == "e":
+        kodi_call("VideoLibrary.SetEpisodeDetails", dict(done, episodeid=num))
+    else:
+        kodi_call("VideoLibrary.SetMovieDetails", dict(done, movieid=num))
+    with _tv_lock:   # show it finished right away in the saved list too
+        state = tv_watched_load()
+        for it in state["items"]:
+            if it.get("id") == item_id:
+                it.update(progress=1.0, remaining=0, watched=True)
+        tmp = TV_WATCHED_FILE.with_name(TV_WATCHED_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, TV_WATCHED_FILE)
+    return {"ok": True}
 
 
 _tv_watched_refreshing = threading.Lock()
@@ -3743,9 +3764,11 @@ class MobileHandler(BaseHTTPRequestHandler):
             log.info("kodi play %s resume=%s ip=%s", item, bool(body.get("resume")), self.ip)
             self.send_json(200, {"ok": True})
         elif path == "/api/tv/play":
-            result = tv_play(str(body.get("id") or ""))
+            result = tv_play(str(body.get("id") or ""), from_start=bool(body.get("from_start")))
             log.info("tv play %s ip=%s", result.get("played"), self.ip)
             self.send_json(200, result)
+        elif path == "/api/tv/mark_watched":
+            self.send_json(200, tv_mark_watched(str(body.get("id") or "")))
         elif path == "/api/kodi/control":
             kodi_control(str(body.get("action") or ""), to_int(body.get("playerid"), -1), body.get("value"))
             self.send_json(200, {"ok": True})

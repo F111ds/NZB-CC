@@ -74,3 +74,24 @@ for bad in ("m", "mx1", "../m1", "e1/2"):
     except ValueError:
         pass
 print("test_tv_watched OK")
+
+# Play from the start, and mark as watched
+played.clear()
+assert m.tv_play("m3", wait=1, from_start=True)["played"] == {"movieid": 3}
+assert played == [{"item": {"movieid": 3}, "options": {"resume": False}}]
+sets = []
+_old = m.kodi_call
+def fake2(method, params=None, timeout=6):
+    if method.startswith("VideoLibrary.Set"):
+        sets.append((method, params)); return "OK"
+    return _old(method, params, timeout)
+m.kodi_call = fake2
+assert m.tv_mark_watched("e42") == {"ok": True}
+assert sets == [("VideoLibrary.SetEpisodeDetails", {"playcount": 1, "resume": {"position": 0, "total": 0}, "episodeid": 42})]
+assert next(it for it in m.tv_watched_load()["items"] if it["id"] == "e42")["progress"] == 1.0
+for bad in ("k1", "m", "../e1"):
+    try:
+        m.tv_mark_watched(bad); raise AssertionError(bad)
+    except ValueError:
+        pass
+print("test_tv_watched part 2 OK")
