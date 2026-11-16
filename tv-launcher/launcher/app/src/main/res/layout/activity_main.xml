@@ -299,20 +299,6 @@
                             android:textAllCaps="true"
                             android:visibility="gone" />
 
-                        <!-- The weather now (WeatherNow): "☾ 18° · H 24° L 8°" under the date. Gone until there is a reading. -->
-                        <TextView
-                            android:id="@+id/weatherPill"
-                            android:gravity="left"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="5dp"
-                            android:singleLine="true"
-                            android:ellipsize="end"
-                            android:textColor="#E6FFFFFF"
-                            android:textSize="15sp"
-                            android:fontFamily="@string/font_regular"
-                            android:letterSpacing="0.06"
-                            android:visibility="gone" />
                     </LinearLayout>
                 </LinearLayout>
 
@@ -347,6 +333,15 @@
                 android:clipChildren="false"
                 android:clipToPadding="false"
                 android:orientation="horizontal">
+
+                <!-- The weather now (WeatherNow): just the temperature, not focusable. Gone until there is a reading. -->
+                <TextView
+                    android:id="@+id/weatherPill"
+                    style="@style/TopButton"
+                    android:focusable="false"
+                    android:clickable="false"
+                    android:singleLine="true"
+                    android:visibility="gone" />
 
                 <TextView
                     android:id="@+id/btnInputs"
@@ -426,98 +421,69 @@
         android:id="@+id/kodiBlock"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginStart="46dp"
-        android:layout_marginEnd="46dp"
+        android:layout_marginStart="48dp"
+        android:layout_marginEnd="48dp"
         android:orientation="vertical"
-        android:paddingStart="14dp"
-        android:paddingEnd="14dp"
-        android:paddingTop="9dp"
-        android:paddingBottom="2dp"
-        android:background="@drawable/kodi_shelf"
+        android:gravity="center_horizontal"
         android:clipChildren="false"
         android:clipToPadding="false"
         android:visibility="gone">
 
-        <LinearLayout
+        <TextView
+            android:id="@+id/kodiCount"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="6dp"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:background="@drawable/kodi_chip"
-                android:paddingStart="7dp"
-                android:paddingEnd="7dp"
-                android:paddingTop="1dp"
-                android:paddingBottom="1dp"
-                android:text="KODI"
-                android:textColor="#FFFFFFFF"
-                android:textSize="9sp"
-                android:fontFamily="@string/font_medium"
-                android:letterSpacing="0.16" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:text="Recently downloaded"
-                android:textColor="#FFFFFFFF"
-                android:textSize="13sp"
-                android:fontFamily="@string/font_medium" />
-
-            <TextView
-                android:id="@+id/kodiCount"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:background="@drawable/kodi_count"
-                android:paddingStart="7dp"
-                android:paddingEnd="7dp"
-                android:paddingTop="1dp"
-                android:paddingBottom="1dp"
-                android:textColor="#E6FFFFFF"
-                android:textSize="10sp"
-                android:fontFamily="@string/font_regular" />
-
-            <!-- The focused movie: "The Long Tide   2025 · 2h 11m · 4K · OK to play in Kodi". -->
-            <TextView
-                android:id="@+id/kodiFocusTitle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="18dp"
-                android:maxWidth="420dp"
-                android:singleLine="true"
-                android:ellipsize="end"
-                android:textColor="#FFFFFFFF"
-                android:textSize="15sp"
-                android:fontFamily="@string/font_medium" />
-
-            <TextView
-                android:id="@+id/kodiFocusMeta"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
-                android:singleLine="true"
-                android:ellipsize="end"
-                android:textColor="#BFFFFFFF"
-                android:textSize="11sp"
-                android:fontFamily="@string/font_regular" />
-        </LinearLayout>
+            android:textColor="#D9FFFFFF"
+            android:textSize="11sp"
+            android:fontFamily="@string/font_medium"
+            android:letterSpacing="0.02" />
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/kodiRow"
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
             android:clipChildren="true"
             android:clipToPadding="false"
-            android:paddingStart="2dp"
-            android:paddingEnd="12dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
             android:overScrollMode="never"
             android:scrollbars="none"
             android:descendantFocusability="afterDescendants" />
+
+        <TextView
+            android:id="@+id/kodiFocusTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:maxWidth="640dp"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:textColor="#FFFFFFFF"
+            android:textSize="19sp"
+            android:fontFamily="@string/font_medium" />
+
+        <TextView
+            android:id="@+id/kodiFocusMeta"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:textColor="#CCFFFFFF"
+            android:textSize="11sp"
+            android:fontFamily="@string/font_regular" />
+
+        <!-- How far into the movie Kodi left off; shown only for a movie started and not finished. -->
+        <ProgressBar
+            android:id="@+id/kodiFocusProgress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="150dp"
+            android:layout_height="3dp"
+            android:layout_marginTop="7dp"
+            android:max="1000"
+            android:progressDrawable="@drawable/kodi_progress"
+            android:visibility="invisible" />
     </LinearLayout>
 
     <!-- The single floating glass highlight that springs between tiles. -->

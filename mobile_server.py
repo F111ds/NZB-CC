@@ -1888,7 +1888,7 @@ TV_STATE_FILE = BASE_DIR / "tv_recent.json"
 TV_ART_DIR = BASE_DIR / "tv_art"
 TV_ID_RE = re.compile(r"[ks][A-Za-z0-9_]{1,80}")
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".mpg", ".mpeg", ".webm", ".iso"}
-TV_KODI_PROPS = ["title", "year", "runtime", "file", "art", "thumbnail", "dateadded", "playcount", "streamdetails"]
+TV_KODI_PROPS = ["title", "year", "runtime", "file", "art", "thumbnail", "dateadded", "playcount", "streamdetails", "resume"]
 _tv_lock = threading.Lock()
 _tv_refreshing = threading.Lock()
 
@@ -1979,6 +1979,15 @@ def _kodi_time(text: str) -> float:
         return 0.0
 
 
+def _tv_resume(mv: dict) -> dict:
+    """{"resume": 0..1, "left_min": n} for a movie Kodi stopped part-way through, else zeros."""
+    r = _kdict(mv.get("resume"))
+    pos, total = to_float(r.get("position")), to_float(r.get("total"))
+    if pos <= 0 or total <= 0 or pos >= total:
+        return {"resume": 0.0, "left_min": 0}
+    return {"resume": round(pos / total, 3), "left_min": int(round((total - pos) / 60))}
+
+
 def tv_kodi_recent(limit: int = TV_ROW_SIZE) -> list[dict]:
     res = _kdict(kodi_call("VideoLibrary.GetRecentlyAddedMovies",
                            {"properties": TV_KODI_PROPS, "limits": {"start": 0, "end": limit}}, timeout=10))
@@ -1992,7 +2001,8 @@ def tv_kodi_recent(limit: int = TV_ROW_SIZE) -> list[dict]:
                     "title": str(mv.get("title") or "Untitled"), "year": to_int(mv.get("year")) or None,
                     "runtime": to_int(mv.get("runtime")) // 60, "quality": "4K" if quality == "2160p" else quality,
                     "added": _kodi_time(mv.get("dateadded")), "watched": to_int(mv.get("playcount")) > 0,
-                    "file": str(mv.get("file") or ""), "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail"))})
+                    "file": str(mv.get("file") or ""), "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail")),
+                    **_tv_resume(mv)})
     return out
 
 
@@ -2011,7 +2021,8 @@ def tv_kodi_find(item: dict) -> dict | None:
                     "title": str(mv.get("title") or item["title"]), "year": to_int(mv.get("year")) or None,
                     "runtime": to_int(mv.get("runtime")) // 60, "quality": "4K" if quality == "2160p" else quality,
                     "added": item.get("added", 0.0), "watched": to_int(mv.get("playcount")) > 0,
-                    "file": str(mv.get("file") or ""), "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail"))}
+                    "file": str(mv.get("file") or ""), "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail")),
+                    **_tv_resume(mv)}
     return None
 
 
@@ -2123,7 +2134,7 @@ def tv_row(background: bool = True) -> dict:
         else:
             state = tv_refresh()
     items = [{k: it.get(k) for k in ("id", "title", "year", "runtime", "quality", "added", "watched", "new",
-                                      "in_kodi", "movieid", "file")}
+                                      "in_kodi", "movieid", "file", "resume", "left_min")}
              | {"poster": f"/api/tv/poster?id={it['id']}" if it.get("poster") else ""} for it in state["items"]]
     return {"updated": state["updated"], "items": items}
 

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Kodi row's resume bar: amber on a faint track. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@android:id/background">
+        <shape><corners android:radius="2dp" /><solid android:color="#2EFFFFFF" /></shape>
+    </item>
+    <item android:id="@android:id/progress">
+        <clip><shape><corners android:radius="2dp" /><solid android:color="#FFF2B84B" /></shape></clip>
+    </item>
+</layer-list>

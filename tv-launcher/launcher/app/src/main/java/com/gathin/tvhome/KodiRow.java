@@ -75,6 +75,9 @@ final class KodiRow {
     static final class Item {
         String id = "", title = "", quality = "", file = "", posterUrl = "", artRef = "";
         int year, runtime, movieid;
+        /** How far Kodi got into it, 0 to 1 (0: not started or finished), and the minutes left then. */
+        float resume;
+        int leftMin;
         boolean isNew, watched;
         File poster;
 
@@ -84,7 +87,8 @@ final class KodiRow {
             if (runtime > 0) b.append(b.length() > 0 ? " · " : "").append(runtime / 60 > 0 ? (runtime / 60) + "h " : "")
                     .append(String.format(Locale.US, "%02dm", runtime % 60));
             if (!quality.isEmpty()) b.append(b.length() > 0 ? " · " : "").append(quality);
-            b.append(b.length() > 0 ? " · " : "").append("OK to play in Kodi");
+            if (resume > 0 && leftMin > 0) b.append(b.length() > 0 ? " · " : "").append(leftMin).append(" min left");
+            b.append(b.length() > 0 ? " · " : "").append(resume > 0 ? "OK to resume in Kodi" : "OK to play in Kodi");
             return b.toString();
         }
     }
@@ -224,7 +228,7 @@ final class KodiRow {
     private List<Item> readFromKodi() throws Exception {
         JSONObject params = new JSONObject()
                 .put("properties", new JSONArray().put("title").put("year").put("runtime").put("file").put("art")
-                        .put("playcount").put("dateadded"))
+                        .put("playcount").put("dateadded").put("resume"))
                 .put("limits", new JSONObject().put("start", 0).put("end", extras.kodiRowSize));
         JSONObject res = rpc("VideoLibrary.GetRecentlyAddedMovies", params, 6000);
         JSONArray movies = res.optJSONArray("movies");
@@ -242,6 +246,11 @@ final class KodiRow {
             it.runtime = m.optInt("runtime") / 60;
             it.file = m.optString("file", "");
             it.watched = m.optInt("playcount") > 0;
+            JSONObject resume = m.optJSONObject("resume");
+            if (resume != null && resume.optDouble("total") > 0 && resume.optDouble("position") > 0) {
+                it.resume = (float) (resume.optDouble("position") / resume.optDouble("total"));
+                it.leftMin = (int) Math.round((resume.optDouble("total") - resume.optDouble("position")) / 60);
+            }
             try {
                 java.util.Date d = f.parse(m.optString("dateadded", ""));
                 it.isNew = !it.watched && d != null && d.getTime() >= weekAgo;
@@ -276,6 +285,8 @@ final class KodiRow {
         it.movieid = o.optInt("movieid");
         it.file = o.optString("file", "");
         if ("null".equals(it.file)) it.file = "";
+        it.resume = (float) Math.max(0, Math.min(1, o.optDouble("resume", 0)));
+        it.leftMin = o.optInt("left_min", 0);
         if ("null".equals(it.quality)) it.quality = "";
         return it;
     }
@@ -292,7 +303,8 @@ final class KodiRow {
                 keep.add(it.id + ".img");
                 a.put(new JSONObject().put("id", it.id).put("title", it.title).put("year", it.year)
                         .put("runtime", it.runtime).put("quality", it.quality).put("new", it.isNew)
-                        .put("watched", it.watched).put("movieid", it.movieid).put("file", it.file));
+                        .put("watched", it.watched).put("movieid", it.movieid).put("file", it.file)
+                        .put("resume", it.resume).put("left_min", it.leftMin));
             }
             writeFile(saved, new JSONObject().put("items", a).toString().getBytes(StandardCharsets.UTF_8));
             File[] old = posters.listFiles();
@@ -488,12 +500,12 @@ final class KodiRow {
         card.setId(View.generateViewId());
         GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
                 new int[]{0xFF1E2B40, 0xFF0B111C});
-        bg.setCornerRadius(dp(8));
+        bg.setCornerRadius(dp(10));
         card.setBackground(bg);
         card.setOutlineProvider(new ViewOutlineProvider() {
             @Override
             public void getOutline(View view, Outline outline) {
-                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(8));
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(10));
             }
         });
         card.setClipToOutline(true);
@@ -501,7 +513,7 @@ final class KodiRow {
 
         TextView title = new TextView(ctx);
         title.setTextColor(Color.WHITE);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setAllCaps(true);
         title.setMaxLines(4);
@@ -544,8 +556,8 @@ final class KodiRow {
 
         View ring = new View(ctx);
         GradientDrawable rd = new GradientDrawable();
-        rd.setCornerRadius(dp(8));
-        rd.setStroke(dp(2.5f), Color.WHITE);
+        rd.setCornerRadius(dp(10));
+        rd.setStroke(dp(3f), 0xFFF2B84B);
         rd.setColor(Color.TRANSPARENT);
         ring.setBackground(rd);
         ring.setAlpha(0f);
@@ -572,7 +584,7 @@ final class KodiRow {
             seen = v[4];
             ring = v[5];
             cell.setOnFocusChangeListener((view, has) -> {
-                float s = has ? 1.1f : 1f;
+                float s = has ? 1.06f : 1f;
                 card.animate().scaleX(s).scaleY(s).translationZ(has ? dp(6) : 0).setDuration(140).start();
                 ring.animate().alpha(has ? 1f : 0f).setDuration(140).start();
                 if (has && item != null) {

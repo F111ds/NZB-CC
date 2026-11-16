@@ -206,6 +206,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private KodiRow kodiRow;
     private View kodiBlock;
     private TextView kodiCount, kodiFocusTitle, kodiFocusMeta;
+    private android.widget.ProgressBar kodiFocusProgress;
     private TextView raceKicker, raceHeadline, raceSessions;
     /** game_day: each team's next game from an add-on, rotating in the race panel; null when the key is off. */
     private GameDay gameDay;
@@ -595,6 +596,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         gameDay = GameDay.create(this, cfg.gameDay, handler, this::updatePanel);
         extras = HomeExtras.load(this);
         AppAdapter.tileScale = extras.dockTileScale;
+        AppAdapter.squareTiles = extras.centered;
         weatherPill = findViewById(R.id.weatherPill);
         if (extras.weather) weatherNow = new WeatherNow(this, extras, handler, this::updateWeatherPill);
         updateWeatherPill();
@@ -602,6 +604,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         kodiCount = findViewById(R.id.kodiCount);
         kodiFocusTitle = findViewById(R.id.kodiFocusTitle);
         kodiFocusMeta = findViewById(R.id.kodiFocusMeta);
+        kodiFocusProgress = findViewById(R.id.kodiFocusProgress);
         View kodiList = findViewById(R.id.kodiRow);   // not in every layout variant (layout-iw)
         kodiRow = !(kodiList instanceof RecyclerView) || kodiBlock == null ? null
                 : new KodiRow(this, extras, handler, (RecyclerView) kodiList, this);
@@ -716,6 +719,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             grid.setLayoutAnimation(new LayoutAnimationController(
                     AnimationUtils.loadAnimation(this, R.anim.tile_enter), 0.06f));
         }
+        if (extras.centered) setUpCenteredHome();   // before the adapter: the tiles size themselves from the grid's width
         adapter = new AppAdapter(this, this, COLUMNS, cfg);
         dockApps = cfg.dockApps;
         fillDockLeavesSlots = !cfg.fillDock;
@@ -2924,6 +2928,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         return kodiRow != null && kodiRow.hasItems() && dockRow && !singleRow;
     }
 
+    /**
+     * The centred home: a smaller clock line, and a dock of square tiles in a strip the width of its cells, centred on
+     * the screen (the grid's side padding narrows it, so the tiles size themselves from the cells).
+     */
+    private void setUpCenteredHome() {
+        ((TextView) findViewById(R.id.clock)).setTextSize(TypedValue.COMPLEX_UNIT_SP, 30);
+        hero.setVisibility(View.GONE);   // no big name above the dock: the focused tile's name shows under it
+        int screen = getResources().getDisplayMetrics().widthPixels - (int) (112 * density);   // root's side padding
+        int dock = (int) (COLUMNS * extras.dockCellDp * density);
+        int side = Math.max((int) (10 * density), (screen - dock) / 2);
+        grid.setPadding(side, grid.getPaddingTop(), side, grid.getPaddingBottom());
+    }
+
     /** Up from the dock: onto the Kodi row when it shows (true), else the top bar takes it (false). */
     private boolean upToKodiRow() {
         if (!kodiRowShown() || !kodiRow.focus()) return false;
@@ -2942,8 +2959,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         Rect r = new Rect(0, 0, grid.getWidth(), grid.getHeight());
         root.offsetDescendantRectToMyCoords(grid, r);
         int dockTop = r.top + grid.getPaddingTop();
-        int heroH = Math.max(hero.getHeight(), (int) (58 * density));
-        int bottom = dockTop - (int) (40 * density) - heroH - (int) (8 * density);   // showHero's place for the name
+        int bottom;
+        if (extras.centered) {
+            bottom = dockTop - (int) (18 * density);
+        } else {
+            int heroH = Math.max(hero.getHeight(), (int) (58 * density));
+            bottom = dockTop - (int) (40 * density) - heroH - (int) (8 * density);   // showHero's place for the name
+        }
         int top;
         if (racePanel.getVisibility() == View.VISIBLE) {
             top = racePanel.getBottom();
@@ -2953,11 +2975,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             top = c.bottom;
         }
         top += (int) (16 * density);
-        // shelf padding (9 + 2), the header line (~20) and the cards' margins (8 + 8)
-        int posterH = bottom - top - (int) (47 * density);
-        kodiRow.setPosterHeight(Math.min(posterH, (int) (170 * density)));
+        // centred: the title line (~16), the cards' margins (8 + 8) and the selected movie under them (~62);
+        // otherwise the shelf padding (9 + 2), the header line (~20) and the cards' margins (8 + 8)
+        int posterH = bottom - top - (int) ((extras.centered ? 96 : 47) * density);
+        kodiRow.setPosterHeight(Math.min(posterH, (int) (190 * density)));
         kodiBlock.setY(top);
-        kodiCount.setText(getResources().getQuantityString(R.plurals.kodi_movies, kodiRow.count(), kodiRow.count()));
+        kodiCount.setText(getString(R.string.kodi_row_title));
         if (kodiBlock.getVisibility() != View.VISIBLE) {
             kodiBlock.setVisibility(View.VISIBLE);
             ViewGroup bar = findViewById(R.id.topButtons);
@@ -2971,12 +2994,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         hideHero();
         kodiFocusTitle.setText(item.title);
         kodiFocusMeta.setText(item.meta());
+        kodiFocusProgress.setProgress(Math.round(item.resume * 1000));
+        kodiFocusProgress.setVisibility(item.resume > 0 ? View.VISIBLE : View.INVISIBLE);
     }
 
     @Override
     public void onKodiRowLeft() {
         kodiFocusTitle.setText("");
         kodiFocusMeta.setText("");
+        kodiFocusProgress.setVisibility(View.INVISIBLE);
     }
 
     @Override

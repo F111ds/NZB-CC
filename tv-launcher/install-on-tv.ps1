@@ -127,7 +127,13 @@ SetKey 'wallpaper' $false
 SetKey 'background_color' '#070B14'
 SetKey 'dock_glass' $true
 SetKey 'columns' 7
-SetKey 'dock_tile_scale' 0.75
+SetKey 'centered_home' $true
+SetKey 'uniform_tiles' $true
+SetKey 'show_greeting' $false
+SetKey 'app_library' $true
+SetKey 'library_button' $true
+SetKey 'wifi_label_width' 110
+if ($cfg.PSObject.Properties['dock_tile_scale']) { $cfg.PSObject.Properties.Remove('dock_tile_scale') }
 SetKey 'kodi_row' $true
 SetKey 'kodi_row_server' $server
 SetKey 'kodi_row_token' $token

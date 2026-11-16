@@ -23,7 +23,9 @@ import java.nio.charset.StandardCharsets;
  * "kodi_row_server": "http://192.168.1.10:8765",   NZB Command Center's phone server on the PC
  * "kodi_row_token": "...",              its access code (mobile_access_key.txt)
  * "kodi_row_size": 12,
- * "dock_tile_scale": 0.75,              the app tiles at 75 % of their usual size
+ * "dock_tile_scale": 0.75,              the app tiles at 75 % of their usual size (1 in the centred home)
+ * "centered_home": true,                the centred layout (square icon dock, posters across the middle)
+ * "dock_cell_dp": 92,                   one dock cell's width in the centred home
  * "kodi_package": "org.xbmc.kodi",
  * "kodi_local_url": "http://127.0.0.1:8080", "kodi_local_user": "kodi", "kodi_local_password": ""
  * </pre>
@@ -39,6 +41,11 @@ final class HomeExtras {
     final int kodiRowSize;
     /** The dock and grid tiles at this share of their usual size, 0.6 to 1 (smaller leaves the Kodi row more room). */
     final float dockTileScale;
+    /** The centred home: posters across the middle, the selected movie under them, a small centred dock of square
+     *  icons, a smaller clock line with the weather in the top bar. */
+    final boolean centered;
+    /** Width of one dock cell in the centred home, in dp: the dock is that times the columns, centred. */
+    final int dockCellDp;
 
     private HomeExtras(JSONObject j) {
         weather = j.optBoolean("weather", true);
@@ -55,7 +62,9 @@ final class HomeExtras {
         kodiLocalPassword = j.optString("kodi_local_password", "");
         kodiRowSize = Math.max(4, Math.min(30, j.optInt("kodi_row_size", 12)));
         kodiRow = j.optBoolean("kodi_row", true);
-        dockTileScale = (float) Math.max(0.6, Math.min(1.0, j.optDouble("dock_tile_scale", 0.75)));
+        centered = j.optBoolean("centered_home", true);
+        dockTileScale = (float) Math.max(0.6, Math.min(1.0, j.optDouble("dock_tile_scale", centered ? 1.0 : 0.75)));
+        dockCellDp = Math.max(70, Math.min(160, j.optInt("dock_cell_dp", 92)));
     }
 
     private static String trimSlash(String s) {

@@ -113,7 +113,11 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return Math.max(Math.round(80 * density), Math.min(design, fit));
     }
 
+    /** HomeExtras centred home: square tiles (an app's icon on its tinted card) instead of banner-shaped ones. */
+    static boolean squareTiles;
+
     static int tileHeightPx(int tileWidthPx) {
+        if (squareTiles) return tileWidthPx;
         return Math.round(tileWidthPx * DESIGN_H_DP / DESIGN_W_DP);
     }
 

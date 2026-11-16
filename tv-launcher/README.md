@@ -5,7 +5,8 @@ The CleanYourTV launcher (MIT, see `LICENSE-cleanyourtv`; upstream commit in `UP
 - **Kodi row** above the dock: the newest movies with their posters; OK opens Kodi and plays the movie, even when
   Kodi wasn't running. The list comes from `mobile_server.py` on the PC (`/api/tv/recent`), falls back to Kodi on the
   TV, and is saved on the TV so it shows at once after power-on.
-- **Weather** as a small line under the date (Open-Meteo, no key).
+- **Centred home** (`centered_home`, on by default): posters across the middle with the selected movie under them, a small centred dock of square app icons, the weather in the top bar.
+- **Weather**: temperature, high and low (Open-Meteo, no key).
 - **Smaller app tiles** (`dock_tile_scale`, 0.8 by default) to give the posters room.
 
 The wallpaper is turned off by the install script (a `config.json` setting), not by the build.

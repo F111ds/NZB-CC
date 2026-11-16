@@ -41,7 +41,8 @@ def fake_kodi(method, params=None, timeout=6):
         return {"movies": [
             {"movieid": 7, "title": "Old Film", "year": 2020, "runtime": 6000, "file": "smb://HAL9000/Movies/Old Film (2020)/old.film.mkv",
              "art": {"poster": "image://poster7/"}, "dateadded": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - 86400 * 10)),
-             "playcount": 1, "streamdetails": {"video": [{"width": 3840, "height": 2160}]}}]}
+             "playcount": 1, "streamdetails": {"video": [{"width": 3840, "height": 2160}]},
+             "resume": {"position": 1800, "total": 6000}}]}
     if method == "JSONRPC.Ping":
         return "pong"
     if method == "VideoLibrary.GetMovies":
@@ -80,6 +81,7 @@ assert state["items"][2]["movieid"] == 3 and (m.TV_ART_DIR / "k3.img").exists()
 new, old, _lib = state["items"]
 assert new["title"] == "New One" and new["year"] == 2025 and new["quality"] == "4K" and new["new"] and not new["in_kodi"]
 assert old["movieid"] == 7 and old["quality"] == "4K" and old["watched"] and not old["new"]
+assert old["resume"] == 0.3 and old["left_min"] == 70                        # stopped 30 min into 100
 assert [r"D:\Movies", "smb://HAL9000/Movies"] in state["path_map"]
 # the local test folder isn't under D:\Movies, so its file can't be mapped; with a matching prefix it is
 assert new["file"] == ""
