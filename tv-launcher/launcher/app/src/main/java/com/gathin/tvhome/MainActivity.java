@@ -3464,14 +3464,24 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private void insetTopBarLikeClock() {
         TextView clock = findViewById(R.id.clock);
         View bar = findViewById(R.id.topButtons);
+        // NZB-CC: icons 36dp from the right edge (20dp into the header's 56dp padding), the time 16dp further left
+        // (40dp from the left edge), and a smaller gap between them, so the whole rate line fits.
+        RelativeLayout.LayoutParams blp = (RelativeLayout.LayoutParams) bar.getLayoutParams();
+        blp.setMarginEnd(-Math.round(20 * density));
+        bar.setLayoutParams(blp);
+        View left = findViewById(R.id.leftBlock);
+        RelativeLayout.LayoutParams llp = (RelativeLayout.LayoutParams) left.getLayoutParams();
+        llp.setMarginStart(-Math.round(16 * density));
+        llp.setMarginEnd(Math.round(8 * density));
+        left.setLayoutParams(llp);
         Runnable fit = () -> {
             CharSequence text = clock.getText();
             if (text == null || text.length() == 0) return;
             Rect ink = new Rect();
             clock.getPaint().getTextBounds(text.toString(), 0, 1, ink);
-            // NZB-CC: the owner asked for the icons 20dp nearer the right edge (36dp from it instead of 56dp).
-            float want = 20 * density;
-            if (Math.abs(bar.getTranslationX() - want) > 0.5f) bar.setTranslationX(want);
+            // NZB-CC: the icons sit 20dp nearer the right edge, set as a layout margin (in onCreate) so the
+            // time/date/rate line gets the room too; no translation.
+            if (bar.getTranslationX() != 0f) bar.setTranslationX(0f);
         };
         clock.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> fit.run());
         fit.run();
