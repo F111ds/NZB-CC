@@ -26,6 +26,8 @@ import java.nio.charset.StandardCharsets;
  * "home_apps": ["com.netflix.ninja", "Prime Video", "YouTube", "Kodi"],   only these on Home, in order
  *                                     (package names or labels; [] shows every app; default: these four)
  * "fx": true, "fx_from": "USD", "fx_to": "MXN",   the exchange rate under the clock
+ * "fx_key": "art_live_...",            an AllRatesToday key: the live rate instead of the daily one
+ * "fx_refresh_minutes": 10,            how often the live rate is read while Home is on screen (5 to 720)
  * "news": true, "news_feeds": ["https://feeds.bbci.co.uk/news/world/rss.xml", "https://feeds.npr.org/1001/rss.xml",
  *                                "https://mexiconewsdaily.com/feed/"],
  *                                     the scrolling headlines above the Kodi row
@@ -53,6 +55,9 @@ final class HomeExtras {
     final boolean news;
     final java.util.List<String> newsFeeds = new java.util.ArrayList<>();
     final String fxFrom, fxTo;
+    /** AllRatesToday key for the live rate ("" uses the daily rate); minutes between live reads. */
+    final String fxKey;
+    final int fxRefreshMinutes;
     /** The only apps on Home, in order (package names or labels); empty shows every app. */
     final java.util.List<String> homeApps = new java.util.ArrayList<>();
 
@@ -100,6 +105,8 @@ final class HomeExtras {
         String to = j.optString("fx_to", "MXN").trim().toUpperCase(java.util.Locale.ROOT);
         fxFrom = from.matches("[A-Z]{3}") ? from : "USD";
         fxTo = to.matches("[A-Z]{3}") ? to : "MXN";
+        fxKey = j.optString("fx_key", "").trim();
+        fxRefreshMinutes = Math.max(5, Math.min(720, j.optInt("fx_refresh_minutes", 10)));
         dockIconsOnly = j.optBoolean("dock_icons_only", true);
         dockTileScale = (float) Math.max(0.35, Math.min(1.0, j.optDouble("dock_tile_scale", 0.5)));
     }

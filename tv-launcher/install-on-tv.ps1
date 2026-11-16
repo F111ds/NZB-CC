@@ -21,7 +21,10 @@ param(
     [int]$ServerPort = 8765,
     # The folder of pictures for the screensaver (saved in tv_photos_folder.txt); default: your Pictures folder.
     [string]$PhotosFolder = '',
-    [string]$Apk = ''
+    [string]$Apk = '',
+    # An AllRatesToday key for the live dollar-to-peso rate; saved in ..\fx_api_key.txt (not committed) so later
+    # installs reuse it. Without one the TV shows the daily reference rate.
+    [string]$FxKey = ''
 )
 # Windows PowerShell can leave $PSScriptRoot empty inside param() defaults, so the APK path is set here.
 if (-not $Apk) { $Apk = Join-Path $PSScriptRoot 'NZB-CC-TV-Launcher.apk' }
@@ -155,6 +158,16 @@ SetKey 'kodi_row' $true
 SetKey 'kodi_row_server' $server
 SetKey 'kodi_row_token' $token
 SetKey 'weather' $true
+$fxKeyFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'fx_api_key.txt'
+if ($FxKey) { [IO.File]::WriteAllText($fxKeyFile, $FxKey.Trim(), (New-Object System.Text.UTF8Encoding $false)) }
+elseif (Test-Path $fxKeyFile) { $FxKey = (Get-Content $fxKeyFile -Raw).Trim() }
+if ($FxKey) {
+    SetKey 'fx_key' $FxKey              # live mid-market rate (AllRatesToday)
+    if (-not $cfg.PSObject.Properties['fx_refresh_minutes']) { SetKey 'fx_refresh_minutes' 10 }
+    Write-Host 'Exchange rate: live (AllRatesToday key set)'
+} else {
+    Write-Host 'Exchange rate: daily (no AllRatesToday key; pass -FxKey to make it live)'
+}
 $newCfg = Join-Path $env:TEMP "nzbcc-config-$stamp.json"
 [IO.File]::WriteAllText($newCfg, ($cfg | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding $false))
 Tv "mkdir -p $tvDir" | Out-Null

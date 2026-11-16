@@ -4,6 +4,8 @@ nzb_manager_config.json
 # Mobile companion pairing code, alert settings (ntfy token) and saved searches
 mobile_access_key.txt
 mobile_settings.json
+# AllRatesToday key for the TV's live exchange rate
+fx_api_key.txt
 # Half-written config/cache files
 *.tmp
 
