@@ -3002,7 +3002,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         // shelf padding (9 + 2), the header line (~20) and the cards' margins (8 + 8)
         int posterH = bottom - top - (int) (47 * density);
         // NZB-CC: five smaller posters, centred; the shelf is no taller than they need.
-        int shown = Math.min(posterH, (int) (150 * density));
+        int shown = Math.min(posterH, (int) (175 * density));
         kodiRow.setPosterHeight(shown);
         // Centred in the open space between the header and the name above the dock.
         kodiBlock.setY(top + Math.max(0, (posterH - shown) / 2));
