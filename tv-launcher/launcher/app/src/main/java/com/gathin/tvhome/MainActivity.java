@@ -3469,8 +3469,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             if (text == null || text.length() == 0) return;
             Rect ink = new Rect();
             clock.getPaint().getTextBounds(text.toString(), 0, 1, ink);
-            float bearing = Math.max(0, ink.left) + clock.getPaddingLeft();
-            if (Math.abs(bar.getTranslationX() + bearing) > 0.5f) bar.setTranslationX(-bearing);
+            // NZB-CC: the owner asked for the icons 20dp nearer the right edge (36dp from it instead of 56dp).
+            float want = 20 * density;
+            if (Math.abs(bar.getTranslationX() - want) > 0.5f) bar.setTranslationX(want);
         };
         clock.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> fit.run());
         fit.run();

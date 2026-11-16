@@ -212,7 +212,7 @@
                         android:format12Hour="h:mm"
                         android:format24Hour="HH:mm"
                         android:textColor="#FFFFFFFF"
-                        android:textSize="14sp"
+                        android:textSize="18sp"
                         android:fontFamily="@string/font_regular"
                         android:letterSpacing="-0.04"
                         android:fontFeatureSettings="tnum"
@@ -228,7 +228,7 @@
                         android:format12Hour="a"
                         android:format24Hour=""
                         android:textColor="#B3FFFFFF"
-                        android:textSize="10sp"
+                        android:textSize="12sp"
                         android:fontFamily="@string/font_medium"
                         android:letterSpacing="0.08"
                         android:textAllCaps="true" />
@@ -236,10 +236,10 @@
                     <View
                         android:id="@+id/clockDivider"
                         android:layout_width="1dp"
-                        android:layout_height="14dp"
+                        android:layout_height="18dp"
                         android:layout_gravity="bottom"
-                        android:layout_marginStart="12dp"
-                        android:layout_marginEnd="12dp"
+                        android:layout_marginStart="14dp"
+                        android:layout_marginEnd="14dp"
                         android:layout_marginBottom="0dp"
                         android:background="#33FFFFFF" />
 
@@ -277,7 +277,7 @@
                             android:format12Hour="@string/date_format_home"
                             android:format24Hour="@string/date_format_home"
                             android:textColor="#A6FFFFFF"
-                            android:textSize="13sp"
+                            android:textSize="16sp"
                             android:fontFamily="@string/font_regular"
                             android:letterSpacing="0.06"
                             android:textAllCaps="true" />
@@ -303,9 +303,9 @@
                     <View
                         android:id="@+id/fxDivider"
                         android:layout_width="1dp"
-                        android:layout_height="14dp"
-                        android:layout_marginStart="12dp"
-                        android:layout_marginEnd="12dp"
+                        android:layout_height="18dp"
+                        android:layout_marginStart="14dp"
+                        android:layout_marginEnd="14dp"
                         android:background="#33FFFFFF"
                         android:visibility="gone" />
 
@@ -318,7 +318,7 @@
                         android:singleLine="true"
                         android:ellipsize="end"
                         android:textColor="#A6FFFFFF"
-                        android:textSize="13sp"
+                        android:textSize="16sp"
                         android:fontFamily="@string/font_regular"
                         android:letterSpacing="0.06"
                         android:focusable="false"
