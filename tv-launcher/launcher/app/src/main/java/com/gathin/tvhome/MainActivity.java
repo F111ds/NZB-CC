@@ -2046,7 +2046,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
      * scrimPercent of its strength (cinematic_scrim). cinematic_art 0 leaves the artwork out, 0 percent the scrim.
      */
     private void setUpCinematicShelf(int scrimPercent) {
-        heroName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 68f);
+        heroName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);   // NZB-CC: a small label, not a headline
         heroName.setLetterSpacing(-0.025f);
         heroMeta.setVisibility(View.INVISIBLE);   // keeps its height, so the name does not jump when it fills in
         heroDots.setVisibility(heroDotsShown ? View.VISIBLE : View.GONE);
@@ -2568,13 +2568,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     }
 
     /**
-     * NZB-CC: the date on one line beside the clock. Some languages (Spanish, German, ...) break it after the
-     * weekday ("lunes" / "16 de noviembre"); the break becomes a comma: "lunes, 16 de noviembre".
+     * NZB-CC: the whole date on one short line beside the clock, "Sun, Nov 16" (or the language's own order,
+     * "dom, 16 nov"), so the top bar never cuts it off.
      */
     private void oneLineDate() {
         TextClock date = findViewById(R.id.date);
-        date.setFormat12Hour(oneLine(date.getFormat12Hour()));
-        date.setFormat24Hour(oneLine(date.getFormat24Hour()));
+        String pattern = android.text.format.DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEdMMM");
+        date.setFormat12Hour(oneLine(pattern));
+        date.setFormat24Hour(oneLine(pattern));
         date.setSingleLine(true);
         date.setMaxLines(1);
         date.setLineSpacing(0f, 1f);
@@ -2968,7 +2969,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         Rect r = new Rect(0, 0, grid.getWidth(), grid.getHeight());
         root.offsetDescendantRectToMyCoords(grid, r);
         int dockTop = r.top + grid.getPaddingTop();
-        int heroH = Math.max(hero.getHeight(), (int) (58 * density));
+        int heroH = Math.max(hero.getHeight(), (int) (24 * density));
         int bottom = dockTop - (int) (40 * density) - heroH - (int) (8 * density);   // showHero's place for the name
         int top;
         if (racePanel.getVisibility() == View.VISIBLE) {
@@ -2982,7 +2983,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         // shelf padding (9 + 2), the header line (~20) and the cards' margins (8 + 8)
         int posterH = bottom - top - (int) (47 * density);
         // NZB-CC: five smaller posters, centred; the shelf is no taller than they need.
-        kodiRow.setPosterHeight(Math.min(posterH, (int) (128 * density)));
+        kodiRow.setPosterHeight(Math.min(posterH, (int) (150 * density)));
         kodiBlock.setY(top);
         kodiCount.setVisibility(View.GONE);
         if (kodiBlock.getVisibility() != View.VISIBLE) {
