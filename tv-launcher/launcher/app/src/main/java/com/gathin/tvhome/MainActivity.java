@@ -95,7 +95,7 @@ import java.util.Set;
 /**
  * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that springs between tiles.
  */
-public class MainActivity extends Activity implements AppAdapter.TileListener, KodiRow.Host {
+public class MainActivity extends Activity implements AppAdapter.TileListener, KodiRow.Host , DownloadNotes.Listener {
     @Override
     protected void attachBaseContext(android.content.Context base) {
         super.attachBaseContext(LauncherLocale.wrap(base));   // locale
@@ -204,6 +204,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private HomeExtras extras;
     private WeatherNow weatherNow;
     private ExchangeRate exchangeRate;
+    private DownloadNotes downloadNotes;
+    private View readyNote;
+    private final java.util.ArrayDeque<Object[]> readyQueue = new java.util.ArrayDeque<>();
+    private boolean readyShowing;
     private NewsFeed newsFeed;
     private TickerView newsTicker;
     private TextView fxLine;
@@ -618,6 +622,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (extras.weather) weatherNow = new WeatherNow(this, extras, handler, this::updateWeatherPill);
         fxLine = findViewById(R.id.fxLine);
         if (extras.fx) exchangeRate = new ExchangeRate(this, extras, handler, this::updateFxLine);
+        if (!extras.kodiServer.isEmpty()) downloadNotes = new DownloadNotes(this, extras, handler, this);
         updateFxLine();
         newsTicker = findViewById(R.id.newsTicker);
         if (extras.news && !extras.newsFeeds.isEmpty()) newsFeed = new NewsFeed(this, extras.newsFeeds, handler, this::updateNews);
@@ -1477,6 +1482,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (gameDay != null) gameDay.shutdown();
         if (weatherNow != null) weatherNow.shutdown();
         if (exchangeRate != null) exchangeRate.shutdown();
+        if (downloadNotes != null) downloadNotes.shutdown();
         if (newsFeed != null) newsFeed.shutdown();
         if (kodiRow != null) kodiRow.shutdown();
         unregisterReceiver(packageReceiver);
@@ -3009,6 +3015,93 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         weatherPill.setVisibility(on ? View.VISIBLE : View.GONE);
     }
 
+    // ---- "Ready to watch" note (NZB-CC) ------------------------------------------------------------
+
+    @Override
+    public void onDownloadReady(String title, Bitmap poster) {
+        readyQueue.add(new Object[]{title, poster});
+        if (!readyShowing) showNextReady();
+    }
+
+    /** A small card under the top bar for about 8 seconds: the poster when there is one, then "READY TO WATCH". */
+    private void showNextReady() {
+        Object[] next = readyQueue.poll();
+        if (next == null || isDestroyed()) {
+            readyShowing = false;
+            return;
+        }
+        readyShowing = true;
+        if (readyNote == null) readyNote = buildReadyNote();
+        ImageView poster = readyNote.findViewWithTag("poster");
+        TextView title = readyNote.findViewWithTag("title");
+        title.setText((String) next[0]);
+        Bitmap bm = (Bitmap) next[1];
+        poster.setImageBitmap(bm);
+        poster.setVisibility(bm != null ? View.VISIBLE : View.GONE);
+        View bar = findViewById(R.id.topButtons);
+        Rect r = new Rect(0, 0, bar.getWidth(), bar.getHeight());
+        root.offsetDescendantRectToMyCoords(bar, r);
+        readyNote.setY(r.bottom + 12 * density);
+        readyNote.setAlpha(0f);
+        readyNote.setTranslationX(16 * density);
+        readyNote.setVisibility(View.VISIBLE);
+        readyNote.animate().alpha(1f).translationX(0f).setDuration(reducedMotion ? Motion.REDUCED_MS : 350).withEndAction(null).start();
+        handler.postDelayed(() -> readyNote.animate().alpha(0f).setDuration(reducedMotion ? Motion.REDUCED_MS : 450)
+                .withEndAction(() -> {
+                    readyNote.setVisibility(View.GONE);
+                    handler.postDelayed(this::showNextReady, 600);
+                }).start(), 8000);
+    }
+
+    private View buildReadyNote() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setBackgroundResource(R.drawable.glass_panel);
+        int p = (int) (8 * density);
+        card.setPadding(p, p, (int) (16 * density), p);
+        card.setElevation(12 * density);
+        card.setFocusable(false);
+        ImageView poster = new ImageView(this);
+        poster.setTag("poster");
+        poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        poster.setClipToOutline(true);
+        poster.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, android.graphics.Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), 4 * density);
+            }
+        });
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams((int) (28 * density), (int) (42 * density));
+        plp.setMarginEnd((int) (12 * density));
+        card.addView(poster, plp);
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        TextView kicker = new TextView(this);
+        kicker.setText("\u2B07  READY TO WATCH");
+        kicker.setTextColor(0xFF7BE3A0);
+        kicker.setTextSize(9.5f);
+        kicker.setLetterSpacing(0.1f);
+        kicker.setTypeface(UiFont.get(this, R.string.font_medium));
+        texts.addView(kicker);
+        TextView title = new TextView(this);
+        title.setTag("title");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(14);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        title.setMaxWidth((int) (300 * density));
+        title.setTypeface(UiFont.get(this, R.string.font_medium));
+        texts.addView(title);
+        card.addView(texts);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
+        lp.setMarginEnd((int) (36 * density));
+        root.addView(card, lp);
+        card.setVisibility(View.GONE);
+        return card;
+    }
+
     /** "US$1 = 18.42 MXN ▲ 0.06" under the clock; gone until there is a rate. */
     private void updateFxLine() {
         boolean on = exchangeRate != null && exchangeRate.hasRate();
@@ -3030,6 +3123,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     private void refreshExtras() {
         if (!resumed) return;
+        if (downloadNotes != null) downloadNotes.checkIfDue();
         if (newsFeed != null) newsFeed.refreshIfStale();
         if (weatherNow != null) weatherNow.refreshIfStale();
         if (exchangeRate != null) exchangeRate.refreshIfStale();

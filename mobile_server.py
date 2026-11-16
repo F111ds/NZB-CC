@@ -2585,6 +2585,35 @@ def tv_mark_watched(item_id: str) -> dict:
     return {"ok": True}
 
 
+def tv_finished(limit: int = 10) -> dict:
+    """Downloads SABnzbd finished most recently (movies and episodes), newest first, for the TV's
+    "Ready to watch" note. A poster is offered when the TV row already has one for that title."""
+    slots = sab_request("history", {"limit": 30}).get("history", {}).get("slots", [])
+    row = tv_load_state()["items"]
+    out = []
+    for x in slots:
+        if str(x.get("status", "")).lower() != "completed":
+            continue
+        name, cat = str(x.get("name") or ""), str(x.get("category") or "")
+        clean, year, kind = artwork_query(name, cat)
+        nzo = re.sub(r"[^A-Za-z0-9_]", "", str(x.get("nzo_id") or ""))[:80]
+        if not clean or not nzo or kind not in ("movie", "tv"):
+            continue
+        ep = re.search(r"\bS(\d{1,2})E(\d{1,3})\b", name.replace(".", " "), re.I)
+        title = f"{clean} S{int(ep.group(1))} E{int(ep.group(2))}" if kind == "tv" and ep else clean
+        poster = ""
+        if kind == "movie":
+            hit = next((it for it in row if it.get("poster") and _same_movie({"title": clean, "year": year}, it)), None)
+            if hit:
+                poster = f"/api/tv/poster?id={hit['id']}"
+        out.append({"id": f"s{nzo}", "title": title, "year": to_int(year) or None, "kind": kind,
+                    "completed": to_int(x.get("completed")), "poster": poster})
+        if len(out) >= limit:
+            break
+    out.sort(key=lambda it: -it["completed"])
+    return {"items": out}
+
+
 _tv_watched_refreshing = threading.Lock()
 _TV_SEEN_FILTER = {"or": [{"field": "inprogress", "operator": "true", "value": ""},
                           {"field": "playcount", "operator": "greaterthan", "value": "0"}]}
@@ -4080,6 +4109,8 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, tv_row())
         elif path == "/api/tv/watched":
             self.send_json(200, tv_watched_row())
+        elif path == "/api/tv/finished":
+            self.send_json(200, tv_finished())
         elif path == "/api/tv/photos":
             self.send_json(200, tv_photos_list())
         elif path == "/api/tv/photo":
