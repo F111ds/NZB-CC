@@ -51,7 +51,9 @@ public class PhotoDream extends DreamService {
     private ExecutorService io;
     private HomeExtras extras;
     private File cache;
-    private ImageView[] frames;
+    /** Two layers that cross-fade, each a blurred fill behind the photo itself. */
+    private FrameLayout[] frames;
+    private ImageView[] fills, photos;
     private int front;
     private TextView caption;
     private final List<String[]> queue = new ArrayList<>();   // {id, caption}
@@ -86,13 +88,23 @@ public class PhotoDream extends DreamService {
     private View build() {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
-        frames = new ImageView[2];
+        frames = new FrameLayout[2];
+        fills = new ImageView[2];
+        photos = new ImageView[2];
         for (int i = 0; i < 2; i++) {
-            ImageView v = new ImageView(this);
-            v.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            v.setAlpha(0f);
-            root.addView(v, new FrameLayout.LayoutParams(-1, -1));
-            frames[i] = v;
+            FrameLayout layer = new FrameLayout(this);
+            layer.setAlpha(0f);
+            ImageView fill = new ImageView(this);
+            fill.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            // A tiny copy stretched over the screen reads as a blur; darkened so the photo stands out.
+            fill.setColorFilter(new android.graphics.PorterDuffColorFilter(0xFF6E6E6E, android.graphics.PorterDuff.Mode.MULTIPLY));
+            layer.addView(fill, new FrameLayout.LayoutParams(-1, -1));
+            ImageView photo = new ImageView(this);
+            layer.addView(photo, new FrameLayout.LayoutParams(-1, -1));
+            root.addView(layer, new FrameLayout.LayoutParams(-1, -1));
+            frames[i] = layer;
+            fills[i] = fill;
+            photos[i] = photo;
         }
         // A soft shade at the bottom so the clock reads over a bright photo.
         View shade = new View(this);
@@ -233,20 +245,34 @@ public class PhotoDream extends DreamService {
     }
 
     private void show(Bitmap bm, String text) {
-        ImageView old = frames[front];
+        FrameLayout old = frames[front];
+        final int oldIndex = front;
         front = 1 - front;
-        ImageView now = frames[front];
-        now.animate().cancel();
-        now.setImageBitmap(bm);
-        now.setScaleX(1f);
-        now.setScaleY(1f);
+        FrameLayout now = frames[front];
+        ImageView photo = photos[front], fill = fills[front];
+        // A photo close to the screen's shape fills it edge to edge; a tall or square one is shown whole, centred,
+        // with a blurred, darker copy of itself filling the sides (nothing cut off).
+        float ratio = bm.getWidth() / (float) Math.max(1, bm.getHeight());
+        float screen = screenW / (float) Math.max(1, screenH);
+        boolean fills_ = ratio >= screen * 0.85f && ratio <= screen * 1.3f;
+        photo.setScaleType(fills_ ? ImageView.ScaleType.CENTER_CROP : ImageView.ScaleType.FIT_CENTER);
+        photo.setImageBitmap(bm);
+        if (fills_) {
+            fill.setImageDrawable(null);
+        } else {
+            int w = 48, h = Math.max(1, Math.round(48 / ratio));
+            fill.setImageBitmap(Bitmap.createScaledBitmap(bm, w, h, true));
+        }
+        photo.setScaleX(1f);
+        photo.setScaleY(1f);
         now.setAlpha(0f);
         // Fade in over FADE_MS while drifting slowly closer for the whole turn (separate animators: one
-        // ViewPropertyAnimator would give both the same duration).
+        // ViewPropertyAnimator would give both the same duration). A small zoom, so the edges stay in view.
         android.animation.ObjectAnimator.ofFloat(now, View.ALPHA, 0f, 1f).setDuration(FADE_MS).start();
+        float to = fills_ ? 1.05f : 1.03f;
         android.animation.AnimatorSet zoom = new android.animation.AnimatorSet();
-        zoom.playTogether(android.animation.ObjectAnimator.ofFloat(now, View.SCALE_X, 1f, 1.08f),
-                android.animation.ObjectAnimator.ofFloat(now, View.SCALE_Y, 1f, 1.08f));
+        zoom.playTogether(android.animation.ObjectAnimator.ofFloat(photo, View.SCALE_X, 1f, to),
+                android.animation.ObjectAnimator.ofFloat(photo, View.SCALE_Y, 1f, to));
         zoom.setDuration(SHOW_MS + FADE_MS);
         zoom.setInterpolator(new android.view.animation.LinearInterpolator());
         zoom.start();
@@ -255,7 +281,10 @@ public class PhotoDream extends DreamService {
         out.addListener(new android.animation.AnimatorListenerAdapter() {
             @Override
             public void onAnimationEnd(android.animation.Animator animation) {
-                if (frames[front] != old) old.setImageDrawable(null);
+                if (front != oldIndex) {
+                    photos[oldIndex].setImageDrawable(null);
+                    fills[oldIndex].setImageDrawable(null);
+                }
             }
         });
         out.start();
@@ -288,7 +317,28 @@ public class PhotoDream extends DreamService {
         d.inSampleSize = sample;
         //noinspection ResultOfMethodCallIgnored
         f.setLastModified(System.currentTimeMillis());
-        return BitmapFactory.decodeFile(f.getPath(), d);
+        Bitmap bm = BitmapFactory.decodeFile(f.getPath(), d);
+        return bm == null ? null : upright(bm, f);
+    }
+
+    /** Turns a photo the right way up when the camera saved it sideways with an orientation note (EXIF). */
+    private static Bitmap upright(Bitmap bm, File f) {
+        int degrees;
+        try {
+            int o = new android.media.ExifInterface(f.getPath()).getAttributeInt(
+                    android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL);
+            degrees = o == android.media.ExifInterface.ORIENTATION_ROTATE_90 ? 90
+                    : o == android.media.ExifInterface.ORIENTATION_ROTATE_180 ? 180
+                    : o == android.media.ExifInterface.ORIENTATION_ROTATE_270 ? 270 : 0;
+        } catch (Exception e) {
+            degrees = 0;   // not a JPEG with EXIF (PNG, WebP): as it is
+        }
+        if (degrees == 0) return bm;
+        android.graphics.Matrix m = new android.graphics.Matrix();
+        m.postRotate(degrees);
+        Bitmap turned = Bitmap.createBitmap(bm, 0, 0, bm.getWidth(), bm.getHeight(), m, true);
+        if (turned != bm) bm.recycle();
+        return turned;
     }
 
     private void trimCache() {
