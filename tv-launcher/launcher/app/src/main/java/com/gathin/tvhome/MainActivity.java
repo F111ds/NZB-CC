@@ -203,6 +203,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     // This build's additions: the weather in the top bar and the Kodi row above the dock.
     private HomeExtras extras;
     private WeatherNow weatherNow;
+    private ExchangeRate exchangeRate;
+    private TextView fxLine;
     private TextView weatherPill;
     private KodiRow kodiRow;
     private View kodiBlock;
@@ -611,6 +613,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         }
         weatherPill = findViewById(R.id.weatherPill);
         if (extras.weather) weatherNow = new WeatherNow(this, extras, handler, this::updateWeatherPill);
+        fxLine = findViewById(R.id.fxLine);
+        if (extras.fx) exchangeRate = new ExchangeRate(this, extras, handler, this::updateFxLine);
+        updateFxLine();
         updateWeatherPill();
         kodiBlock = findViewById(R.id.kodiBlock);
         kodiCount = findViewById(R.id.kodiCount);
@@ -1457,6 +1462,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         cancelHoldOk();
         if (gameDay != null) gameDay.shutdown();
         if (weatherNow != null) weatherNow.shutdown();
+        if (exchangeRate != null) exchangeRate.shutdown();
         if (kodiRow != null) kodiRow.shutdown();
         unregisterReceiver(packageReceiver);
         if (openOnStartOnWake) unregisterReceiver(wakeReceiver);
@@ -2975,9 +2981,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         weatherPill.setVisibility(on ? View.VISIBLE : View.GONE);
     }
 
+    /** "US$1 = 18.42 MXN ▲ 0.06" under the clock; gone until there is a rate. */
+    private void updateFxLine() {
+        boolean on = exchangeRate != null && exchangeRate.hasRate();
+        if (on) fxLine.setText(exchangeRate.line());
+        fxLine.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (kodiBlock != null) root.post(this::layoutKodiRow);
+    }
+
     private void refreshExtras() {
         if (!resumed) return;
         if (weatherNow != null) weatherNow.refreshIfStale();
+        if (exchangeRate != null) exchangeRate.refreshIfStale();
         if (kodiRow != null) kodiRow.refreshIfStale();
     }
 
@@ -3015,6 +3030,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             Rect c = new Rect(0, 0, clockBlock.getWidth(), clockBlock.getHeight());
             root.offsetDescendantRectToMyCoords(clockBlock, c);
             top = c.bottom;
+            if (fxLine != null && fxLine.getVisibility() == View.VISIBLE) {   // below the exchange-rate line too
+                Rect f = new Rect(0, 0, fxLine.getWidth(), fxLine.getHeight());
+                root.offsetDescendantRectToMyCoords(fxLine, f);
+                top = Math.max(top, f.bottom);
+            }
         }
         top += (int) (16 * density);
         // shelf padding (9 + 2), the header line (~20) and the cards' margins (8 + 8)

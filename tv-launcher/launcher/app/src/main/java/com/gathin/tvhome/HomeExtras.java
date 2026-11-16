@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets;
  * "kodi_row_size": 5,                   posters in the row (recently watched)
  * "home_apps": ["com.netflix.ninja", "Prime Video", "YouTube", "Kodi"],   only these on Home, in order
  *                                     (package names or labels; [] shows every app; default: these four)
+ * "fx": true, "fx_from": "USD", "fx_to": "MXN",   the exchange rate under the clock
  * "dock_tile_scale": 0.5,               the app tiles at half their usual size, in a compact centred row
  * "kodi_package": "org.xbmc.kodi",
  * "kodi_local_url": "http://127.0.0.1:8080", "kodi_local_user": "kodi", "kodi_local_password": ""
@@ -41,6 +42,9 @@ final class HomeExtras {
     final int kodiRowSize;
     /** The dock and grid tiles at this share of their usual size, 0.35 to 1 (smaller leaves the Kodi row more room). */
     final float dockTileScale;
+    /** The exchange rate under the clock ("fx": true), from fx_from to fx_to (USD to MXN by default). */
+    final boolean fx;
+    final String fxFrom, fxTo;
     /** The only apps on Home, in order (package names or labels); empty shows every app. */
     final java.util.List<String> homeApps = new java.util.ArrayList<>();
 
@@ -71,6 +75,11 @@ final class HomeExtras {
                 if (!s.isEmpty()) homeApps.add(s);
             }
         }
+        fx = j.optBoolean("fx", true);
+        String from = j.optString("fx_from", "USD").trim().toUpperCase(java.util.Locale.ROOT);
+        String to = j.optString("fx_to", "MXN").trim().toUpperCase(java.util.Locale.ROOT);
+        fxFrom = from.matches("[A-Z]{3}") ? from : "USD";
+        fxTo = to.matches("[A-Z]{3}") ? to : "MXN";
         dockTileScale = (float) Math.max(0.35, Math.min(1.0, j.optDouble("dock_tile_scale", 0.5)));
     }
 
