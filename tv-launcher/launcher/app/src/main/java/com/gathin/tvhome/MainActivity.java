@@ -3787,10 +3787,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
                     // "Apple TV · HDMI 1": the device's own name (or the one given to it or to its port in
                     // Settings > Inputs), then the port. Opening the device's input also makes it the CEC
                     // active source, which wakes it.
+                    // NZB-CC: with two or more devices on one port (an ARC soundbar or receiver and the box behind
+                    // it, or one box answering CEC as two devices), the port's Settings name ("Set-top box") would
+                    // label them all alike: each uses its own CEC name then, and identical rows show once.
+                    Set<String> shownOnPort = new HashSet<>();
                     for (TvInputInfo device : devices) {
                         CharSequence name = InputNames.tidy(device.loadCustomLabel(this));
-                        if (name == null || name.length() == 0) name = named ? custom : device.loadLabel(this);
+                        if (name == null || name.length() == 0) {
+                            name = named && devices.size() == 1 ? custom : device.loadLabel(this);
+                        }
                         String deviceLabel = name == null || name.length() == 0 ? label : name + " \u00B7 " + label;
+                        if (!shownOnPort.add(deviceLabel)) continue;
                         final String deviceId = device.getId();
                         int state = hdmiStateBogus && !inputsCecStateOnly ? -1 : tim.getInputState(deviceId);
                         View row = addInputRow(rows, popup, R.drawable.ic_input, deviceLabel, state, () -> openInput(deviceId));
