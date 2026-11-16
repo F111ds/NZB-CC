@@ -161,6 +161,24 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
      * from the grid's width less its usual 10dp sides, so that centring padding never feeds back into them.
      */
     static boolean compactDock = false;
+    /**
+     * NZB-CC home_apps: when not empty, only these apps are on Home, in this order. Each entry matches a package
+     * name or an app's label (case ignored); "a|b" accepts either. Every other app stays in the App library (the grid button).
+     */
+    static List<String> homeApps = new ArrayList<>();
+
+    /** The place of this app in home_apps, or -1 when it isn't listed. */
+    static int homeRank(String pkg, String label) {
+        for (int i = 0; i < homeApps.size(); i++) {
+            // "com.netflix.ninja|Netflix": either the package or the label
+            for (String want : homeApps.get(i).split("\\|")) {
+                want = want.trim();
+                if (!want.isEmpty() && (want.equalsIgnoreCase(pkg)
+                        || want.equalsIgnoreCase(label == null ? "" : label.trim()))) return i;
+            }
+        }
+        return -1;
+    }
     static final float COMPACT_GAP_DP = 22;
 
     static int compactCellPx(int tileWidthPx, float density) {
@@ -321,6 +339,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             String label = card != null ? card.label : Cards.cleanLabel(
                     appLabels.containsKey(pkg) ? appLabels.get(pkg) : String.valueOf(ri.loadLabel(pm)), pkg);
             if (!seen.add(pkg + '\n' + label)) continue;
+            if (!homeApps.isEmpty() && homeRank(pkg, label) < 0) continue;   // NZB-CC: only the home_apps on Home
             Drawable banner = null;
             // uniform_tiles draws the icon, so an app's banner is never loaded. A module card keeps its banner.
             if (!(uniformTiles && card == null)) {
@@ -337,6 +356,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
         }
         Collections.sort(fresh, (a, b) -> {
+            if (!homeApps.isEmpty()) {   // NZB-CC: home_apps sets the order
+                int ra = homeRank(a.pkg, a.label), rb = homeRank(b.pkg, b.label);
+                if (ra != rb) return Integer.compare(ra, rb);
+            }
             // The owner's own order first; tiles it does not know (new installs) follow by the rule below.
             int saved = Order.compare(savedRanks, a.component.flattenToShortString(), b.component.flattenToShortString());
             if (saved != 0) return saved;

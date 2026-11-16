@@ -23,6 +23,8 @@ import java.nio.charset.StandardCharsets;
  * "kodi_row_server": "http://192.168.1.10:8765",   NZB Command Center's phone server on the PC
  * "kodi_row_token": "...",              its access code (mobile_access_key.txt)
  * "kodi_row_size": 5,                   posters in the row (recently watched)
+ * "home_apps": ["com.netflix.ninja", "Prime Video", "YouTube", "Kodi"],   only these on Home, in order
+ *                                     (package names or labels; [] shows every app; default: these four)
  * "dock_tile_scale": 0.5,               the app tiles at half their usual size, in a compact centred row
  * "kodi_package": "org.xbmc.kodi",
  * "kodi_local_url": "http://127.0.0.1:8080", "kodi_local_user": "kodi", "kodi_local_password": ""
@@ -39,6 +41,8 @@ final class HomeExtras {
     final int kodiRowSize;
     /** The dock and grid tiles at this share of their usual size, 0.35 to 1 (smaller leaves the Kodi row more room). */
     final float dockTileScale;
+    /** The only apps on Home, in order (package names or labels); empty shows every app. */
+    final java.util.List<String> homeApps = new java.util.ArrayList<>();
 
     private HomeExtras(JSONObject j) {
         weather = j.optBoolean("weather", true);
@@ -55,6 +59,18 @@ final class HomeExtras {
         kodiLocalPassword = j.optString("kodi_local_password", "");
         kodiRowSize = Math.max(1, Math.min(30, j.optInt("kodi_row_size", 5)));
         kodiRow = j.optBoolean("kodi_row", true);
+        org.json.JSONArray home = j.optJSONArray("home_apps");
+        if (home == null) {
+            homeApps.add("com.netflix.ninja|Netflix");
+            homeApps.add("com.amazon.amazonvideo.livingroom|Prime Video");
+            homeApps.add("com.google.android.youtube.tv|YouTube");
+            homeApps.add(kodiPackage + "|Kodi");
+        } else {
+            for (int i = 0; i < home.length(); i++) {
+                String s = home.optString(i, "").trim();
+                if (!s.isEmpty()) homeApps.add(s);
+            }
+        }
         dockTileScale = (float) Math.max(0.35, Math.min(1.0, j.optDouble("dock_tile_scale", 0.5)));
     }
 

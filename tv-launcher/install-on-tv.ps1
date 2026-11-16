@@ -126,6 +126,7 @@ SetKey 'rows_below_dock' 0
 SetKey 'date_below_clock' $false   # clock and date on one line
 SetKey 'kodi_row_size' 5           # five posters: recently watched
 SetKey 'dock_tile_scale' 0.5       # small app tiles in a compact row, centred
+SetKey 'home_apps' @('com.netflix.ninja|Netflix', 'com.amazon.amazonvideo.livingroom|Prime Video', 'com.google.android.youtube.tv|YouTube', 'org.xbmc.kodi|Kodi')   # only these on Home; the rest are under the grid button
 SetKey 'kodi_row' $true
 SetKey 'kodi_row_server' $server
 SetKey 'kodi_row_token' $token

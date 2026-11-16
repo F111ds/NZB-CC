@@ -597,6 +597,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         extras = HomeExtras.load(this);
         AppAdapter.tileScale = extras.dockTileScale;
         AppAdapter.compactDock = cfg.singleRow && cfg.dockRow;
+        AppAdapter.homeApps = extras.homeApps;
         if (AppAdapter.compactDock && hero != null) {
             // The focused app's name centred above the centred dock, not at the screen's left edge.
             FrameLayout.LayoutParams hlp = (FrameLayout.LayoutParams) hero.getLayoutParams();
