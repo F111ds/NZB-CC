@@ -19,8 +19,10 @@ Needs: Python 3 (py launcher) and Network debugging (ADB) on the TV - the same a
 param(
     [Parameter(Mandatory = $true)][string]$TvHost,
     [int]$ServerPort = 8765,
-    [string]$Apk = "$PSScriptRoot\NZB-CC-TV-Launcher.apk"
+    [string]$Apk = ''
 )
+# Windows PowerShell can leave $PSScriptRoot empty inside param() defaults, so the APK path is set here.
+if (-not $Apk) { $Apk = Join-Path $PSScriptRoot 'NZB-CC-TV-Launcher.apk' }
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 $env:TV_HOST = $TvHost
