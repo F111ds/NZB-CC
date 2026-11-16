@@ -2587,12 +2587,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     }
 
     /**
-     * NZB-CC: the whole date on one short line beside the clock, "Sun, Nov 16" (or the language's own order,
-     * "dom, 16 nov"), so the top bar never cuts it off.
+     * NZB-CC: the whole date on one short line beside the clock, "Sunday, Nov 16" (or the language's own order,
+     * "domingo, 16 nov"), so the top bar never cuts it off.
      */
     private void oneLineDate() {
         TextClock date = findViewById(R.id.date);
-        String pattern = android.text.format.DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEdMMM");
+        String pattern = android.text.format.DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEEdMMM");
         date.setFormat12Hour(oneLine(pattern));
         date.setFormat24Hour(oneLine(pattern));
         date.setSingleLine(true);
