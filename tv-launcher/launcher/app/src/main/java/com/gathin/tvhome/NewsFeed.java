@@ -21,13 +21,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * NZB-CC: headlines for the news ticker, from the sources' own free RSS feeds (BBC News World and NPR News by
- * default; no account or key). Merged newest first; the last list is kept so the ticker shows at once and while
+ * NZB-CC: headlines for the news ticker, from the sources' own free RSS feeds (BBC News World, NPR News and
+ * Mexico News Daily by default; no account or key). Taken in turn from each source, newest first; the last list is kept so the ticker shows at once and while
  * offline. Read again every 20 minutes while Home is on screen.
  */
 final class NewsFeed {
     static final long REFRESH_MS = 20 * 60 * 1000L;
-    private static final int MAX = 24;
+    private static final int MAX = 30;
     private static final String PREFS = "news_feed";
 
     private final Context ctx;
@@ -67,23 +67,30 @@ final class NewsFeed {
     }
 
     private void read() {
-        List<Object[]> all = new ArrayList<>();   // {time, title}
+        List<List<Object[]>> perFeed = new ArrayList<>();   // each {time, title}, newest first
         int ok = 0;
         for (String url : feeds) {
             try {
-                all.addAll(fetch(url));
+                List<Object[]> items = fetch(url);
+                items.sort((a, b) -> Long.compare((Long) b[0], (Long) a[0]));
+                perFeed.add(items);
                 ok++;
             } catch (Exception ignored) {
                 // that source is down: the others still fill the ticker
             }
         }
-        all.sort((a, b) -> Long.compare((Long) b[0], (Long) a[0]));
+        // Taken in turn from each source, newest first, so no one source fills the ticker.
         List<String> titles = new ArrayList<>();
         Set<String> seen = new HashSet<>();
-        for (Object[] it : all) {
-            String t = (String) it[1];
-            if (seen.add(t.toLowerCase(Locale.ROOT))) titles.add(t);
-            if (titles.size() >= MAX) break;
+        for (int i = 0; titles.size() < MAX; i++) {
+            boolean any = false;
+            for (List<Object[]> items : perFeed) {
+                if (i >= items.size()) continue;
+                any = true;
+                String t = (String) items.get(i)[1];
+                if (seen.add(t.toLowerCase(Locale.ROOT)) && titles.size() < MAX) titles.add(t);
+            }
+            if (!any) break;
         }
         final boolean got = ok > 0 && !titles.isEmpty();
         long at = System.currentTimeMillis();

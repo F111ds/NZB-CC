@@ -26,7 +26,8 @@ import java.nio.charset.StandardCharsets;
  * "home_apps": ["com.netflix.ninja", "Prime Video", "YouTube", "Kodi"],   only these on Home, in order
  *                                     (package names or labels; [] shows every app; default: these four)
  * "fx": true, "fx_from": "USD", "fx_to": "MXN",   the exchange rate under the clock
- * "news": true, "news_feeds": ["https://feeds.bbci.co.uk/news/world/rss.xml", "https://feeds.npr.org/1001/rss.xml"],
+ * "news": true, "news_feeds": ["https://feeds.bbci.co.uk/news/world/rss.xml", "https://feeds.npr.org/1001/rss.xml",
+ *                                "https://mexiconewsdaily.com/feed/"],
  *                                     the scrolling headlines above the Kodi row
  * "dock_tile_scale": 0.5,               the app tiles at half their usual size, in a compact centred row
  * "kodi_package": "org.xbmc.kodi",
@@ -86,6 +87,7 @@ final class HomeExtras {
         if (nf == null) {
             newsFeeds.add("https://feeds.bbci.co.uk/news/world/rss.xml");
             newsFeeds.add("https://feeds.npr.org/1001/rss.xml");
+            newsFeeds.add("https://mexiconewsdaily.com/feed/");
         } else {
             for (int i = 0; i < nf.length(); i++) {
                 String u = nf.optString(i, "").trim();
