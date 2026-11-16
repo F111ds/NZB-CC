@@ -32,7 +32,11 @@ function Step($text) { Write-Host "`n== $text" -ForegroundColor Cyan }
 $py = '.\tools\venv\Scripts\python.exe'
 if (-not (Test-Path $py)) {
     Step 'Setting up the TV tools (once)'
-    py -3 -m venv tools\venv
+    # The py launcher can point at a Python that is gone (an old drive letter); fall back to python on PATH.
+    $made = $false
+    try { py -3 -m venv tools\venv 2>$null; $made = ($LASTEXITCODE -eq 0) -and (Test-Path $py) } catch { $made = $false }
+    if (-not $made) { python -m venv tools\venv }
+    if (-not (Test-Path $py)) { throw 'Could not create the Python environment (tried py and python). Install Python 3 from python.org and run this again. Nothing was changed on the TV.' }
     & .\tools\venv\Scripts\pip.exe install -q -r tools\requirements.txt
     if ($LASTEXITCODE -ne 0) { throw 'Installing the TV tools failed (see above). Nothing was changed on the TV.' }
 }
