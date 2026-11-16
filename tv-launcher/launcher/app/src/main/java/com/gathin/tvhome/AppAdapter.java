@@ -114,6 +114,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     static int tileHeightPx(int tileWidthPx) {
+        if (compactDock && iconsOnly) return Math.round(tileWidthPx * 0.75f);
         return Math.round(tileWidthPx * DESIGN_H_DP / DESIGN_W_DP);
     }
 
@@ -161,6 +162,11 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
      * from the grid's width less its usual 10dp sides, so that centring padding never feeds back into them.
      */
     static boolean compactDock = false;
+    /**
+     * NZB-CC dock_icons_only: each app's own icon straight on the dock glass, with no tile behind it. The cell is
+     * a little taller than a banner tile (3:4 of its width) so the icon can be larger.
+     */
+    static boolean iconsOnly = false;
     /**
      * NZB-CC home_apps: when not empty, only these apps are on Home, in this order. Each entry matches a package
      * name or an app's label (case ignored); "a|b" accepts either. Every other app stays in the App library (the grid button).
@@ -290,7 +296,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.tileMenu = cfg.tileMenu;
         this.appLabels = cfg.appLabels;
         this.appBanners = cfg.appBanners;
-        this.uniformTiles = cfg.uniformTiles;
+        this.uniformTiles = cfg.uniformTiles || (compactDock && iconsOnly);
         // Tiles keep their identity across reload(), so a focused tile stays on its app instead of
         // its view being rebound to whatever app now sits in that slot.
         setHasStableIds(true);
@@ -468,7 +474,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         int inner = sizingWidthPx(width, parent.getPaddingLeft(), parent.getPaddingRight(), density);
         int w = tileWidthPx(inner, parent.getHeight(), dockSize, rowsBelowDock, dockTitle, dockRow, density), h = tileHeightPx(w);
         View card = v.findViewById(R.id.card);
-        if (compactDock) {
+        if (compactDock && !iconsOnly) {
             // NZB-CC: the app's banner drawn 30% larger than its tile (the card clips it to its rounded shape),
             // so the logo in the middle of the banner reads from the couch at the small tile size.
             View bannerView = v.findViewById(R.id.banner);
@@ -496,7 +502,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             // tvOS-style tile: a large centred mark, no caption inside the card.
             View icon = v.findViewById(R.id.icon);
             FrameLayout.LayoutParams iconLp = (FrameLayout.LayoutParams) icon.getLayoutParams();
-            iconLp.width = iconLp.height = Math.round(h * ICON_SHARE);
+            iconLp.width = iconLp.height = Math.round(h * (compactDock && iconsOnly ? 0.94f : ICON_SHARE));
             iconLp.bottomMargin = 0;
             icon.setLayoutParams(iconLp);
         } else if (h < Math.round(DESIGN_H_DP * density)) {
@@ -550,8 +556,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         // nothing on every frame; keep it under banners with transparent parts and under icon tiles.
         h.card.setBackground(e.banner != null && e.banner.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
         if (uniformTiles && e.banner == null) {
-            if (e.backdrop == null) e.backdrop = backdrop(e.icon, ambientColorAt(position));
-            h.card.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, e.backdrop));
+            if (compactDock && iconsOnly) {
+                h.card.setBackground(null);   // just the icon on the glass
+            } else {
+                if (e.backdrop == null) e.backdrop = backdrop(e.icon, ambientColorAt(position));
+                h.card.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, e.backdrop));
+            }
         }
         if (e.banner != null) {
             h.icon.setImageDrawable(null);

@@ -601,6 +601,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         extras = HomeExtras.load(this);
         AppAdapter.tileScale = extras.dockTileScale;
         AppAdapter.compactDock = cfg.singleRow && cfg.dockRow;
+        AppAdapter.iconsOnly = extras.dockIconsOnly;
         SkyView.placeLat = extras.weatherLat;
         SkyView.placeLon = extras.weatherLon;
         sky.setIntensity(cfg.skyIntensity);   // draw again with the real sunrise and sunset

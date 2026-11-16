@@ -150,6 +150,7 @@ SetKey 'sky_intensity' 70        # time-of-day sky behind Home (0 turns it off)
 SetKey 'news' $false              # news ticker off (true turns it back on)
 SetKey 'icon_only_inputs' $true    # Inputs as a round icon
 SetKey 'vpn_app' 'com.nordvpn.android'   # the VPN lock: closed green while NordVPN is connected, open red while it is off
+SetKey 'dock_icons_only' $true    # the dock shows app icons alone on the glass
 SetKey 'kodi_row' $true
 SetKey 'kodi_row_server' $server
 SetKey 'kodi_row_token' $token

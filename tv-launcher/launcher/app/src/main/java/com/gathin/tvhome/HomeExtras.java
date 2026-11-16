@@ -45,6 +45,8 @@ final class HomeExtras {
     final int kodiRowSize;
     /** The dock and grid tiles at this share of their usual size, 0.35 to 1 (smaller leaves the Kodi row more room). */
     final float dockTileScale;
+    /** The dock shows each app's icon alone on the glass, no tile ("dock_icons_only", on by default). */
+    final boolean dockIconsOnly;
     /** The exchange rate under the clock ("fx": true), from fx_from to fx_to (USD to MXN by default). */
     final boolean fx;
     /** The news ticker above the Kodi row ("news": true) and its RSS feeds (BBC News World and NPR News by default). */
@@ -98,6 +100,7 @@ final class HomeExtras {
         String to = j.optString("fx_to", "MXN").trim().toUpperCase(java.util.Locale.ROOT);
         fxFrom = from.matches("[A-Z]{3}") ? from : "USD";
         fxTo = to.matches("[A-Z]{3}") ? to : "MXN";
+        dockIconsOnly = j.optBoolean("dock_icons_only", true);
         dockTileScale = (float) Math.max(0.35, Math.min(1.0, j.optDouble("dock_tile_scale", 0.5)));
     }
 
