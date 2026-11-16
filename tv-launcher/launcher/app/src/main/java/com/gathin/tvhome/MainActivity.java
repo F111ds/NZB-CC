@@ -3109,6 +3109,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             y += tickerH + gap;
         }
         if (!kodi) return;
+        if (!news) {
+            // NZB-CC: the same space above "Recently watched" (from the header) as below the posters (to the dock's
+            // top edge), measured from what shows: the shelf's 9dp top padding and its 10dp under the posters
+            // (2dp padding + 8dp card margin) are left out. Never so low that the app's name above the dock
+            // (showHero: 40dp above the dock) touches the posters.
+            int visibleH = shown + shelfExtra - (int) (19 * density);
+            int visibleTop = top + Math.max(minGap, (dockTop - top - visibleH) / 2);
+            int heroTop = dockTop - (int) (40 * density) - heroH;
+            int over = visibleTop + visibleH - (heroTop - (int) (6 * density));
+            if (over > 0) visibleTop = Math.max(top + minGap, visibleTop - over);
+            y = visibleTop - (int) (9 * density);
+        }
         kodiBaseY = y;
         int shift = !singleRow && grid.canScrollVertically(-1) ? grid.computeVerticalScrollOffset() : 0;
         kodiBlock.setY(kodiBaseY - shift);
