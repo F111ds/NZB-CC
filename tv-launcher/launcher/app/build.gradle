@@ -13,8 +13,8 @@ android {
         applicationId providers.gradleProperty('launcherApplicationId').getOrElse('com.gathin.tvhome')
         minSdk 26
         targetSdk 34
-        versionCode 1027   // above any upstream build, so it installs over the launcher already on the TV
-        versionName '3.5-nzbcc.27'
+        versionCode 1028   // above any upstream build, so it installs over the launcher already on the TV
+        versionName '3.5-nzbcc.28'
     }
 
     // NZB-CC build: one fixed key kept with the source, so every rebuild installs over the last one on the TV.
