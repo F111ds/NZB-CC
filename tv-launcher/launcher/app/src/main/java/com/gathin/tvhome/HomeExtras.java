@@ -82,7 +82,7 @@ final class HomeExtras {
             }
         }
         fx = j.optBoolean("fx", true);
-        news = j.optBoolean("news", true);
+        news = j.optBoolean("news", false);   // off: the owner found it too busy; "news": true brings it back
         org.json.JSONArray nf = j.optJSONArray("news_feeds");
         if (nf == null) {
             newsFeeds.add("https://feeds.bbci.co.uk/news/world/rss.xml");
