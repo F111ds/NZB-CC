@@ -602,7 +602,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         kodiCount = findViewById(R.id.kodiCount);
         kodiFocusTitle = findViewById(R.id.kodiFocusTitle);
         kodiFocusMeta = findViewById(R.id.kodiFocusMeta);
-        kodiRow = new KodiRow(this, extras, handler, findViewById(R.id.kodiRow), this);
+        RecyclerView kodiList = findViewById(R.id.kodiRow);   // not in every layout variant (layout-iw)
+        kodiRow = kodiList == null || kodiBlock == null ? null : new KodiRow(this, extras, handler, kodiList, this);
         // The rotation runs on the clock that never jumps: setting the TV's time must not stall or stretch a turn.
         rotationStart = SystemClock.elapsedRealtime();
         showStats = cfg.showStats;
@@ -2904,8 +2905,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     // ---- weather and Kodi row (this build's additions) -------------------------------------------
 
-    /** "☁ 22° · H 24° L 10°" at the start of the top bar; gone until there is a reading. */
+    /** "☁ 22° · H 24° L 10°" on a line under the date; gone until there is a reading. */
     private void updateWeatherPill() {
+        if (weatherPill == null) return;
         boolean on = weatherNow != null && weatherNow.hasReading();
         if (on) weatherPill.setText(weatherNow.pill);
         weatherPill.setVisibility(on ? View.VISIBLE : View.GONE);
