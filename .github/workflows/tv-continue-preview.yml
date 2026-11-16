@@ -1,6 +1,6 @@
-# Builds the TV launcher's cinema preview (a separate app, com.gathin.tvhome.preview, that installs beside the
-# launcher) and commits the APK to tv-launcher/NZB-CC-Cinema-Preview.apk on the same branch.
-name: TV cinema preview APK
+# Builds the TV launcher Continue preview (a separate app, com.gathin.tvhome.preview, that installs beside the
+# launcher) and commits the APK to tv-launcher/NZB-CC-Continue-Preview.apk on the same branch.
+name: TV Continue preview APK
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
     branches: ['claude/cinema-preview']
     paths:
       - 'tv-launcher/launcher/**'
-      - '.github/workflows/tv-cinema-preview.yml'
+      - '.github/workflows/tv-continue-preview.yml'
 
 permissions:
   contents: write
@@ -30,13 +30,13 @@ jobs:
         run: bash gradlew assembleRelease -PlauncherApplicationId=com.gathin.tvhome.preview --no-daemon --console=plain
       - name: Keep the APK with the branch
         run: |
-          cp tv-launcher/launcher/app/build/outputs/apk/release/app-release.apk tv-launcher/NZB-CC-Cinema-Preview.apk
+          cp tv-launcher/launcher/app/build/outputs/apk/release/app-release.apk tv-launcher/NZB-CC-Continue-Preview.apk
           git config user.name "github-actions[bot]"
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
-          git add tv-launcher/NZB-CC-Cinema-Preview.apk
-          git commit -m "TV cinema preview: built APK [skip ci]" || echo "no change"
+          git add tv-launcher/NZB-CC-Continue-Preview.apk
+          git commit -m "TV Continue preview: built APK [skip ci]" || echo "no change"
           git push
       - uses: actions/upload-artifact@v4
         with:
-          name: NZB-CC-Cinema-Preview
-          path: tv-launcher/NZB-CC-Cinema-Preview.apk
+          name: NZB-CC-Continue-Preview
+          path: tv-launcher/NZB-CC-Continue-Preview.apk
