@@ -23,7 +23,7 @@ import java.nio.charset.StandardCharsets;
  * "kodi_row_server": "http://192.168.1.10:8765",   NZB Command Center's phone server on the PC
  * "kodi_row_token": "...",              its access code (mobile_access_key.txt)
  * "kodi_row_size": 12,
- * "dock_tile_scale": 0.8,               the app tiles at 80 % of their usual size
+ * "dock_tile_scale": 0.75,              the app tiles at 75 % of their usual size
  * "kodi_package": "org.xbmc.kodi",
  * "kodi_local_url": "http://127.0.0.1:8080", "kodi_local_user": "kodi", "kodi_local_password": ""
  * </pre>
@@ -55,7 +55,7 @@ final class HomeExtras {
         kodiLocalPassword = j.optString("kodi_local_password", "");
         kodiRowSize = Math.max(4, Math.min(30, j.optInt("kodi_row_size", 12)));
         kodiRow = j.optBoolean("kodi_row", true);
-        dockTileScale = (float) Math.max(0.6, Math.min(1.0, j.optDouble("dock_tile_scale", 0.8)));
+        dockTileScale = (float) Math.max(0.6, Math.min(1.0, j.optDouble("dock_tile_scale", 0.75)));
     }
 
     private static String trimSlash(String s) {

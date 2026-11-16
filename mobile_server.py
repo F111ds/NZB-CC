@@ -1996,6 +1996,25 @@ def tv_kodi_recent(limit: int = TV_ROW_SIZE) -> list[dict]:
     return out
 
 
+def tv_kodi_find(item: dict) -> dict | None:
+    """The movie in Kodi's library that a download is, as a row entry, or None."""
+    try:
+        res = _kdict(kodi_call("VideoLibrary.GetMovies", {"properties": TV_KODI_PROPS, "filter": {
+            "field": "title", "operator": "contains", "value": item["title"]}, "limits": {"start": 0, "end": 10}}, timeout=8))
+    except (UpstreamError, ConfigError):
+        return None
+    for mv in res.get("movies") or []:
+        if isinstance(mv, dict) and _same_movie(item, mv) and to_int(mv.get("movieid")) > 0:
+            art = _kdict(mv.get("art"))
+            quality, _hdr = video_quality(mv.get("streamdetails"))
+            return {"id": f"k{to_int(mv.get('movieid'))}", "movieid": to_int(mv.get("movieid")),
+                    "title": str(mv.get("title") or item["title"]), "year": to_int(mv.get("year")) or None,
+                    "runtime": to_int(mv.get("runtime")) // 60, "quality": "4K" if quality == "2160p" else quality,
+                    "added": item.get("added", 0.0), "watched": to_int(mv.get("playcount")) > 0,
+                    "file": str(mv.get("file") or ""), "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail"))}
+    return None
+
+
 def _same_movie(a: dict, b: dict) -> bool:
     if _norm_title(a.get("title")) != _norm_title(b.get("title")):
         return False
@@ -2063,8 +2082,13 @@ def tv_refresh() -> dict:
             if pair and pair not in path_map:
                 path_map.append(pair)
         merged = list(kodi_items)
-        for s in sab_items:
-            if any(_same_movie(s, k) for k in kodi_items):
+        for s in sab_items:     # newest first, so a re-download replaces nothing and adds no second card
+            if any(_same_movie(s, k) for k in merged):
+                continue
+            hit = tv_kodi_find(s) if kodi_ok else None
+            if hit:             # Kodi has it, just not among its newest: use Kodi's poster and id
+                hit["added"] = s["added"]
+                merged.append(hit)
                 continue
             video = tv_video_file(s["storage"])
             s["file"] = tv_map_path(video, path_map) if video else ""

@@ -803,17 +803,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             });
         }
 
-        // The Kodi shelf rides up and fades when the grid scrolls below the dock.
-        grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
-            @Override
-            public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
-                if (kodiBlock.getVisibility() != View.VISIBLE) return;
-                int shift = rv.canScrollVertically(-1) ? rv.computeVerticalScrollOffset() : 0;
-                kodiBlock.setTranslationY(-shift);
-                kodiBlock.setAlpha(Math.max(0f, 1f - shift / (float) Math.max(1, kodiBlock.getHeight() / 2)));
-            }
-        });
-
         // Liquid feel: soft springs on the highlight's position.
         springX = new SpringAnimation(glass, new FloatPropertyCompat<View>("glassContentX") {
             @Override
@@ -1849,6 +1838,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     @Override
     public void onTileFocused(int position, View card) {
+        // The Kodi shelf shows with the dock and steps aside for the rows below it, which scroll up into its place.
+        if (kodiBlock != null && kodiBlock.getVisibility() == View.VISIBLE) {
+            float want = position < COLUMNS ? 1f : 0f;
+            if (kodiBlock.getAlpha() != want) kodiBlock.animate().alpha(want).setDuration(160).start();
+        }
         lastFocused = position;
         lastFocusedKey = adapter.keyAt(position);
         // Focus restored before the first layout (cold start): the tile has no size yet, and the glass

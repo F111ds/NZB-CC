@@ -18,7 +18,8 @@ Needs: Python 3 (py launcher) and Network debugging (ADB) on the TV - the same a
 param(
     [Parameter(Mandatory = $true)][string]$TvHost,
     [int]$ServerPort = 8765,
-    [string]$Apk = ''
+    [string]$Apk = '',
+    [switch]$SettingsOnly
 )
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell 5.1 can leave $PSScriptRoot empty in a parameter default, so work the folder out here.
@@ -88,6 +89,9 @@ if ($LASTEXITCODE -eq 0 -and (Test-Path $backup)) {
 }
 
 # ---- install --------------------------------------------------------------------------------------
+if ($SettingsOnly) {
+    Write-Host 'Settings only: the launcher already on the TV is kept.'
+} else {
 Step 'Installing the launcher'
 if (-not (Test-Path $Apk)) { throw "Missing $Apk" }
 & $py -I tools\b64push.py $Apk /data/local/tmp/nzbcc-launcher.apk
@@ -109,6 +113,7 @@ if ($out -match 'INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match') {
 }
 Tv 'rm -f /data/local/tmp/nzbcc-launcher.apk' | Out-Null
 if ($out -notmatch 'Success') { throw 'pm install failed (see above).' }
+}
 
 # ---- settings: wallpaper off, glass dock, Kodi row -----------------------------------------------
 Step 'Turning the wallpaper off and pointing the Kodi row at this PC'
@@ -121,6 +126,8 @@ function SetKey($name, $value) {
 SetKey 'wallpaper' $false
 SetKey 'background_color' '#070B14'
 SetKey 'dock_glass' $true
+SetKey 'columns' 7
+SetKey 'dock_tile_scale' 0.75
 SetKey 'kodi_row' $true
 SetKey 'kodi_row_server' $server
 SetKey 'kodi_row_token' $token

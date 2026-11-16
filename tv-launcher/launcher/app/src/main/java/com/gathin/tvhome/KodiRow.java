@@ -504,7 +504,9 @@ final class KodiRow {
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setAllCaps(true);
-        title.setMaxLines(3);
+        title.setMaxLines(4);
+        title.setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE);
+        title.setBreakStrategy(android.text.Layout.BREAK_STRATEGY_SIMPLE);
         title.setGravity(Gravity.BOTTOM | Gravity.START);
         title.setPadding(dp(7), dp(7), dp(7), dp(8));
         card.addView(title, new FrameLayout.LayoutParams(-1, -1));
