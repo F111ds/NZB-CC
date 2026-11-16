@@ -46,14 +46,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * The Kodi row above the dock: the newest movies with their posters, one press to play.
+ * The Kodi row above the dock: what was watched last in Kodi (movies and episodes), each poster with a bar
+ * showing how far in you are; one press resumes it.
  *
- * <p>The list comes from NZB Command Center's phone server on the PC (GET /api/tv/recent), which
- * knows the newest downloads and keeps Kodi's list while Kodi is closed. When the PC doesn't answer,
- * Kodi on this TV is asked directly (only works while it runs). Either way the last list and its
- * posters are saved here, so the row is on screen at once after the TV is switched on.
+ * <p>The list comes from NZB Command Center's phone server on the PC (GET /api/tv/watched), which keeps
+ * Kodi's list while Kodi is closed. When the PC doesn't answer, Kodi on this TV is asked directly (only
+ * works while it runs). Either way the last list and its posters are saved here, so the row is on screen
+ * at once after the TV is switched on. Anything without a poster is left out.
  *
- * <p>OK opens Kodi and plays the movie: the PC waits for Kodi to start and tells it what to play
+ * <p>OK opens Kodi and resumes the item: the PC waits for Kodi to start and tells it what to play
  * (POST /api/tv/play); without the PC, this app does the same through Kodi's own JSON-RPC.
  */
 final class KodiRow {
@@ -73,19 +74,35 @@ final class KodiRow {
     }
 
     static final class Item {
-        String id = "", title = "", quality = "", file = "", posterUrl = "", artRef = "";
-        int year, runtime, movieid;
+        String id = "", title = "", quality = "", file = "", posterUrl = "", artRef = "", episodeTitle = "";
+        int year, runtime, movieid, episodeid, season, episode, remaining;
         boolean isNew, watched;
+        /** How far in, 0 to 1 (1 when finished). */
+        float progress;
         File poster;
+
+        boolean isEpisode() {
+            return episodeid > 0;
+        }
 
         String meta() {
             StringBuilder b = new StringBuilder();
-            if (year > 0) b.append(year);
-            if (runtime > 0) b.append(b.length() > 0 ? " · " : "").append(runtime / 60 > 0 ? (runtime / 60) + "h " : "")
-                    .append(String.format(Locale.US, "%02dm", runtime % 60));
+            if (isEpisode()) {
+                if (season > 0 || episode > 0) b.append(String.format(Locale.US, "S%d E%d", season, episode));
+                if (!episodeTitle.isEmpty()) b.append(b.length() > 0 ? " · " : "").append(episodeTitle);
+            } else if (year > 0) {
+                b.append(year);
+            }
+            boolean partway = progress > 0f && progress < 0.97f;
+            if (partway && remaining > 0) b.append(b.length() > 0 ? " · " : "").append(duration(remaining)).append(" left");
+            else if (!partway && runtime > 0) b.append(b.length() > 0 ? " · " : "").append(duration(runtime));
             if (!quality.isEmpty()) b.append(b.length() > 0 ? " · " : "").append(quality);
-            b.append(b.length() > 0 ? " · " : "").append("OK to play in Kodi");
+            b.append(b.length() > 0 ? " · " : "").append(partway ? "OK to resume in Kodi" : "OK to play in Kodi");
             return b.toString();
+        }
+
+        private static String duration(int minutes) {
+            return (minutes / 60 > 0 ? (minutes / 60) + "h " : "") + String.format(Locale.US, "%02dm", minutes % 60);
         }
     }
 
@@ -199,7 +216,7 @@ final class KodiRow {
     }
 
     private List<Item> readFromPc() throws Exception {
-        JSONObject j = new JSONObject(new String(http("GET", extras.kodiServer + "/api/tv/recent", null, true, 8000),
+        JSONObject j = new JSONObject(new String(http("GET", extras.kodiServer + "/api/tv/watched", null, true, 8000),
                 StandardCharsets.UTF_8));
         JSONArray a = j.getJSONArray("items");
         List<Item> out = new ArrayList<>();
@@ -213,55 +230,92 @@ final class KodiRow {
                 try {
                     writeFile(it.poster, http("GET", extras.kodiServer + it.posterUrl, null, true, 10000));
                 } catch (IOException ignored) {
-                    // The poster can come next time; the card shows the title meanwhile.
+                    // no poster this time: left out of the row until it has one
                 }
             }
-            out.add(it);
+            if (it.poster.isFile()) out.add(it);
         }
         return out;
     }
 
+    /** Kodi on this TV, asked directly: movies and episodes started or finished, the last one played first. */
     private List<Item> readFromKodi() throws Exception {
-        JSONObject params = new JSONObject()
+        JSONObject seen = new JSONObject().put("or", new JSONArray()
+                .put(new JSONObject().put("field", "inprogress").put("operator", "true").put("value", ""))
+                .put(new JSONObject().put("field", "playcount").put("operator", "greaterthan").put("value", "0")));
+        JSONObject sort = new JSONObject().put("method", "lastplayed").put("order", "descending");
+        JSONObject limits = new JSONObject().put("start", 0).put("end", extras.kodiRowSize * 3);
+        JSONObject movies = rpc("VideoLibrary.GetMovies", new JSONObject()
                 .put("properties", new JSONArray().put("title").put("year").put("runtime").put("file").put("art")
-                        .put("playcount").put("dateadded"))
-                .put("limits", new JSONObject().put("start", 0).put("end", extras.kodiRowSize));
-        JSONObject res = rpc("VideoLibrary.GetRecentlyAddedMovies", params, 6000);
-        JSONArray movies = res.optJSONArray("movies");
-        List<Item> out = new ArrayList<>();
-        if (movies == null) return out;
-        long weekAgo = System.currentTimeMillis() - 3 * 86400_000L;
-        java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
-        for (int i = 0; i < movies.length(); i++) {
-            JSONObject m = movies.getJSONObject(i);
+                        .put("playcount").put("resume").put("lastplayed"))
+                .put("filter", seen).put("sort", sort).put("limits", limits), 6000);
+        JSONObject episodes = rpc("VideoLibrary.GetEpisodes", new JSONObject()
+                .put("properties", new JSONArray().put("title").put("showtitle").put("season").put("episode")
+                        .put("runtime").put("file").put("art").put("playcount").put("resume").put("lastplayed"))
+                .put("filter", seen).put("sort", sort).put("limits", limits), 6000);
+        List<Object[]> all = new ArrayList<>();   // {lastplayed, item}
+        JSONArray m = movies.optJSONArray("movies");
+        for (int i = 0; m != null && i < m.length(); i++) {
+            JSONObject o = m.getJSONObject(i);
             Item it = new Item();
-            it.movieid = m.optInt("movieid");
-            it.id = "k" + it.movieid;
-            it.title = m.optString("title", "Untitled");
-            it.year = m.optInt("year");
-            it.runtime = m.optInt("runtime") / 60;
-            it.file = m.optString("file", "");
-            it.watched = m.optInt("playcount") > 0;
-            try {
-                java.util.Date d = f.parse(m.optString("dateadded", ""));
-                it.isNew = !it.watched && d != null && d.getTime() >= weekAgo;
-            } catch (java.text.ParseException ignored) {
-                it.isNew = false;
-            }
-            JSONObject art = m.optJSONObject("art");
+            it.movieid = o.optInt("movieid");
+            it.id = "m" + it.movieid;
+            it.title = o.optString("title", "Untitled");
+            it.year = o.optInt("year");
+            JSONObject art = o.optJSONObject("art");
             it.artRef = art == null ? "" : art.optString("poster", "");
+            fillProgress(it, o);
+            all.add(new Object[]{o.optString("lastplayed", ""), it});
+        }
+        JSONArray e = episodes.optJSONArray("episodes");
+        for (int i = 0; e != null && i < e.length(); i++) {
+            JSONObject o = e.getJSONObject(i);
+            Item it = new Item();
+            it.episodeid = o.optInt("episodeid");
+            it.id = "e" + it.episodeid;
+            it.title = o.optString("showtitle", "");
+            it.episodeTitle = o.optString("title", "");
+            if (it.title.isEmpty()) it.title = it.episodeTitle;
+            it.season = o.optInt("season");
+            it.episode = o.optInt("episode");
+            JSONObject art = o.optJSONObject("art");
+            it.artRef = art == null ? "" : art.optString("tvshow.poster", art.optString("season.poster", ""));
+            fillProgress(it, o);
+            all.add(new Object[]{o.optString("lastplayed", ""), it});
+        }
+        all.sort((a, b) -> ((String) b[0]).compareTo((String) a[0]));   // "yyyy-MM-dd HH:mm:ss" sorts as text
+        List<Item> out = new ArrayList<>();
+        for (Object[] pair : all) {
+            if (out.size() >= extras.kodiRowSize) break;
+            Item it = (Item) pair[1];
             it.poster = posterFile(it.id);
             if (!it.artRef.isEmpty() && !it.poster.isFile()) {
                 try {
                     writeFile(it.poster, http("GET", extras.kodiLocalUrl + "/image/"
                             + URLEncoder.encode(it.artRef, "UTF-8"), null, false, 10000));
                 } catch (IOException ignored) {
-                    // shown with its title until the poster can be fetched
+                    // left out until the poster can be fetched
                 }
             }
-            out.add(it);
+            if (it.poster.isFile()) out.add(it);
         }
         return out;
+    }
+
+    private static void fillProgress(Item it, JSONObject o) {
+        it.file = o.optString("file", "");
+        it.watched = o.optInt("playcount") > 0;
+        JSONObject resume = o.optJSONObject("resume");
+        double pos = resume == null ? 0 : resume.optDouble("position", 0);
+        double total = resume == null ? 0 : resume.optDouble("total", 0);
+        if (total <= 0) total = o.optInt("runtime");
+        it.runtime = (int) Math.round(total / 60);
+        if (pos > 0 && total > 0) {
+            it.progress = (float) Math.min(1, pos / total);
+            it.remaining = (int) Math.round((total - pos) / 60);
+        } else {
+            it.progress = it.watched ? 1f : 0f;
+        }
     }
 
     private static Item fromJson(JSONObject o) {
@@ -274,8 +328,15 @@ final class KodiRow {
         it.isNew = o.optBoolean("new");
         it.watched = o.optBoolean("watched");
         it.movieid = o.optInt("movieid");
+        it.episodeid = o.optInt("episodeid");
+        it.season = o.optInt("season");
+        it.episode = o.optInt("episode");
+        it.episodeTitle = o.optString("episode_title", "");
+        it.progress = (float) Math.max(0, Math.min(1, o.optDouble("progress", it.watched ? 1 : 0)));
+        it.remaining = o.optInt("remaining");
         it.file = o.optString("file", "");
         if ("null".equals(it.file)) it.file = "";
+        if ("null".equals(it.episodeTitle)) it.episodeTitle = "";
         if ("null".equals(it.quality)) it.quality = "";
         return it;
     }
@@ -292,7 +353,9 @@ final class KodiRow {
                 keep.add(it.id + ".img");
                 a.put(new JSONObject().put("id", it.id).put("title", it.title).put("year", it.year)
                         .put("runtime", it.runtime).put("quality", it.quality).put("new", it.isNew)
-                        .put("watched", it.watched).put("movieid", it.movieid).put("file", it.file));
+                        .put("watched", it.watched).put("movieid", it.movieid).put("file", it.file)
+                        .put("episodeid", it.episodeid).put("season", it.season).put("episode", it.episode)
+                        .put("episode_title", it.episodeTitle).put("progress", it.progress).put("remaining", it.remaining));
             }
             writeFile(saved, new JSONObject().put("items", a).toString().getBytes(StandardCharsets.UTF_8));
             File[] old = posters.listFiles();
@@ -311,7 +374,7 @@ final class KodiRow {
                 Item it = fromJson(a.getJSONObject(i));
                 if (it.id.isEmpty()) continue;
                 it.poster = posterFile(it.id);
-                out.add(it);
+                if (it.poster.isFile() && out.size() < extras.kodiRowSize) out.add(it);
             }
         } catch (Exception ignored) {
             // nothing saved yet
@@ -397,7 +460,8 @@ final class KodiRow {
             return;
         }
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        Toast.makeText(ctx, "Starting “" + it.title + "” in Kodi…", Toast.LENGTH_SHORT).show();
+        boolean partway = it.progress > 0f && it.progress < 0.97f;
+        Toast.makeText(ctx, (partway ? "Resuming “" : "Starting “") + it.title + "” in Kodi…", Toast.LENGTH_SHORT).show();
         ctx.startActivity(launch);
         final Context app = ctx.getApplicationContext();
         player.execute(() -> {
@@ -433,7 +497,8 @@ final class KodiRow {
 
     private void playHere(Item it) throws Exception {
         JSONObject item;
-        if (it.movieid > 0) item = new JSONObject().put("movieid", it.movieid);
+        if (it.episodeid > 0) item = new JSONObject().put("episodeid", it.episodeid);
+        else if (it.movieid > 0) item = new JSONObject().put("movieid", it.movieid);
         else if (!it.file.isEmpty()) item = new JSONObject().put("file", it.file);
         else throw new IOException("Kodi doesn't have it yet, and the PC didn't answer");
         long deadline = System.currentTimeMillis() + PLAY_WAIT_MS;
@@ -446,7 +511,8 @@ final class KodiRow {
                 Thread.sleep(1500);
             }
         }
-        rpc("Player.Open", new JSONObject().put("item", item), 15000);
+        rpc("Player.Open", new JSONObject().put("item", item)
+                .put("options", new JSONObject().put("resume", it.progress > 0f && it.progress < 0.97f)), 15000);
     }
 
     void shutdown() {
@@ -540,6 +606,14 @@ final class KodiRow {
         slp.setMargins(0, dp(5), dp(5), 0);
         card.addView(seen, slp);
 
+        // How far in: a thin track along the poster's foot, filled to the share watched.
+        FrameLayout track = new FrameLayout(ctx);
+        track.setBackgroundColor(0x8C000000);
+        View fill = new View(ctx);
+        fill.setBackgroundColor(0xFF17B2E7);
+        track.addView(fill, new FrameLayout.LayoutParams(0, -1, Gravity.START));
+        card.addView(track, new FrameLayout.LayoutParams(-1, dp(4), Gravity.BOTTOM));
+
         View ring = new View(ctx);
         GradientDrawable rd = new GradientDrawable();
         rd.setCornerRadius(dp(8));
@@ -550,12 +624,12 @@ final class KodiRow {
         card.addView(ring, new FrameLayout.LayoutParams(-1, -1));
 
         cell.addView(card);
-        cell.setTag(new View[]{card, title, img, badge, seen, ring});
+        cell.setTag(new View[]{card, title, img, badge, seen, ring, track, fill});
         return cell;
     }
 
     private final class Holder extends RecyclerView.ViewHolder {
-        final View card, ring, badge, seen;
+        final View card, ring, badge, seen, track, fill;
         final TextView title;
         final ImageView img;
         Item item;
@@ -569,6 +643,8 @@ final class KodiRow {
             badge = v[3];
             seen = v[4];
             ring = v[5];
+            track = v[6];
+            fill = v[7];
             cell.setOnFocusChangeListener((view, has) -> {
                 float s = has ? 1.1f : 1f;
                 card.animate().scaleX(s).scaleY(s).translationZ(has ? dp(6) : 0).setDuration(140).start();
@@ -607,14 +683,17 @@ final class KodiRow {
             item = it;
             ViewGroup.MarginLayoutParams lp = new ViewGroup.MarginLayoutParams(posterW, posterH);
             int gap = dp(12);
-            lp.setMargins(position == 0 ? dp(6) : gap / 2, dp(8), gap / 2, dp(8));
+            lp.setMargins(gap / 2, dp(8), gap / 2, dp(8));
             itemView.setLayoutParams(new RecyclerView.LayoutParams(lp));
             card.setLayoutParams(new FrameLayout.LayoutParams(posterW, posterH));
             card.setPivotX(posterW / 2f);
             card.setPivotY(posterH / 2f);
             title.setText(it.title);
-            badge.setVisibility(it.isNew ? View.VISIBLE : View.GONE);
-            seen.setVisibility(!it.isNew && it.watched ? View.VISIBLE : View.GONE);
+            badge.setVisibility(View.GONE);
+            seen.setVisibility(it.progress >= 0.97f ? View.VISIBLE : View.GONE);
+            track.setVisibility(it.progress > 0f ? View.VISIBLE : View.GONE);
+            fill.getLayoutParams().width = Math.round(posterW * Math.min(1f, it.progress));
+            fill.requestLayout();
             Bitmap bm = null;
             if (it.poster != null && it.poster.isFile()) {
                 BitmapFactory.Options o = new BitmapFactory.Options();

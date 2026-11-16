@@ -19,10 +19,10 @@ import java.nio.charset.StandardCharsets;
  * "weather_place": "Querétaro City",    the name shown
  * "weather_lat": 20.5888, "weather_lon": -100.3899,
  * "weather_unit": "c",                  "f" for Fahrenheit
- * "kodi_row": true,                     the Kodi row above the dock
+ * "kodi_row": true,                     the Kodi row (recently watched) above the dock
  * "kodi_row_server": "http://192.168.1.10:8765",   NZB Command Center's phone server on the PC
  * "kodi_row_token": "...",              its access code (mobile_access_key.txt)
- * "kodi_row_size": 12,
+ * "kodi_row_size": 5,                   posters in the row (recently watched)
  * "dock_tile_scale": 0.8,               the app tiles at 80 % of their usual size
  * "kodi_package": "org.xbmc.kodi",
  * "kodi_local_url": "http://127.0.0.1:8080", "kodi_local_user": "kodi", "kodi_local_password": ""
@@ -53,7 +53,7 @@ final class HomeExtras {
         kodiLocalUrl = trimSlash(j.optString("kodi_local_url", "http://127.0.0.1:8080"));
         kodiLocalUser = j.optString("kodi_local_user", "kodi");
         kodiLocalPassword = j.optString("kodi_local_password", "");
-        kodiRowSize = Math.max(4, Math.min(30, j.optInt("kodi_row_size", 12)));
+        kodiRowSize = Math.max(1, Math.min(30, j.optInt("kodi_row_size", 5)));
         kodiRow = j.optBoolean("kodi_row", true);
         dockTileScale = (float) Math.max(0.6, Math.min(1.0, j.optDouble("dock_tile_scale", 0.8)));
     }

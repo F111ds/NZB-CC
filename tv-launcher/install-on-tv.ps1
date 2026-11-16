@@ -10,7 +10,8 @@ What it does, in order:
   1. checks the phone server (mobile_server.py) answers on this PC, and reads its access code
   2. saves a copy of the TV's current launcher settings (config.json) in .\backup
   3. installs NZB-CC-TV-Launcher.apk over the launcher on the TV
-  4. turns the wallpaper off, turns on the glass dock, and points the Kodi row at this PC
+  4. turns the wallpaper off, sets a single-row glass dock with the date beside the clock, and points the
+     Kodi row (recently watched) at this PC
   5. restarts Home
 
 Needs: Python 3 (py launcher) and Network debugging (ADB) on the TV - the same as CleanYourTV.
@@ -56,9 +57,12 @@ if (-not (Test-Path $keyFile)) {
 }
 $token = (Get-Content $keyFile -Raw).Trim()
 try {
-    $row = Invoke-RestMethod -Uri "http://127.0.0.1:$ServerPort/api/tv/recent" -Headers @{ 'X-Mobile-Token' = $token } -TimeoutSec 60
-    Write-Host "The phone server answers: $(@($row.items).Count) movies for the Kodi row."
+    $row = Invoke-RestMethod -Uri "http://127.0.0.1:$ServerPort/api/tv/watched" -Headers @{ 'X-Mobile-Token' = $token } -TimeoutSec 60
+    Write-Host "The phone server answers: $(@($row.items).Count) recently watched items for the Kodi row."
 } catch {
+    if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+        throw "The phone server on port $ServerPort is an older version (no /api/tv/watched). Restart it from this folder's parent (pythonw mobile_server.py) and run this again. Nothing was changed on the TV."
+    }
     throw "The phone server isn't answering on port $ServerPort ($($_.Exception.Message)). Start it (python mobile_server.py) and run this again. Nothing was changed on the TV."
 }
 # This PC's address on the network the TV is on.
@@ -114,6 +118,11 @@ function SetKey($name, $value) {
 SetKey 'wallpaper' $false
 SetKey 'background_color' '#070B14'
 SetKey 'dock_glass' $true
+SetKey 'single_row' $true          # one row of apps along the bottom, nothing peeking below it
+SetKey 'dock_band_all' $true       # the glass band runs behind the whole row
+SetKey 'rows_below_dock' 0
+SetKey 'date_below_clock' $false   # clock and date on one line
+SetKey 'kodi_row_size' 5           # five posters: recently watched
 SetKey 'kodi_row' $true
 SetKey 'kodi_row_server' $server
 SetKey 'kodi_row_token' $token

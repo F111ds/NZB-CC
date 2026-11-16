@@ -1,0 +1,76 @@
+"""TV home row, recently watched: Kodi's movies and episodes, last played first, with progress; poster-less items left out."""
+import sys as _sys
+from pathlib import Path as _Path
+ROOT = _Path(__file__).resolve().parents[1]
+_sys.path.insert(0, str(ROOT))
+import tempfile, time
+from pathlib import Path
+import mobile_server as m
+
+tmp = Path(tempfile.mkdtemp())
+m.TV_STATE_FILE = tmp / "tv_recent.json"
+m.TV_ART_DIR = tmp / "tv_art"
+m.TV_WATCHED_FILE = tmp / "tv_watched.json"
+m.TV_WATCHED_ART_DIR = tmp / "tv_watched_art"
+JPEG = b"\xff\xd8\xff\xe0" + b"0" * 100
+
+kodi_on = {"v": True}
+calls, played = [], []
+def fake_kodi(method, params=None, timeout=6):
+    calls.append((method, params))
+    if not kodi_on["v"]:
+        raise m.UpstreamError("Kodi is off")
+    if method == "VideoLibrary.GetMovies":
+        assert params["sort"] == {"method": "lastplayed", "order": "descending"}
+        return {"movies": [
+            {"movieid": 3, "title": "Half Way", "year": 2024, "runtime": 6000, "art": {"poster": "image://p3/"},
+             "playcount": 0, "resume": {"position": 1500, "total": 6000}, "lastplayed": "2026-11-15 21:00:00",
+             "streamdetails": {"video": [{"width": 3840, "height": 2160}]}},
+            {"movieid": 4, "title": "No Art", "runtime": 5400, "art": {}, "playcount": 1,
+             "resume": {"position": 0, "total": 0}, "lastplayed": "2026-11-16 09:00:00"},
+            {"movieid": 5, "title": "Done", "runtime": 5400, "art": {"poster": "image://p5/"}, "playcount": 2,
+             "resume": {"position": 0, "total": 0}, "lastplayed": "2026-11-10 20:00:00"}]}
+    if method == "VideoLibrary.GetEpisodes":
+        return {"episodes": [
+            {"episodeid": 42, "title": "Pilot", "showtitle": "Some Show", "season": 1, "episode": 2, "runtime": 2700,
+             "art": {"tvshow.poster": "image://s/"}, "playcount": 0, "resume": {"position": 900, "total": 2700},
+             "lastplayed": "2026-11-16 08:00:00"}]}
+    if method == "JSONRPC.Ping":
+        return "pong"
+    if method == "Player.Open":
+        played.append(params); return "OK"
+    raise AssertionError(method)
+m.kodi_call = fake_kodi
+m.kodi_configured = lambda: True
+m.kodi_art = lambda ref: (JPEG, "image/jpeg")
+
+row = m.tv_watched_row(background=False)
+ids = [it["id"] for it in row["items"]]
+assert ids == ["e42", "m3", "m5"], ids                       # last played first; "No Art" has no poster: left out
+ep, half, done = row["items"]
+assert ep["title"] == "Some Show" and ep["episode_title"] == "Pilot" and (ep["season"], ep["episode"]) == (1, 2)
+assert abs(ep["progress"] - 1 / 3) < 0.01 and ep["remaining"] == 30
+assert half["progress"] == 0.25 and half["remaining"] == 75 and half["quality"] == "4K" and half["runtime"] == 100
+assert done["progress"] == 1.0 and done["watched"] is True
+assert all(it["poster"] == f"/api/tv/poster?id={it['id']}" for it in row["items"])
+assert m.tv_poster("e42") == JPEG and m.tv_poster("m3") == JPEG
+assert m.tv_poster("m4") is None
+
+# Kodi off: the last list stays
+kodi_on["v"] = False
+m.TV_WATCHED_FILE.write_text(m.TV_WATCHED_FILE.read_text().replace('"updated": ', '"updated": 1, "x": '))
+assert [it["id"] for it in m.tv_watched_row(background=False)["items"]] == ["e42", "m3", "m5"]
+
+# Playing resumes the item where it was left
+kodi_on["v"] = True
+assert m.tv_play("e42", wait=1)["played"] == {"episodeid": 42}
+assert m.tv_play("m3", wait=1)["played"] == {"movieid": 3}
+assert played == [{"item": {"episodeid": 42}, "options": {"resume": True}},
+                  {"item": {"movieid": 3}, "options": {"resume": True}}]
+for bad in ("m", "mx1", "../m1", "e1/2"):
+    try:
+        m.tv_play(bad, wait=1)
+        raise AssertionError(bad)
+    except ValueError:
+        pass
+print("test_tv_watched OK")

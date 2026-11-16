@@ -67,6 +67,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
 import android.widget.PopupWindow;
+import android.widget.TextClock;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -615,6 +616,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (lunar) lunarDate.setVisibility(View.VISIBLE);
         greetingName = cfg.greetingName;
         if (cfg.dateBelowClock) moveDateBelowClock();
+        oneLineDate();
         if (cfg.dateBelowClock && cfg.iconOnlyButtons && !cfg.topMenu
                 && !getResources().getBoolean(R.bool.rtl_menu_bar)) {
             alignDateBelowIconsWithClock();
@@ -913,7 +915,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (iconOnlyButtons) {
             if (cfg.wifiLabelWidth > 0) btnWifi.setMaxWidth(Math.round(cfg.wifiLabelWidth * density));
             else makeIconOnly(btnWifi);
-            makeIconOnly((TextView) btnSettings);
+            // NZB-CC: Settings keeps its label, so the bar ends on a word rather than a lone gear.
         }
         if (cfg.iconOnlyInputs) makeIconOnly((TextView) btnInputs);
         iconOnlyVpn = vpnPill && cfg.iconOnlyVpn;
@@ -934,6 +936,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
             if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                // NZB-CC: the Kodi row sits between the bar and the dock, so Down lands on it first.
+                if (kodiRowShown() && kodiRow.focus()) return true;
                 // Back to the dock tile Up came from, not wherever the focus finder lands.
                 focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
                 return true;
@@ -961,6 +965,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             }
         }
         if (festive) applyFestiveSkin((TextView) btnInputs, (TextView) btnSettings);
+        shrinkPillIcons();
+        insetTopBarLikeClock();
 
         // Hide the glass when focus leaves the tiles.
         // Taken off in onDestroy: recreate() keeps the window, and a listener left on it held every earlier Home.
@@ -2561,6 +2567,23 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         }
     }
 
+    /**
+     * NZB-CC: the date on one line beside the clock. Some languages (Spanish, German, ...) break it after the
+     * weekday ("lunes" / "16 de noviembre"); the break becomes a comma: "lunes, 16 de noviembre".
+     */
+    private void oneLineDate() {
+        TextClock date = findViewById(R.id.date);
+        date.setFormat12Hour(oneLine(date.getFormat12Hour()));
+        date.setFormat24Hour(oneLine(date.getFormat24Hour()));
+        date.setSingleLine(true);
+        date.setMaxLines(1);
+        date.setLineSpacing(0f, 1f);
+    }
+
+    private static CharSequence oneLine(CharSequence format) {
+        return format == null ? null : format.toString().replaceAll("\\s*\n\\s*", ", ");
+    }
+
     /** Centre the one-row header when the greeting and extra date lines are absent (#2265). */
     private void centerCompactHeader() {
         LinearLayout clockRow = (LinearLayout) findViewById(R.id.clock).getParent();
@@ -2624,7 +2647,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private void addTopBarApps(List<String> packages, Map<String, String> launchActions) {
         ViewGroup bar = findViewById(R.id.topButtons);
         PackageManager pm = getPackageManager();
-        int size = Math.round(22 * density);
+        int size = Math.round(PILL_ICON_DP * density);
         for (String pkg : packages) {
             Intent launch = pm.getLeanbackLaunchIntentForPackage(pkg);
             if (launch == null) launch = pm.getLaunchIntentForPackage(pkg);
@@ -2924,7 +2947,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     }
 
     private boolean kodiRowShown() {
-        return kodiRow != null && kodiRow.hasItems() && dockRow && !singleRow;
+        return kodiRow != null && kodiRow.hasItems() && dockRow;
     }
 
     /** Up from the dock: onto the Kodi row when it shows (true), else the top bar takes it (false). */
@@ -2958,9 +2981,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         top += (int) (16 * density);
         // shelf padding (9 + 2), the header line (~20) and the cards' margins (8 + 8)
         int posterH = bottom - top - (int) (47 * density);
-        kodiRow.setPosterHeight(Math.min(posterH, (int) (170 * density)));
+        // NZB-CC: five smaller posters, centred; the shelf is no taller than they need.
+        kodiRow.setPosterHeight(Math.min(posterH, (int) (128 * density)));
         kodiBlock.setY(top);
-        kodiCount.setText(getResources().getQuantityString(R.plurals.kodi_movies, kodiRow.count(), kodiRow.count()));
+        kodiCount.setVisibility(View.GONE);
         if (kodiBlock.getVisibility() != View.VISIBLE) {
             kodiBlock.setVisibility(View.VISIBLE);
             ViewGroup bar = findViewById(R.id.topButtons);
@@ -2984,7 +3008,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     @Override
     public void onKodiRowDown() {
-        int pos = lastFocused >= 0 && lastFocused < COLUMNS ? lastFocused : 0;
+        int pos = singleRow ? Math.max(0, lastFocused) : lastFocused >= 0 && lastFocused < COLUMNS ? lastFocused : 0;
         focusTile(Math.max(0, Math.min(pos, adapter.appCount() - 1)));
         grid.playSoundEffect(SoundEffectConstants.NAVIGATION_DOWN);
     }
@@ -3190,14 +3214,66 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private boolean libraryFromVpnPill;
 
     /** Turns a labelled top pill into the round TopButtonIcon shape: no text, the icon centred by even padding. */
+    /** NZB-CC: the top-bar icons, drawn at this size in dp (the vectors are 22dp) to suit the smaller 34dp pills. */
+    private static final int PILL_ICON_DP = 18;
+
+    /**
+     * Keeps every top-bar icon at PILL_ICON_DP, including ones swapped in later (the Wi-Fi/Ethernet state, the
+     * festive skins, the VPN lock): checked before each frame, and only re-set when an icon has the wrong size.
+     */
+    private void shrinkPillIcons() {
+        ViewGroup bar = findViewById(R.id.topButtons);
+        int px = Math.round(PILL_ICON_DP * density);
+        bar.getViewTreeObserver().addOnPreDrawListener(() -> {
+            boolean changed = false;
+            for (int i = 0; i < bar.getChildCount(); i++) {
+                if (!(bar.getChildAt(i) instanceof TextView)) continue;
+                TextView pill = (TextView) bar.getChildAt(i);
+                Drawable[] d = pill.getCompoundDrawablesRelative();
+                Drawable icon = d[0];
+                if (icon == null) continue;
+                int w = icon.getIntrinsicWidth(), h = icon.getIntrinsicHeight();
+                if (w <= 0 || h <= 0) w = h = px;
+                float k = px / (float) Math.max(w, h);
+                int bw = Math.max(1, Math.round(w * k)), bh = Math.max(1, Math.round(h * k));
+                Rect b = icon.getBounds();
+                if (b.width() == bw && b.height() == bh) continue;
+                icon.setBounds(0, 0, bw, bh);
+                pill.setCompoundDrawablesRelative(icon, d[1], d[2], d[3]);
+                changed = true;
+            }
+            return !changed;   // a resized icon re-measures its pill: skip this frame, draw the next
+        });
+    }
+
+    /**
+     * The bar's right edge sits as far from the screen's right edge as the clock's first digit is from the left.
+     * Both share the header's 56dp padding, but a digit's glyph starts a little inside its text box (its side
+     * bearing), so the clock reads further in; the bar moves in by the same amount.
+     */
+    private void insetTopBarLikeClock() {
+        TextView clock = findViewById(R.id.clock);
+        View bar = findViewById(R.id.topButtons);
+        Runnable fit = () -> {
+            CharSequence text = clock.getText();
+            if (text == null || text.length() == 0) return;
+            Rect ink = new Rect();
+            clock.getPaint().getTextBounds(text.toString(), 0, 1, ink);
+            float bearing = Math.max(0, ink.left) + clock.getPaddingLeft();
+            if (Math.abs(bar.getTranslationX() + bearing) > 0.5f) bar.setTranslationX(-bearing);
+        };
+        clock.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> fit.run());
+        fit.run();
+    }
+
     private void makeIconOnly(TextView pill) {
         pill.setContentDescription(pill.getText());
         pill.setText(null);
         pill.setMaxWidth(Integer.MAX_VALUE);
-        int pad = Math.round(10 * density);
+        int pad = Math.round(8 * density);
         pill.setPaddingRelative(pad, 0, pad, 0);
         pill.setCompoundDrawablePadding(0);
-        pill.getLayoutParams().width = Math.round(42 * density);
+        pill.getLayoutParams().width = Math.round(34 * density);
     }
 
     // ---- festive skin ------------------------------------------------------------------------------

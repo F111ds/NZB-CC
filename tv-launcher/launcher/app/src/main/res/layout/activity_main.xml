@@ -414,7 +414,7 @@
         </FrameLayout>
     </LinearLayout>
 
-    <!-- Kodi row (KodiRow): the newest movies on a glass shelf between the weather and the dock. Placed and
+    <!-- Kodi row (KodiRow): what was watched last in Kodi, on a glass shelf between the weather and the dock. Placed and
          sized in code (MainActivity.layoutKodiRow); gone until it has movies. -->
     <LinearLayout
         android:id="@+id/kodiBlock"
@@ -457,7 +457,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
-                android:text="Recently downloaded"
+                android:text="Recently watched"
                 android:textColor="#FFFFFFFF"
                 android:textSize="13sp"
                 android:fontFamily="@string/font_medium" />
@@ -501,14 +501,16 @@
                 android:fontFamily="@string/font_regular" />
         </LinearLayout>
 
+        <!-- wrap_content and centred: the five posters sit in the middle of the shelf. -->
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/kodiRow"
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
+            android:layout_gravity="center_horizontal"
             android:layout_height="wrap_content"
             android:clipChildren="true"
             android:clipToPadding="false"
-            android:paddingStart="2dp"
-            android:paddingEnd="12dp"
+            android:paddingStart="0dp"
+            android:paddingEnd="0dp"
             android:overScrollMode="never"
             android:scrollbars="none"
             android:descendantFocusability="afterDescendants" />

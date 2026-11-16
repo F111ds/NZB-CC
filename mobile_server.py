@@ -1886,7 +1886,15 @@ TV_REFRESH_SECS = 300
 TV_PLAY_WAIT_SECS = 45              # how long /api/tv/play waits for a Kodi that was just started
 TV_STATE_FILE = BASE_DIR / "tv_recent.json"
 TV_ART_DIR = BASE_DIR / "tv_art"
-TV_ID_RE = re.compile(r"[ks][A-Za-z0-9_]{1,80}")
+TV_ID_RE = re.compile(r"[ksme][A-Za-z0-9_]{1,80}")
+# "Recently watched" (GET /api/tv/watched): Kodi's movies and episodes started or finished, the last
+# played first, with how far in each is. Kept on disk like the downloads row, so the TV still has it
+# while Kodi is closed. Only items with a poster are listed; ids are m<movieid> and e<episodeid>.
+TV_WATCHED_SIZE = 10
+TV_WATCHED_REFRESH_SECS = 120
+TV_WATCHED_FILE = BASE_DIR / "tv_watched.json"
+TV_WATCHED_ART_DIR = BASE_DIR / "tv_watched_art"
+TV_WATCHED_ID_RE = re.compile(r"[me][0-9]{1,12}")
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".mpg", ".mpeg", ".webm", ".iso"}
 TV_KODI_PROPS = ["title", "year", "runtime", "file", "art", "thumbnail", "dateadded", "playcount", "streamdetails"]
 _tv_lock = threading.Lock()
@@ -2107,28 +2115,39 @@ def tv_row(background: bool = True) -> dict:
 def tv_poster(item_id: str) -> bytes | None:
     if not TV_ID_RE.fullmatch(item_id or ""):
         raise ValueError("Invalid item.")
+    folder = TV_WATCHED_ART_DIR if TV_WATCHED_ID_RE.fullmatch(item_id) else TV_ART_DIR
     try:
-        return (TV_ART_DIR / f"{item_id}.img").read_bytes()
+        return (folder / f"{item_id}.img").read_bytes()
     except OSError:
         return None
+
+
+def _tv_wait_for_kodi(wait: float) -> None:
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            kodi_call("JSONRPC.Ping", timeout=3)
+            return
+        except UpstreamError:
+            if time.monotonic() >= deadline:
+                raise UpstreamError("Kodi didn't start in time.")
+            time.sleep(1.5)
 
 
 def tv_play(item_id: str, wait: float = TV_PLAY_WAIT_SECS) -> dict:
     """Plays a row item in Kodi. The TV starts Kodi first, so this waits for Kodi to answer."""
     if not TV_ID_RE.fullmatch(item_id or ""):
         raise ValueError("Invalid item.")
+    if TV_WATCHED_ID_RE.fullmatch(item_id):   # recently watched: resume where it was left
+        _tv_wait_for_kodi(wait)
+        kind = "episodeid" if item_id[0] == "e" else "movieid"
+        target = {kind: int(item_id[1:])}
+        kodi_call("Player.Open", {"item": target, "options": {"resume": True}})
+        return {"ok": True, "played": target}
     item = next((x for x in tv_load_state()["items"] if x.get("id") == item_id), None)
     if not item:
         raise ValueError("That movie isn't in the row any more.")
-    deadline = time.monotonic() + wait
-    while True:
-        try:
-            kodi_call("JSONRPC.Ping", timeout=3)
-            break
-        except UpstreamError:
-            if time.monotonic() >= deadline:
-                raise UpstreamError("Kodi didn't start in time.")
-            time.sleep(1.5)
+    _tv_wait_for_kodi(wait)
     target = None
     if item.get("movieid"):
         target = {"movieid": int(item["movieid"])}
@@ -2146,6 +2165,133 @@ def tv_play(item_id: str, wait: float = TV_PLAY_WAIT_SECS) -> dict:
     return {"ok": True, "played": target}
 
 
+_tv_watched_refreshing = threading.Lock()
+_TV_SEEN_FILTER = {"or": [{"field": "inprogress", "operator": "true", "value": ""},
+                          {"field": "playcount", "operator": "greaterthan", "value": "0"}]}
+
+
+def _tv_progress(raw: dict) -> dict:
+    """{"progress": 0..1, "remaining": minutes left, "runtime": minutes} from Kodi's resume point."""
+    resume = _kdict(raw.get("resume"))
+    pos, total = to_float(resume.get("position")), to_float(resume.get("total"))
+    if total <= 0:
+        total = to_float(raw.get("runtime"))
+    watched = to_int(raw.get("playcount")) > 0
+    if pos > 0 and total > 0:
+        progress, remaining = min(1.0, pos / total), round((total - pos) / 60)
+    else:
+        progress, remaining = (1.0 if watched else 0.0), 0
+    return {"progress": round(progress, 3), "remaining": remaining, "runtime": round(total / 60), "watched": watched}
+
+
+def tv_kodi_watched(limit: int = TV_WATCHED_SIZE) -> list[dict]:
+    """Movies and episodes started or finished in Kodi, the last played first."""
+    common = {"filter": _TV_SEEN_FILTER, "sort": {"method": "lastplayed", "order": "descending"},
+              "limits": {"start": 0, "end": limit * 2}}
+    movies = _kdict(kodi_call("VideoLibrary.GetMovies", dict(common, properties=[
+        "title", "year", "runtime", "art", "thumbnail", "playcount", "resume", "lastplayed", "streamdetails"]),
+        timeout=10)).get("movies") or []
+    episodes = _kdict(kodi_call("VideoLibrary.GetEpisodes", dict(common, properties=[
+        "title", "showtitle", "season", "episode", "runtime", "art", "playcount", "resume", "lastplayed"]),
+        timeout=10)).get("episodes") or []
+    out = []
+    for mv in movies:
+        if not isinstance(mv, dict) or to_int(mv.get("movieid")) <= 0:
+            continue
+        art = _kdict(mv.get("art"))
+        quality, _hdr = video_quality(mv.get("streamdetails"))
+        out.append({"id": f"m{to_int(mv.get('movieid'))}", "movieid": to_int(mv.get("movieid")),
+                    "title": str(mv.get("title") or "Untitled"), "year": to_int(mv.get("year")) or None,
+                    "quality": "4K" if quality == "2160p" else quality,
+                    "lastplayed": str(mv.get("lastplayed") or ""),
+                    "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail"))} | _tv_progress(mv))
+    for ep in episodes:
+        if not isinstance(ep, dict) or to_int(ep.get("episodeid")) <= 0:
+            continue
+        art = _kdict(ep.get("art"))
+        show = str(ep.get("showtitle") or "")
+        out.append({"id": f"e{to_int(ep.get('episodeid'))}", "episodeid": to_int(ep.get("episodeid")),
+                    "title": show or str(ep.get("title") or "Untitled"), "episode_title": str(ep.get("title") or ""),
+                    "season": to_int(ep.get("season")), "episode": to_int(ep.get("episode")),
+                    "lastplayed": str(ep.get("lastplayed") or ""),
+                    "art_ref": _art_ref(art.get("tvshow.poster") or art.get("season.poster"))} | _tv_progress(ep))
+    out.sort(key=lambda x: x["lastplayed"], reverse=True)   # "YYYY-MM-DD HH:MM:SS" sorts as text
+    return out
+
+
+def _tv_save_watched_poster(item: dict) -> bool:
+    TV_WATCHED_ART_DIR.mkdir(exist_ok=True)
+    dest = TV_WATCHED_ART_DIR / f"{item['id']}.img"
+    if dest.exists():
+        return True
+    if not item.get("art_ref"):
+        return False
+    try:
+        raw = kodi_art(item["art_ref"])[0]
+    except (UpstreamError, ValueError, ConfigError):
+        return False
+    if not raw or not _image_type(raw):
+        return False
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_bytes(raw)
+    os.replace(tmp, dest)
+    return True
+
+
+def tv_watched_load() -> dict:
+    try:
+        data = json.loads(TV_WATCHED_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    return {"updated": to_float(data.get("updated")), "items": [x for x in data.get("items") or [] if isinstance(x, dict)]}
+
+
+def tv_watched_refresh() -> dict:
+    """Re-reads the list from Kodi; while Kodi is closed the last list is kept."""
+    with _tv_watched_refreshing:
+        state = tv_watched_load()
+        try:
+            if not kodi_configured():
+                return state
+            found = tv_kodi_watched()
+        except (UpstreamError, ConfigError):
+            return state
+        items = []
+        for it in found:   # no poster, no tile
+            if _tv_save_watched_poster(it):
+                it.pop("art_ref", None)
+                items.append(it)
+            if len(items) >= TV_WATCHED_SIZE:
+                break
+        if TV_WATCHED_ART_DIR.exists():
+            keep = {f"{it['id']}.img" for it in items}
+            for f in TV_WATCHED_ART_DIR.glob("*.img"):
+                if f.name not in keep:
+                    f.unlink(missing_ok=True)
+        state = {"updated": time.time(), "items": items}
+        with _tv_lock:
+            tmp = TV_WATCHED_FILE.with_name(TV_WATCHED_FILE.name + ".tmp")
+            tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, TV_WATCHED_FILE)
+        return state
+
+
+def tv_watched_row(background: bool = True) -> dict:
+    """Recently watched as the TV reads it; a stale list is returned at once and re-read on a worker thread."""
+    state = tv_watched_load()
+    if time.time() - state["updated"] > TV_WATCHED_REFRESH_SECS:
+        if background and state["items"]:
+            if not _tv_watched_refreshing.locked():
+                threading.Thread(target=tv_watched_refresh, name="tv-watched", daemon=True).start()
+        else:
+            state = tv_watched_refresh()
+    keys = ("id", "title", "episode_title", "year", "season", "episode", "runtime", "quality", "watched",
+            "progress", "remaining", "movieid", "episodeid", "lastplayed")
+    items = [{k: it.get(k) for k in keys} | {"poster": f"/api/tv/poster?id={it['id']}"} for it in state["items"]]
+    return {"updated": state["updated"], "items": items}
+
+
 class BackgroundWorker:
     """Sends download alerts and runs saved searches while the server is up."""
 
@@ -2156,6 +2302,7 @@ class BackgroundWorker:
         self._seen: set[str] | None = None
         self._next_history = 0.0
         self._next_tv = 0.0
+        self._next_watched = 0.0
         self._stop = threading.Event()
 
     def start(self) -> None:
@@ -2183,6 +2330,12 @@ class BackgroundWorker:
                 tv_refresh()
             except Exception:
                 log.exception("Refreshing the TV row failed")
+        if now >= self._next_watched:
+            self._next_watched = now + TV_WATCHED_REFRESH_SECS
+            try:
+                tv_watched_refresh()
+            except Exception:
+                log.exception("Refreshing the TV's recently watched row failed")
         due = due_saved_search(settings, now)
         if due:  # one per tick spreads indexer API use out
             run_saved_search(due["id"], notify=True)
@@ -3440,6 +3593,8 @@ class MobileHandler(BaseHTTPRequestHandler):
             })
         elif path == "/api/tv/recent":
             self.send_json(200, tv_row())
+        elif path == "/api/tv/watched":
+            self.send_json(200, tv_watched_row())
         elif path == "/api/tv/poster":
             raw = tv_poster(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
             if not raw:
