@@ -18,10 +18,13 @@ Needs: Python 3 (py launcher) and Network debugging (ADB) on the TV - the same a
 param(
     [Parameter(Mandatory = $true)][string]$TvHost,
     [int]$ServerPort = 8765,
-    [string]$Apk = "$PSScriptRoot\NZB-CC-TV-Launcher.apk"
+    [string]$Apk = ''
 )
 $ErrorActionPreference = 'Stop'
-Set-Location $PSScriptRoot
+# Windows PowerShell 5.1 can leave $PSScriptRoot empty in a parameter default, so work the folder out here.
+$here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+Set-Location $here
+if (-not $Apk) { $Apk = Join-Path $here 'NZB-CC-TV-Launcher.apk' }
 $env:TV_HOST = $TvHost
 $pkg = 'com.gathin.tvhome'
 $tvDir = "/sdcard/Android/data/$pkg/files"
@@ -54,7 +57,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # ---- the phone server on this PC ------------------------------------------------------------------
 Step 'Checking NZB Command Center''s phone server on this PC'
-$keyFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'mobile_access_key.txt'
+$keyFile = Join-Path (Split-Path $here -Parent) 'mobile_access_key.txt'
 if (-not (Test-Path $keyFile)) {
     throw "No access code at $keyFile. Start the phone server once (python mobile_server.py --install-autostart) and run this again."
 }
