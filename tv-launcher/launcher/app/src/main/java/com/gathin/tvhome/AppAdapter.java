@@ -339,7 +339,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             String label = card != null ? card.label : Cards.cleanLabel(
                     appLabels.containsKey(pkg) ? appLabels.get(pkg) : String.valueOf(ri.loadLabel(pm)), pkg);
             if (!seen.add(pkg + '\n' + label)) continue;
-            if (!homeApps.isEmpty() && homeRank(pkg, label) < 0) continue;   // NZB-CC: only the home_apps on Home
+            // NZB-CC: only the home_apps on Home, plus any app added from the App library
+            if (!homeApps.isEmpty() && homeRank(pkg, label) < 0 && !added.contains(pkg)) continue;
             Drawable banner = null;
             // uniform_tiles draws the icon, so an app's banner is never loaded. A module card keeps its banner.
             if (!(uniformTiles && card == null)) {
@@ -358,6 +359,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         Collections.sort(fresh, (a, b) -> {
             if (!homeApps.isEmpty()) {   // NZB-CC: home_apps sets the order
                 int ra = homeRank(a.pkg, a.label), rb = homeRank(b.pkg, b.label);
+                if (ra < 0) ra = Integer.MAX_VALUE;   // added from the library: after the home_apps
+                if (rb < 0) rb = Integer.MAX_VALUE;
                 if (ra != rb) return Integer.compare(ra, rb);
             }
             // The owner's own order first; tiles it does not know (new installs) follow by the rule below.

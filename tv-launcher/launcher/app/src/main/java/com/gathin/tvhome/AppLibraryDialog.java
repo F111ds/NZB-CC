@@ -653,8 +653,9 @@ final class AppLibraryDialog {
             TextView status = holder.itemView.findViewById(R.id.status);
             boolean home = onHome.test(pkg);
             boolean recent = !selectionMode && LibraryApps.recent(installTimes.getOrDefault(pkg, 0L), catalogTime);
-            status.setText(home ? R.string.library_on_home : recent ? R.string.library_recent : R.string.library_add_home);
-            status.setVisibility(home || !okOpens ? View.VISIBLE : View.INVISIBLE);
+            status.setText(home ? R.string.library_on_home : okOpens ? R.string.library_open
+                    : recent ? R.string.library_recent : R.string.library_add_home);
+            status.setVisibility(View.VISIBLE);
             holder.itemView.setBackground(surface(home ? 0x1475BBA4 : 0x0CFFFFFF, 18));
             View check = holder.itemView.findViewById(R.id.dot);
             check.getLayoutParams().width = dp(home ? 18 : 8);
