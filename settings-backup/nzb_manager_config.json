@@ -1,0 +1,44 @@
+﻿{
+    "sab_url":  "http://127.0.0.1:8080",
+    "sab_api_key":  "",
+    "indexers":  [
+                     {
+                         "name":  "omgwtfnzbs",
+                         "url":  "https://api.omgwtfnzbs.org",
+                         "api_key":  "",
+                         "enabled":  true
+                     },
+                     {
+                         "name":  "DrunkenSlug",
+                         "url":  "https://drunkenslug.com",
+                         "api_key":  "",
+                         "enabled":  true
+                     }
+                 ],
+    "nzb_folder":  "Z:/sabnzb/Downloads/complete",
+    "auto_refresh":  true,
+    "auto_archive_sent":  false,
+    "media_folders":  [
+                          "Z:\\sabnzb\\Downloads\\complete\\Movies"
+                      ],
+    "ffprobe_path":  "",
+    "kodi_url":  "http://192.168.68.62:8080",
+    "kodi_username":  "kodi",
+    "kodi_password":  "",
+    "kodi_auto_scan":  true,
+    "kodi_notify_on_complete":  true,
+    "media_server_type":  "Jellyfin",
+    "media_server_url":  "http://192.168.68.60:8096",
+    "media_server_token":  "",
+    "media_server_auto_scan":  true,
+    "media_server_path_map":  "",
+    "search_history":  [
+
+                       ],
+    "desktop_notifications":  true,
+    "watch_folder":  false,
+    "window_geometry":  "1374x1073+220+0",
+    "window_zoomed":  false,
+    "last_tab":  "Kodi",
+    "compact_dashboard":  false
+}
