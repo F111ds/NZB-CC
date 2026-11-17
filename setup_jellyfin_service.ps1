@@ -73,7 +73,7 @@ try {
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
         -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($atBoot, $watch) -Principal $principal -Settings $settings `
-        -Description "Starts Jellyfin ($exe, data in $dataDir) when Windows starts, as $user. Made by NZB Command Center's setup_jellyfin_service.ps1." -Force | Out-Null
+        -Description "Starts Jellyfin ($exe, data in $dataDir) when Windows starts, as $user. Made by NZB Command Center's setup_jellyfin_service.ps1." -Force -ErrorAction Stop | Out-Null  # Task Scheduler cmdlets ignore the script-wide Stop
     Say "Task '$TaskName' created: starts at Windows startup, as $user." Green
 
     # ---------------- 3. Tray app out of startup (remember everything for -Undo) ----------------
