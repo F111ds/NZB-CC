@@ -72,7 +72,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.9.1"
+VERSION = "3.9.2"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -3636,6 +3636,14 @@ try { $r.dinfo = @(Get-Disk | ForEach-Object { @{ id = "$($_.Number)"; style = "
 try { $r.parts = @(Get-Partition | Where-Object { $_.DriveLetter } | ForEach-Object { @{ disk = "$($_.DiskNumber)"; letter = "$($_.DriveLetter)" } }) } catch {}
 try { $r.volumes = @(Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { @{ letter = "$($_.DriveLetter)"; label = $_.FileSystemLabel;
        fs = "$($_.FileSystem)"; health = "$($_.HealthStatus)" } }) } catch {}
+# Every drive letter, including ones not on a physical disk Windows lists (network shares, Storage
+# Spaces, dynamic disks, some USB enclosures, VHDs). 2 = removable, 3 = local, 4 = network, 6 = RAM.
+try { $r.logical = @(Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -in 2,3,4,6 } | ForEach-Object {
+       @{ letter = ("" + $_.DeviceID).TrimEnd(':'); type = [int]$_.DriveType; label = "$($_.VolumeName)"; fs = "$($_.FileSystem)";
+          remote = "$($_.ProviderName)" } }) } catch {}
+# Mapped network drives of the logged-in user: hidden from a server running as administrator.
+try { $r.mapped = @(Get-ChildItem HKCU:\Network -ErrorAction Stop | ForEach-Object {
+       @{ letter = $_.PSChildName.ToUpper(); remote = "" + (Get-ItemProperty $_.PSPath).RemotePath } }) } catch {}
 $r | ConvertTo-Json -Compress -Depth 4
 """
 
@@ -3705,7 +3713,8 @@ def _drive_inventory() -> dict:
     if os.name == "nt":
         data = run_powershell(DRIVES_PS)
         return {"disks": _as_list(data.get("disks")), "parts": _as_list(data.get("parts")),
-                "volumes": _as_list(data.get("volumes")), "dinfo": _as_list(data.get("dinfo"))}
+                "volumes": _as_list(data.get("volumes")), "dinfo": _as_list(data.get("dinfo")),
+                "logical": _as_list(data.get("logical")), "mapped": _as_list(data.get("mapped"))}
     return {"disks": [{"id": "0", "name": "System disk", "media": "", "bus": "", "size": 0, "health": "Unknown"}],
             "parts": [{"disk": "0", "letter": "/"}], "volumes": []}
 
@@ -3877,6 +3886,73 @@ def drive_activity() -> dict:
         return out
 
 
+_LOGICAL_KIND = {2: "Removable", 3: "Local", 4: "Network", 6: "RAM disk"}
+
+
+def _other_drive_letters(inv: dict, covered: set, vols: dict, low_gb: float, system: str,
+                         media_letters: set, sab_letter: str) -> list[dict]:
+    """Drive letters Windows has that aren't on a physical disk it listed: network shares, Storage
+    Spaces / dynamic disks, some USB enclosures, VHDs. Free space only: no health counters for these."""
+    import shutil
+    found: dict[str, dict] = {}
+    for x in inv.get("logical") or []:
+        letter = str(x.get("letter") or "").upper()[:1]
+        if letter and letter not in covered:
+            found[letter] = {"type": to_int(x.get("type")), "label": str(x.get("label") or ""),
+                             "fs": str(x.get("fs") or ""), "remote": str(x.get("remote") or "")}
+    for x in inv.get("mapped") or []:  # mapped drives a server running as administrator can't see by letter
+        letter = str(x.get("letter") or "").upper()[:1]
+        if letter and letter not in covered and letter not in found and x.get("remote"):
+            found[letter] = {"type": 4, "label": "", "fs": "", "remote": str(x["remote"])}
+    out = []
+    for letter in sorted(found):
+        x = found[letter]
+        kind = _LOGICAL_KIND.get(x["type"], "Drive")
+        total = free = 0
+        reach = ""
+        for target in ([f"{letter}:\\"] + ([x["remote"]] if x["remote"] else [])):
+            try:
+                usage = shutil.disk_usage(target)
+                total, free = usage.total, usage.free
+                reach = target
+                break
+            except OSError:
+                continue
+        v = vols.get(letter, {})
+        label = x["label"] or str(v.get("label") or "")
+        problems = []
+        if not reach:
+            problems.append("Can't read this drive right now" + (" (network share offline, or it needs your sign-in)." if kind == "Network" else "."))
+        elif total and free < low_gb * 1024 ** 3:
+            problems.append(f"Only {format_bytes(free)} free.")
+        uses = []
+        if letter == system:
+            uses.append("Windows and apps")
+        if letter in media_letters:
+            uses.append("Media library")
+        if letter == sab_letter:
+            uses.append("Finished downloads")
+        name = x["remote"] or label or f"Drive {letter}:"
+        out.append({
+            "key": f"vol:{letter}", "letters": [letter], "name": name, "label": label or (uses[0] if uses else kind + " drive"),
+            "media": kind, "bus": "", "size": total, "total": total, "free": free,
+            "used_pct": round((total - free) * 100 / total) if total else None,
+            "health": _DRIVE_HEALTH.get(str(v.get("health", "")).strip().lower(), "Unknown"),
+            "status": ("warn" if problems else "ok"), "problems": problems,
+            "temp": None, "temp_limit": DRIVE_TEMP_ALERT, "hours": None, "wear": None, "rpm": None,
+            "uses": uses, "days_left": None, "daily_bytes": None,
+            "volumes": [{"letter": letter, "label": label, "fs": x["fs"] or str(v.get("fs") or ""), "health": "",
+                         "total": total, "free": free,
+                         "used_pct": round((total - free) * 100 / total) if total else None}] if total else [],
+            "details": {"id": "", "model": "", "serial": "", "firmware": "", "status": "", "sector": None, "lsector": None,
+                        "style": "", "boot": False, "system": False, "partitions": None, "offline": False, "smart": False,
+                        "temp_max": None, "read_errors": None, "read_fixed": None, "write_errors": None, "write_fixed": None,
+                        "starts": None, "loads": None, "read_lat": None, "write_lat": None,
+                        "kind": kind.lower(), "remote": x["remote"]},
+        })
+    return out
+
+
 def drive_report(force: bool = False, with_rate: bool = True) -> dict:
     """Everything the Drive Health page shows, newest free space included."""
     import shutil
@@ -3961,6 +4037,9 @@ def drive_report(force: bool = False, with_rate: bool = True) -> dict:
             "uses": uses, "days_left": days_left, "daily_bytes": rate if days_left is not None else None,
             "volumes": volumes, "details": _drive_details(disk, dinfo.get(disk_id, {})),
         })
+    covered = {x for d in drives for x in d["letters"]}
+    for extra in _other_drive_letters(inv, covered, vols, low_gb, system, media_letters, sab_letter):
+        drives.append(extra)
     if temps:
         record_drive_temps(temps)
     order = {"bad": 0, "warn": 1, "ok": 2, "unknown": 3}
@@ -5037,7 +5116,7 @@ async function loadHomeUsage(){
 let drivesAt=0,drivesData=null,drivesBusy=false;
 const DCOL=['#A78BFA','#38BDF8','#F59E0B','#F472B6','#34D399','#FB7185'];
 function dLetters(d){return d.letters.filter(x=>x!=='/').map(x=>x+':').join(' ')}
-function dTag(d){const t={ok:['ok','HEALTHY'],warn:['warn',d.temp&&d.temp>=d.temp_limit-4?'RUNNING WARM':'NEEDS A LOOK'],bad:['bad',d.health==='Unhealthy'||d.health==='Warning'?'PROBLEM':'TOO HOT'],unknown:['unk','UNKNOWN']}[d.status]||['unk','UNKNOWN'];return '<span class="tag '+t[0]+'" style="flex:none">'+t[1]+'</span>'}
+function dTag(d){if(d.key&&d.key.startsWith('vol:')&&d.status==='ok')return '<span class="tag ok" style="flex:none">'+(d.media==='Network'?'CONNECTED':'OK')+'</span>';const t={ok:['ok','HEALTHY'],warn:['warn',d.temp&&d.temp>=d.temp_limit-4?'RUNNING WARM':'NEEDS A LOOK'],bad:['bad',d.health==='Unhealthy'||d.health==='Warning'?'PROBLEM':'TOO HOT'],unknown:['unk','UNKNOWN']}[d.status]||['unk','UNKNOWN'];return '<span class="tag '+t[0]+'" style="flex:none">'+t[1]+'</span>'}
 function dKind(d){return [d.media,d.bus].filter(Boolean).join(' · ')+(d.size?(d.media||d.bus?' · ':'')+fmtBytes(d.size):'')}
 function dBarColor(d){return d.used_pct>=90?'var(--red)':(d.used_pct>=75?'#F59E0B':'var(--teal)')}
 function dYears(h){if(!h)return '—';const y=h/8766;return y>=1?y.toFixed(1)+' yr':(h>=48?Math.round(h/24)+' d':h+' h')}
@@ -5069,9 +5148,12 @@ function tempChart(drives){
     '<div class="legend">'+series.map(s=>'<span><i style="background:'+s.c+'"></i>'+esc((dLetters(s.d)?dLetters(s.d)+' ':'')+(s.d.label||s.d.name))+'</span>').join('')+'<span style="margin-left:auto;color:#D6C7A0">- - '+esc(Math.round(limit))+'°C alert</span></div></div>';
 }
 function driveCard(d){
-  const stats=[[d.temp?d.temp+'°C':'—','Temp'],[dYears(d.hours),'Powered on']];
-  if(d.wear!=null)stats.push([d.wear+'%','SSD wear']);else if(d.rpm)stats.push([d.rpm,'RPM']);else stats.push([d.used_pct!=null?d.used_pct+'%':'—','Used']);
-  stats.push(d.days_left!=null?['~'+d.days_left,'Days left']:[fmtBytes(d.total),'Capacity']);
+  const other=d.key&&d.key.startsWith('vol:');  // not a physical disk Windows lists: no temperature/health
+  const stats=other?[[fmtBytes(d.free),'Free'],[fmtBytes(d.total),'Capacity'],[d.used_pct!=null?d.used_pct+'%':'—','Used'],[d.media||'—','Type']]:[[d.temp?d.temp+'°C':'—','Temp'],[dYears(d.hours),'Powered on']];
+  if(!other){
+    if(d.wear!=null)stats.push([d.wear+'%','SSD wear']);else if(d.rpm)stats.push([d.rpm,'RPM']);else stats.push([d.used_pct!=null?d.used_pct+'%':'—','Used']);
+    stats.push(d.days_left!=null?['~'+d.days_left,'Days left']:[fmtBytes(d.total),'Capacity']);
+  }
   const notes=d.problems.map(p=>'<div class="dnote '+(d.status==='bad'?'bad':'warn')+'">'+esc(p)+'</div>').join('');
   const info=d.days_left!=null?'<div class="dnote warn">About <b>'+esc(d.days_left)+' days</b> of space left at your pace ('+esc(fmtBytes(d.daily_bytes))+'/day).</div>':'';
   return '<button class="dcard tap" data-ddrive="'+esc(d.key)+'"><div class="top"><span class="lt">'+esc(dLetters(d)||'—')+'</span><div class="nm"><b>'+dTitle(d)+'</b><span>'+esc(d.name)+(dKind(d)?' · '+esc(dKind(d)):'')+'</span></div>'+dTag(d)+'</div>'+
@@ -5099,8 +5181,8 @@ function kv(rows){return '<div class="kv">'+rows.filter(r=>r).map(r=>'<div>'+esc
 function openDrive(key){
   const d=(drivesData&&drivesData.drives||[]).find(x=>x.key===key);if(!d)return;driveOpen=key;
   const x=d.details||{},io=driveIO[x.id];
-  const errs=(x.read_errors||0)+(x.write_errors||0);
-  const health=kv([
+  const other=d.key&&d.key.startsWith('vol:');
+  const health=other?kv([['Type',d.media||'—'],['Health (Windows)',d.health]]):kv([
     ['Health (Windows)',d.health,d.health==='Healthy'?'good':(d.health==='Unknown'?'':'bad')],
     x.status?['Status',x.status]:null,
     ['Temperature now',d.temp?d.temp+'°C':'—',d.temp&&d.temp>=d.temp_limit?'bad':(d.temp&&d.temp>=d.temp_limit-4?'warn':'')],
@@ -5115,7 +5197,7 @@ function openDrive(key){
     d.media==='HDD'?['Head park cycles',dNum(x.loads)]:null,
     ['Slowest read / write',(x.read_lat!=null?dNum(x.read_lat,' ms'):'—')+' / '+(x.write_lat!=null?dNum(x.write_lat,' ms'):'—')]]);
   const ident=kv([['Model',x.model||d.name],x.serial?['Serial (end)',x.serial]:null,x.firmware?['Firmware',x.firmware]:null,['Type',[d.media,d.rpm?d.rpm+' rpm':''].filter(Boolean).join(' · ')||'—'],['Connection',d.bus||'—'],['Capacity',fmtBytes(d.size||d.total)],
-    x.style?['Partition style',x.style]:null,x.partitions!=null?['Partitions',String(x.partitions)]:null,(x.sector||x.lsector)?['Sector size',(x.lsector||'?')+' / '+(x.sector||'?')+' bytes']:null,
+    x.remote?['Shared from',x.remote]:null,x.style?['Partition style',x.style]:null,x.partitions!=null?['Partitions',String(x.partitions)]:null,(x.sector||x.lsector)?['Sector size',(x.lsector||'?')+' / '+(x.sector||'?')+' bytes']:null,
     ['Boot / system disk',(x.boot?'boot':'')+(x.boot&&x.system?' + ':'')+(x.system?'system':'')||'no'],['Disk number',x.id||'—']]);
   const vols=(d.volumes||[]).map(v=>'<div class="vrow"><div class="h"><b>'+esc((v.letter!=='/'?v.letter+': ':'')+(v.label||'Volume'))+'</b><span>'+esc([v.fs,v.health&&v.health!=='Healthy'?v.health:''].filter(Boolean).join(' · '))+'</span></div><div class="bar" style="height:6px;margin:7px 0 5px"><span style="width:'+clampPct(v.used_pct)+'%;background:'+dBarColor(v)+'"></span></div><div class="h"><span>'+esc(fmtBytes(v.free))+' free of '+esc(fmtBytes(v.total))+'</span><span>'+esc(v.used_pct)+'% used</span></div></div>').join('')||'<p class="hint" style="margin:0">No drive letters on this disk.</p>';
   const panel=$('sheetpanel');
@@ -5125,7 +5207,7 @@ function openDrive(key){
     (d.days_left!=null?'<div class="dnote warn">About <b>'+esc(d.days_left)+' days</b> of space left at your pace ('+esc(fmtBytes(d.daily_bytes))+'/day).</div>':'')+
     '<div class="section">SPACE</div><div class="card">'+vols+'</div>'+
     '<div class="section">ACTIVITY NOW</div><div class="card"><div class="dio" style="margin:0" data-io="'+esc(x.id)+'">'+ioText(io)+'</div></div>'+
-    '<div class="section">HEALTH</div><div class="card">'+health+(x.smart?'':'<p class="hint" style="margin:8px 0 0">Windows didn\'t share this drive\'s health counters. Running NZB Mobile Server as administrator usually fixes that.</p>')+'</div>'+
+    '<div class="section">HEALTH</div><div class="card">'+health+(x.smart?'':'<p class="hint" style="margin:8px 0 0">'+(x.kind==='network'?'A network drive: its health and temperature are on the computer or NAS that shares it.':(x.kind?'Windows doesn\'t report health counters for this kind of drive (for example Storage Spaces, a USB enclosure or a virtual disk).':'Windows didn\'t share this drive\'s health counters. Running NZB Mobile Server as administrator usually fixes that.'))+'</p>')+'</div>'+
     '<div class="section">TEMPERATURE · 24 H</div><div class="card">'+oneTempChart(d)+'</div>'+
     '<div class="section">THIS DRIVE</div><div class="card">'+ident+(d.uses.length?'<p class="hint" style="margin:8px 0 0">Used for: '+esc(d.uses.join(', '))+'</p>':'')+'</div></div>';
   $('sheet').classList.remove('hidden');document.body.style.overflow='hidden';

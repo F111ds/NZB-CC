@@ -70,6 +70,12 @@ m._drive_inventory = lambda: {
     "parts": [{"disk": "0", "letter": "/"}],
     "volumes": [{"letter": "/", "label": "System", "fs": "NTFS", "health": "Healthy"}],
     "dinfo": [{"id": "0", "style": "GPT", "boot": True, "system": True, "parts": 4}],
+    # Letters not on a listed physical disk: a NAS share as G:, a Storage Spaces volume as S:, and a
+    # mapped drive (H:) only visible in the registry; "/" is already covered by disk 0.
+    "logical": [{"letter": "G", "type": 4, "label": "", "fs": "NTFS", "remote": "\\\\nas\\media"},
+                {"letter": "S", "type": 3, "label": "Pool", "fs": "ReFS", "remote": ""},
+                {"letter": "/", "type": 3}],
+    "mapped": [{"letter": "h", "remote": "\\\\nas\\backup"}, {"letter": "G", "remote": "\\\\nas\\media"}],
 }
 m.lhm_drive_temps = lambda port=m.LHM_PORT: {"wdc wd20efrx": 56.0}
 m._drive_state.update(at=0.0, inv=None, sab_dir=("", 0.0))
@@ -83,7 +89,7 @@ assert ssd["days_left"] is not None and ssd["daily_bytes"] == 1024 ** 3, ssd    
 assert hdd["temp"] == 56 and hdd["rpm"] == 5400 and hdd["health"] == "Warning"   # temp from LHM, fuzzy name match
 assert hdd["status"] == "bad" and any("Too hot" in p for p in hdd["problems"]) and hdd["wear"] is None
 assert r["drives"][0] is hdd                                                     # worst first
-assert r["totals"]["warn"] == 2 and r["temps_available"]
+assert r["totals"]["warn"] == 5 and r["temps_available"]   # 2 physical + 3 unreadable letters
 assert len(hdd["history"]) == 1 and hdd["history"][0][1] == 56.0
 x = ssd["details"]
 assert x["model"] == "Samsung SSD 980" and x["serial"] == "…23456Z" and x["firmware"] == "3B4QFXO7", x   # only the end of the serial
@@ -91,7 +97,13 @@ assert x["style"] == "GPT" and x["boot"] and x["system"] and x["partitions"] == 
 assert x["read_errors"] == 0 and x["starts"] == 1200 and x["read_lat"] == 12 and x["smart"] and x["write_fixed"] is None
 assert ssd["volumes"][0]["label"] == "System" and ssd["volumes"][0]["fs"] == "NTFS" and ssd["volumes"][0]["total"] > 0
 assert hdd["details"]["smart"] is False and hdd["volumes"] == []
-assert by["USB HDD"]["rpm"] is None                                               # 4294967295 = Windows doesn't know
+assert by["USB HDD"]["rpm"] is None
+other = {d["letters"][0]: d for d in r["drives"] if d["key"].startswith("vol:")}
+assert sorted(other) == ["G", "H", "S"], sorted(other)                            # every letter shows, none twice
+g = other["G"]
+assert g["media"] == "Network" and g["name"] == "\\\\nas\\media" and g["details"]["kind"] == "network", g
+assert g["status"] == "warn" and "network share offline" in g["problems"][0]     # can't be read from this test machine
+assert other["S"]["label"] == "Pool" and other["S"]["media"] == "Local" and other["H"]["details"]["remote"] == "\\\\nas\\backup"                                               # 4294967295 = Windows doesn't know
 assert m.drive_activity() == {}                                                   # not Windows: no live counters
 r0 = m._io_rates({"t": 0, "read": 0, "write": 0, "busy": 0, "f": 1e7}, {"t": 2e7, "read": 4e6, "write": 2e6, "busy": 5e6, "f": 1e7})
 assert r0 == {"read": 2e6, "write": 1e6, "busy": 25.0}, r0                        # 2 s apart: 2 MB/s, 1 MB/s, 25 % busy
@@ -138,7 +150,7 @@ def api(path, body=None):
     except urllib.error.HTTPError as e: return e.code, json.loads(e.read())
 
 st, d = api("/api/drives")
-assert st == 200 and len(d["drives"]) == 3 and d["alerts"] == {"ready": False, "health": True, "hot": True, "low": True, "low_gb": 75}, d
+assert st == 200 and len(d["drives"]) == 6 and d["alerts"] == {"ready": False, "health": True, "hot": True, "low": True, "low_gb": 75}, d
 assert d["temp_alert"] == 55 and d["nvme_temp_alert"] == 70
 st, d = api("/api/drives/alerts", {"notify_drive_hot": False})
 assert st == 200 and d["alerts"]["hot"] is False and d["alerts"]["health"] is True
@@ -160,7 +172,7 @@ def boom():
     raise RuntimeError("PowerShell missing")
 m._drive_inventory = boom
 r2 = m.drive_report(force=True)
-assert len(r2["drives"]) == 3 and "Could not read drive health" in r2["problem"]
+assert len(r2["drives"]) == 6 and "Could not read drive health" in r2["problem"]
 
 # ---------- page wiring ----------
 page = m.PAGE
