@@ -9,6 +9,8 @@ A phone version of NZB Command Center, served on your home network:
   * Queue  - SABnzbd queue and history (pause, delete, retry, speed limit)
   * Kodi   - now playing with a full remote, movies and TV shows (continue watching,
              next episode, missing episodes), "find a better copy" for a movie
+  * Drive Health (from Home) - every drive's health, temperature, free space and a 24 h
+             temperature graph, with phone alerts for problems, heat and low space
 It reads the SAME nzb_manager_config.json (and DPAPI-protected keys) as the desktop
 app, including its Kodi settings, and never modifies it. Phone-only
 settings (alerts, saved searches) live in mobile_settings.json. Add the page to your
@@ -65,7 +67,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.5.1"
+VERSION = "3.6.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -1704,7 +1706,8 @@ _settings_lock = threading.RLock()
 
 def _default_settings() -> dict:
     return {"ntfy_url": "", "ntfy_token": "", "notify_complete": True, "notify_failed": True, "notify_saved": True,
-            "saved_interval_hours": 6, "saved_searches": []}
+            "saved_interval_hours": 6, "saved_searches": [],
+            "notify_drive_health": True, "notify_drive_hot": True, "notify_drive_low": True, "drive_low_gb": DRIVE_LOW_GB}
 
 
 def load_settings() -> dict:
@@ -1884,6 +1887,8 @@ class BackgroundWorker:
     def __init__(self):
         self._seen: set[str] | None = None
         self._next_history = 0.0
+        self._next_drives = time.time() + 60  # first drive check a minute after start-up
+        self._drive_sent: dict[str, float] = {}
         self._stop = threading.Event()
 
     def start(self) -> None:
@@ -1908,6 +1913,20 @@ class BackgroundWorker:
         due = due_saved_search(settings, now)
         if due:  # one per tick spreads indexer API use out
             run_saved_search(due["id"], notify=True)
+        if now >= self._next_drives:
+            self._next_drives = now + DRIVE_CHECK_EVERY
+            self.check_drives(settings, now)
+
+    def check_drives(self, settings: dict, now: float) -> None:
+        """Refreshes drive health (also logging temperatures for the 24 h graph) and sends drive alerts."""
+        report = drive_report(force=True, with_rate=False)
+        if not settings["ntfy_url"]:
+            return
+        for title, message, prio in drive_alerts(report, settings, self._drive_sent, now):
+            try:
+                send_notification(title, message, tags=("floppy_disk",), priority=prio, settings=settings)
+            except UpstreamError as exc:
+                log.warning("Drive alert failed: %s", redact(exc))
 
     def check_history(self, settings: dict) -> None:
         try:
@@ -1955,6 +1974,311 @@ def sab_stats(days: int = 7) -> dict:
         elif status == "failed":
             bucket["failed"] += 1
     return {"totals": {k: to_int(st.get(k)) for k in ("day", "week", "month", "total")}, "days": list(buckets.values())}
+
+
+# ==============================================================================
+# 5d. DRIVE HEALTH
+# ==============================================================================
+# Physical disks, health and SMART-style counters come from Windows (Get-PhysicalDisk and
+# Get-StorageReliabilityCounter) every 10 minutes; free space is read live. Temperatures need the
+# server to run as administrator, or LibreHardwareMonitor's web server (port 8085) to be on.
+
+DRIVE_CHECK_EVERY = 600
+DRIVE_HISTORY_FILE = BASE_DIR / "drive_history.json"
+DRIVE_HISTORY_HOURS = 24
+DRIVE_TEMP_ALERT = 55          # °C for hard drives and SATA SSDs
+DRIVE_NVME_TEMP_EXTRA = 15     # NVMe SSDs are rated hotter (~70 °C)
+DRIVE_WARM_MARGIN = 4          # "running warm" this close to the limit
+DRIVE_LOW_GB = 100
+DRIVE_ALERT_REPEAT = 24 * 3600
+LHM_PORT = 8085
+
+DRIVES_PS = r"""
+$r = @{}
+try { $r.disks = @(Get-PhysicalDisk | ForEach-Object {
+    $rc = $null; try { $rc = $_ | Get-StorageReliabilityCounter -ErrorAction Stop } catch {}
+    @{ id = "$($_.DeviceId)"; name = ("" + $_.FriendlyName).Trim(); media = "$($_.MediaType)"; bus = "$($_.BusType)";
+       size = [double]$_.Size; health = "$($_.HealthStatus)"; spindle = $_.SpindleSpeed;
+       temp = $(if ($rc) { $rc.Temperature } else { $null }); wear = $(if ($rc) { $rc.Wear } else { $null });
+       hours = $(if ($rc) { $rc.PowerOnHours } else { $null });
+       read_errors = $(if ($rc) { $rc.ReadErrorsUncorrected } else { $null }) } }) } catch {}
+try { $r.parts = @(Get-Partition | Where-Object { $_.DriveLetter } | ForEach-Object { @{ disk = "$($_.DiskNumber)"; letter = "$($_.DriveLetter)" } }) } catch {}
+try { $r.volumes = @(Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { @{ letter = "$($_.DriveLetter)"; label = $_.FileSystemLabel } }) } catch {}
+$r | ConvertTo-Json -Compress -Depth 4
+"""
+
+_DRIVE_MEDIA = {"3": "HDD", "4": "SSD", "5": "SCM", "hdd": "HDD", "ssd": "SSD", "scm": "SCM"}
+_DRIVE_BUS = {"7": "USB", "11": "SATA", "17": "NVMe", "10": "SAS", "8": "RAID", "1": "SCSI", "3": "ATA", "12": "SD",
+              "usb": "USB", "sata": "SATA", "nvme": "NVMe", "sas": "SAS", "raid": "RAID", "scsi": "SCSI", "ata": "ATA"}
+_DRIVE_HEALTH = {"0": "Healthy", "1": "Warning", "2": "Unhealthy", "5": "Unknown",
+                 "healthy": "Healthy", "warning": "Warning", "unhealthy": "Unhealthy", "unknown": "Unknown"}
+
+_drive_lock = threading.Lock()
+_drive_state: dict = {"at": 0.0, "inv": None, "error": "", "history": None, "sab_dir": ("", 0.0)}
+
+
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def run_powershell(script: str, timeout: float = 45) -> dict:
+    """Runs a PowerShell script that prints one JSON object (Windows only, no window)."""
+    import subprocess
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+                          capture_output=True, text=True, timeout=timeout, creationflags=flags)
+    out = (proc.stdout or "").strip()
+    if not out:
+        raise UpstreamError((proc.stderr or "PowerShell returned nothing").strip()[:200])
+    data = json.loads(out)
+    return data if isinstance(data, dict) else {}
+
+
+def lhm_drive_temps(port: int = LHM_PORT) -> dict[str, float]:
+    """Drive temperatures from LibreHardwareMonitor's web server, keyed by lower-case drive name."""
+    try:
+        raw = http_fetch(f"http://127.0.0.1:{port}/data.json", timeout=2, max_bytes=4_000_000)
+        tree = json.loads(raw)
+    except Exception:
+        return {}
+    temps: dict[str, float] = {}
+
+    def walk(node, hw_name=""):
+        image = str(node.get("ImageURL") or "").lower()
+        if any(k in image for k in ("hdd", "nvme", "ssd")) and node.get("Text"):
+            hw_name = str(node["Text"]).strip().lower()
+        for child in node.get("Children") or []:
+            if hw_name and str(node.get("Text", "")).lower() == "temperatures":
+                m = re.match(r"\s*([\d.,]+)", str(child.get("Value") or ""))
+                if m and hw_name not in temps:
+                    temps[hw_name] = to_float(m.group(1).replace(",", "."), 0.0)
+            walk(child, hw_name)
+
+    if isinstance(tree, dict):
+        walk(tree)
+    return {k: v for k, v in temps.items() if v > 0}
+
+
+def _drive_inventory() -> dict:
+    """Disks, partitions and volume labels. Windows: PowerShell; elsewhere: the root file system only."""
+    if os.name == "nt":
+        data = run_powershell(DRIVES_PS)
+        return {"disks": _as_list(data.get("disks")), "parts": _as_list(data.get("parts")),
+                "volumes": _as_list(data.get("volumes"))}
+    return {"disks": [{"id": "0", "name": "System disk", "media": "", "bus": "", "size": 0, "health": "Unknown"}],
+            "parts": [{"disk": "0", "letter": "/"}], "volumes": []}
+
+
+def drive_inventory(force: bool = False) -> dict:
+    with _drive_lock:
+        fresh = _drive_state["inv"] is not None and time.time() - _drive_state["at"] < DRIVE_CHECK_EVERY
+        if fresh and not force:
+            return _drive_state["inv"]
+    try:
+        inv = _drive_inventory()
+        err = ""
+    except Exception as exc:  # keep the last good answer when one check fails
+        log.warning("Drive check failed: %s", exc)
+        inv, err = None, f"Could not read drive health ({str(exc)[:120]})."
+    with _drive_lock:
+        if inv is not None:
+            _drive_state.update(inv=inv, at=time.time(), error="")
+        else:
+            _drive_state["error"] = err
+            _drive_state["at"] = time.time()  # don't retry on every request
+        return _drive_state["inv"] or {"disks": [], "parts": [], "volumes": []}
+
+
+def _load_drive_history() -> dict:
+    if _drive_state["history"] is None:
+        try:
+            data = json.loads(DRIVE_HISTORY_FILE.read_text(encoding="utf-8"))
+            _drive_state["history"] = data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            _drive_state["history"] = {}
+    return _drive_state["history"]
+
+
+def record_drive_temps(temps: dict[str, float], now: float | None = None) -> None:
+    """Keeps 24 h of temperature samples per disk (at most one per 10 minutes)."""
+    now = time.time() if now is None else now
+    cutoff = now - DRIVE_HISTORY_HOURS * 3600
+    with _drive_lock:
+        hist = _load_drive_history()
+        changed = False
+        for key, temp in temps.items():
+            pts = [p for p in hist.get(key, []) if isinstance(p, list) and len(p) == 2 and p[0] >= cutoff]
+            if not pts or now - pts[-1][0] >= DRIVE_CHECK_EVERY - 30:
+                pts.append([round(now), round(float(temp), 1)])
+                changed = True
+            hist[key] = pts
+        for key in [k for k, v in hist.items() if not v]:
+            del hist[key]
+        if changed:
+            try:
+                tmp = DRIVE_HISTORY_FILE.with_name(DRIVE_HISTORY_FILE.name + ".tmp")
+                tmp.write_text(json.dumps(hist), encoding="utf-8")
+                os.replace(tmp, DRIVE_HISTORY_FILE)
+            except OSError as exc:
+                log.warning("Could not save drive history: %s", exc)
+
+
+def drive_temp_history(key: str) -> list:
+    with _drive_lock:
+        return list(_load_drive_history().get(key, []))
+
+
+def _letter_of(path: str) -> str:
+    path = str(path or "").strip()
+    if os.name == "nt":
+        return path[0].upper() if len(path) >= 2 and path[1] == ":" else ""
+    return "/" if path.startswith("/") else ""
+
+
+def sab_complete_dir() -> str:
+    """SABnzbd's completed-downloads folder (cached for 10 minutes)."""
+    cached, at = _drive_state["sab_dir"]
+    if time.time() - at < DRIVE_CHECK_EVERY:
+        return cached
+    folder = ""
+    try:
+        misc = sab_request("get_config", {"section": "misc"}, timeout=8).get("config", {}).get("misc", {})
+        folder = str(misc.get("complete_dir") or "")
+    except (UpstreamError, ConfigError):
+        pass
+    _drive_state["sab_dir"] = (folder, time.time())
+    return folder
+
+
+def daily_download_bytes() -> float:
+    """Average bytes SABnzbd finished per day over the last week (0 if unknown)."""
+    try:
+        days = sab_stats(7)["days"]
+    except (UpstreamError, ConfigError, KeyError):
+        return 0.0
+    return sum(d["bytes"] for d in days) / 7.0
+
+
+def drive_temp_limit(bus: str, setting: float = DRIVE_TEMP_ALERT) -> float:
+    return setting + (DRIVE_NVME_TEMP_EXTRA if bus == "NVMe" else 0)
+
+
+def drive_report(force: bool = False, with_rate: bool = True) -> dict:
+    """Everything the Drive Health page shows, newest free space included."""
+    import shutil
+    inv = drive_inventory(force)
+    lhm = lhm_drive_temps() if any(d.get("temp") in (None, "", 0) for d in inv["disks"]) else {}
+    labels = {str(v.get("letter", "")).upper(): str(v.get("label") or "") for v in inv["volumes"]}
+    system = _letter_of(os.environ.get("SystemDrive", "C:") + "\\") if os.name == "nt" else "/"
+    try:
+        cfg_media = [str(x) for x in json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("media_folders", []) or []]
+    except (OSError, ValueError, AttributeError):
+        cfg_media = []
+    media_letters = {_letter_of(p) for p in cfg_media} - {""}
+    sab_letter = _letter_of(sab_complete_dir())
+    rate = daily_download_bytes() if with_rate and sab_letter else 0.0
+
+    drives, temps = [], {}
+    for disk in inv["disks"]:
+        disk_id = str(disk.get("id", ""))
+        letters = sorted({str(p.get("letter", "")).upper() if os.name == "nt" else "/"
+                          for p in inv["parts"] if str(p.get("disk")) == disk_id} - {""})
+        total = free = 0
+        for letter in letters:
+            try:
+                usage = shutil.disk_usage(f"{letter}:\\" if os.name == "nt" else letter)
+                total += usage.total
+                free += usage.free
+            except OSError:
+                pass
+        media = _DRIVE_MEDIA.get(str(disk.get("media", "")).strip().lower(), "")
+        bus = _DRIVE_BUS.get(str(disk.get("bus", "")).strip().lower(), str(disk.get("bus") or ""))
+        if bus == "NVMe":
+            media = "SSD"
+        name = str(disk.get("name") or "Drive")
+        temp = to_float(disk.get("temp"), 0.0) or next(
+            (t for k, t in lhm.items() if k and (k in name.lower() or name.lower() in k)), 0.0)
+        hist_key = f"{disk_id}:{name}"
+        if temp > 0:
+            temps[hist_key] = temp
+        limit = drive_temp_limit(bus)
+        health = _DRIVE_HEALTH.get(str(disk.get("health", "")).strip().lower(), "Unknown")
+        uses = []
+        if system in letters:
+            uses.append("Windows and apps" if os.name == "nt" else "System")
+        if letters and media_letters & set(letters):
+            uses.append("Media library")
+        if sab_letter and sab_letter in letters:
+            uses.append("Finished downloads")
+        problems = []
+        if health in ("Warning", "Unhealthy"):
+            problems.append(("bad" if health == "Unhealthy" else "warn",
+                             f"Windows reports this drive as {health.lower()}. Back up its data."))
+        if temp and temp >= limit:
+            problems.append(("bad", f"Too hot ({temp:.0f}°C, limit {limit:.0f}°C). Check airflow around it."))
+        elif temp and temp >= limit - DRIVE_WARM_MARGIN:
+            problems.append(("warn", f"Running warm ({temp:.0f}°C). Check airflow around it."))
+        if total and free < DRIVE_LOW_GB * 1024 ** 3:
+            problems.append(("warn", f"Only {format_bytes(free)} free."))
+        status = "bad" if any(p[0] == "bad" for p in problems) else ("warn" if problems else
+                                                                      ("ok" if health == "Healthy" else "unknown"))
+        days_left = None
+        if rate > 0 and sab_letter in letters and free:
+            days_left = int(free / rate)
+        drives.append({
+            "key": hist_key, "letters": letters, "name": name,
+            "label": " / ".join(labels.get(x, "") for x in letters if labels.get(x)) or (uses[0] if uses else ""),
+            "media": media, "bus": bus, "size": to_float(disk.get("size")) or total,
+            "total": total, "free": free, "used_pct": round((total - free) * 100 / total) if total else None,
+            "health": health, "status": status, "problems": [p[1] for p in problems],
+            "temp": round(temp) if temp else None, "temp_limit": limit,
+            "hours": to_int(disk.get("hours")) or None,
+            "wear": to_int(disk.get("wear")) if media == "SSD" and disk.get("wear") not in (None, "") else None,
+            "rpm": to_int(disk.get("spindle")) if media == "HDD" and to_int(disk.get("spindle")) > 1 else None,
+            "uses": uses, "days_left": days_left, "daily_bytes": rate if days_left is not None else None,
+        })
+    if temps:
+        record_drive_temps(temps)
+    order = {"bad": 0, "warn": 1, "ok": 2, "unknown": 3}
+    drives.sort(key=lambda d: (order[d["status"]], d["letters"][0] if d["letters"] else "~"))
+    for d in drives:
+        d["history"] = drive_temp_history(d["key"])
+    with _drive_lock:
+        checked, error = _drive_state["at"], _drive_state["error"]
+    return {
+        "drives": drives, "checked": checked or None, "error": error,
+        "temps_available": any(d["temp"] for d in drives),
+        "totals": {"free": sum(d["free"] for d in drives), "total": sum(d["total"] for d in drives),
+                   "ok": sum(d["status"] == "ok" for d in drives),
+                   "warn": sum(d["status"] in ("warn", "bad") for d in drives)},
+    }
+
+
+def drive_alerts(report: dict, settings: dict, sent: dict, now: float) -> list[tuple[str, str, int]]:
+    """Alerts due for this report: (title, message, priority). `sent` remembers when each was last sent."""
+    out = []
+    low = settings.get("drive_low_gb", DRIVE_LOW_GB) * 1024 ** 3
+    for d in report["drives"]:
+        name = (", ".join(f"{x}:" for x in d["letters"] if x != "/") + " " if d["letters"] else "") + d["name"]
+        checks = [
+            ("health", settings.get("notify_drive_health"), d["health"] in ("Warning", "Unhealthy"),
+             f"Drive problem: {name}", f"Windows reports {name} as {d['health'].lower()}. Back up its data soon.", 5),
+            ("hot", settings.get("notify_drive_hot"), bool(d["temp"]) and d["temp"] >= d["temp_limit"],
+             f"Drive too hot: {name}", f"{name} is at {d['temp']}°C (limit {d['temp_limit']:.0f}°C).", 4),
+            ("low", settings.get("notify_drive_low"), bool(d["total"]) and d["free"] < low,
+             f"Drive almost full: {name}", f"{name} has only {format_bytes(d['free'])} free.", 3),
+        ]
+        for kind, enabled, bad, title, message, prio in checks:
+            key = f"{kind}:{d['key']}"
+            if not bad:
+                sent.pop(key, None)  # fixed: alert again if it comes back
+                continue
+            if enabled and now - sent.get(key, 0) >= DRIVE_ALERT_REPEAT:
+                sent[key] = now
+                out.append((title, message, prio))
+    return out
 
 
 AUTOSTART_NAME = "NZB Mobile Server.vbs"
@@ -2275,6 +2599,19 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 .rart small{font:700 9px var(--mono);letter-spacing:.04em;color:var(--soft)}.rart img.art{position:absolute;inset:0}
 .rart.k-tv,.rart.k-app{color:var(--sky)}.rart.k-music{color:var(--purple)}.rart.k-book{color:var(--amber)}.rart.k-game{color:var(--red)}.rart.k-package{color:var(--muted)}
 .tiles.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.drow{display:block;width:100%;border:0;background:transparent;color:inherit;text-align:left;padding:12px 0;border-top:1px solid #10242C;cursor:pointer}.drow:first-of-type{border-top:0;padding-top:2px}
+.dl{display:flex;align-items:center;gap:10px}.dl .lt{font:700 15px var(--mono);width:30px;flex:none}.dl .nm{flex:1;min-width:0;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dl .nm small{font-weight:400;color:var(--soft)}
+.dsub{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--soft);padding-left:40px}.dsub b{color:var(--white);font-weight:600}
+.dbar{height:6px;background:var(--deep);border-radius:3px;overflow:hidden;margin:8px 0 6px 40px}.dbar span{display:block;height:100%;border-radius:3px;background:var(--teal)}
+.tag.bad{background:#2E1215;color:var(--red)}.tag.unk{background:var(--deep);color:var(--muted)}
+.dcard{background:var(--card);border-radius:14px;padding:14px;margin-bottom:12px}
+.dcard .top{display:flex;align-items:center;gap:12px}.dcard .lt{font:800 20px var(--mono);min-width:34px}.dcard .nm{flex:1;min-width:0}.dcard .nm b{display:block;font-size:16px}.dcard .nm span{font-size:12px;color:var(--soft)}
+.dstats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:10px}.dstats div{background:var(--deep);border-radius:9px;padding:8px 4px;text-align:center}.dstats b{display:block;font:700 14px var(--mono)}.dstats span{font-size:10px;color:var(--soft)}
+.dnote{font-size:12px;color:var(--soft);margin-top:10px}.dnote.warn{color:#E9D9A8;background:#211B0B;border-radius:8px;padding:8px 10px}.dnote.bad{color:#FBC7C7;background:#2A1013;border-radius:8px;padding:8px 10px}
+.banner{display:flex;gap:12px;align-items:flex-start;border-radius:14px;padding:14px;margin-bottom:12px}.banner.warn{background:#211B0B;border:1px solid #4A3B10}.banner.bad{background:#2A1013;border:1px solid #5B2328}.banner.ok{background:#0B2420;border:1px solid #14532D}
+.banner b{display:block;font-size:15px}.banner.warn b{color:var(--amber)}.banner.bad b{color:var(--red)}.banner.ok b{color:var(--green)}.banner span{font-size:12px;color:var(--soft)}
+.tgl{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid #10242C;min-height:48px}.tgl:first-child{border-top:0}.tgl input{width:22px;height:22px;accent-color:var(--teal);flex:none}.tgl small{display:block;color:var(--soft);font-size:12px}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--soft);margin-top:8px}.legend i{display:inline-block;width:9px;height:9px;border-radius:5px;margin-right:5px}
 .pills{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}.pills button{border:1px solid var(--line);background:transparent;color:var(--text);border-radius:18px;padding:0 14px;min-height:38px;font-size:13px;font-weight:600}.pills button.on{background:var(--teal);color:var(--ink);border-color:var(--teal)}
 </style></head><body>
 <header><div class="brand"><img src="/icon.png" alt="">NZB Command Center</div><div id="statusbar" class="statusbar hidden"><span id="sabpill" class="spill"><i></i>SABnzbd</span></div></header>
@@ -2288,6 +2625,12 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <div class="tiles" id="homeusage"><div class="tile"><div class="k">Today</div><div class="v" id="husday">—</div></div><div class="tile"><div class="k">This week</div><div class="v" id="husweek">—</div></div><div class="tile"><div class="k">This month</div><div class="v" id="husmonth">—</div></div></div>
 <button class="shortcut" data-tab="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search your indexers…</button>
 <div id="homekodi"></div>
+<div id="homedrives"></div>
+</section>
+<section id="drives" class="hidden">
+<div class="row" style="justify-content:space-between;margin-top:6px"><button class="btn ghost sm" data-tab="home" style="flex:none">‹ Home</button><button class="btn ghost sm" id="drivecheck" style="flex:none">Check now</button></div>
+<h1>Drive Health</h1><p class="lede" id="drivestatus">Loading…</p>
+<div id="drivebody"></div>
 </section>
 <section id="search" class="hidden">
 <h1>Search</h1><p class="lede">Your indexers, from anywhere at home.</p>
@@ -2381,7 +2724,7 @@ function toast(msg,isErr){const t=$('toast');t.textContent=msg;t.className='toas
 function skeleton(n,lines){let h='';for(let i=0;i<n;i++)h+='<div class="skel">'+'<i style="width:'+(85-i*7)+'%"></i><i style="width:55%"></i>'+(lines>2?'<i style="width:35%"></i>':'')+'</div>';return h}
 function empty(title,hint){return '<div class="empty">'+EMPTY_ICON+'<b>'+esc(title)+'</b>'+esc(hint)+'</div>'}
 
-const API_TIMEOUTS={'/api/search':90000,'/api/add':120000,'/api/add-batch':300000};
+const API_TIMEOUTS={'/api/drives':70000,'/api/drives/check':70000,'/api/search':90000,'/api/add':120000,'/api/add-batch':300000};
 async function api(path,body){
   const opt={method:body===undefined?'GET':'POST',headers:{'X-Mobile-Token':token}};
   if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body)}
@@ -2420,7 +2763,7 @@ function fillSearchCategories(keep){
 }
 function fillCategories(cats){sabCats=cats;const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Auto (match)</option><option value="*">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(keep==='*'||cats.includes(keep))sel.value=keep}
 
-function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':t;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi()}
+function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi','drives'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':(t==='drives'?'home':t);document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi();if(t==='drives')refreshDrives()}
 
 function savePrefs(){LS.set('nzb_mobile_prefs',JSON.stringify({sort:$('sort').value,minsize:$('minsize').value,maxsize:$('maxsize').value,mingrabs:$('mingrabs').value,indexer:$('indexer').value,prio:$('prio').value,category:$('category').value}));LS.set('nzb_mobile_cat',$('sabcat').value)}
 function loadPrefs(){try{const p=JSON.parse(LS.get('nzb_mobile_prefs','{}'));if(p.sort)$('sort').value=p.sort;if(p.prio!==undefined)$('prio').value=p.prio;if(p.indexer&&[...$('indexer').options].some(o=>o.value===p.indexer))$('indexer').value=p.indexer;['minsize','maxsize','mingrabs'].forEach(k=>{if(p[k]!==undefined)$(k).value=p[k]})}catch{}}
@@ -2635,7 +2978,7 @@ async function refreshHome(){
     $('hfree').innerHTML=d.disk_free_gb!=null&&d.disk_free_gb>=0?esc(Number(d.disk_free_gb).toFixed(0))+' <small>GB</small>':'—';
     const k=d.kodi||{};
     $('homekodi').innerHTML=!k.configured?'':(k.online?nowCard(k.playing,true):'<button class="card kidle" data-tab="kodi">'+ICON.play+'<span>Kodi is offline</span></button>');hydrateArt($('homekodi'));
-    loadHomeUsage();
+    loadHomeUsage();loadHomeDrives();
   }catch(e){$('homestatus').className='lede status error';$('homestatus').textContent=e.message}
   finally{homeBusy=false}
 }
@@ -2868,6 +3211,79 @@ async function loadHomeUsage(){
   if(Date.now()-usageAt<60000)return;usageAt=Date.now();
   try{const t=(await api('/api/stats')).totals||{};$('husday').textContent=fmtBytes(t.day);$('husweek').textContent=fmtBytes(t.week);$('husmonth').textContent=fmtBytes(t.month)}catch{}
 }
+// ---------- Drive Health ----------
+let drivesAt=0,drivesData=null,drivesBusy=false;
+const DCOL=['#A78BFA','#38BDF8','#F59E0B','#F472B6','#34D399','#FB7185'];
+function dLetters(d){return d.letters.filter(x=>x!=='/').map(x=>x+':').join(' ')}
+function dTag(d){const t={ok:['ok','HEALTHY'],warn:['warn',d.temp&&d.temp>=d.temp_limit-4?'RUNNING WARM':'NEEDS A LOOK'],bad:['bad',d.health==='Unhealthy'||d.health==='Warning'?'PROBLEM':'TOO HOT'],unknown:['unk','UNKNOWN']}[d.status]||['unk','UNKNOWN'];return '<span class="tag '+t[0]+'" style="flex:none">'+t[1]+'</span>'}
+function dKind(d){return [d.media,d.bus].filter(Boolean).join(' · ')+(d.size?(d.media||d.bus?' · ':'')+fmtBytes(d.size):'')}
+function dBarColor(d){return d.used_pct>=90?'var(--red)':(d.used_pct>=75?'#F59E0B':'var(--teal)')}
+function dYears(h){if(!h)return '—';const y=h/8766;return y>=1?y.toFixed(1)+' yr':(h>=48?Math.round(h/24)+' d':h+' h')}
+function dTitle(d){return esc(d.label||d.name)}
+async function loadHomeDrives(force){
+  if(!force&&Date.now()-drivesAt<120000){if(drivesData)renderHomeDrives(drivesData);return}
+  drivesAt=Date.now();
+  try{drivesData=await api('/api/drives');renderHomeDrives(drivesData)}catch{}
+}
+function renderHomeDrives(r){
+  const box=$('homedrives');if(!r||!r.drives||!r.drives.length){box.innerHTML='';return}
+  const n=r.totals.warn;
+  box.innerHTML='<div class="row" style="justify-content:space-between;margin:18px 4px 8px"><div class="section" style="margin:0;flex:none">DRIVES</div>'+(n?'<span class="tag warn" style="flex:none">'+n+' NEED'+(n===1?'S':'')+' A LOOK</span>':'<span class="tag ok" style="flex:none">ALL HEALTHY</span>')+'</div><div class="card">'+
+    r.drives.map(d=>'<button class="drow" data-tab="drives"><div class="dl"><span class="lt">'+esc(dLetters(d)||'—')+'</span><span class="nm">'+dTitle(d)+' <small>· '+esc(dKind(d))+'</small></span>'+dTag(d)+'</div>'+
+      (d.total?'<div class="dbar"><span style="width:'+clampPct(d.used_pct)+'%;background:'+dBarColor(d)+'"></span></div>':'')+
+      '<div class="dsub"><span><b>'+esc(fmtBytes(d.free))+' free</b>'+(d.days_left!=null?' · ~'+esc(d.days_left)+' days left':(d.wear!=null?' · SSD wear '+esc(d.wear)+'%':''))+'</span><span style="font-family:var(--mono)'+(d.temp&&d.temp>=d.temp_limit-4?';color:var(--amber)':'')+'">'+(d.temp?esc(d.temp)+'°C':'')+'</span></div></button>').join('')+'</div>';
+}
+function tempChart(drives){
+  const series=drives.map((d,i)=>({d,c:DCOL[i%DCOL.length],pts:(d.history||[])})).filter(s=>s.pts.length>1);
+  if(!series.length)return '';
+  const now=Date.now()/1000,start=now-86400;let lo=Infinity,hi=-Infinity;
+  series.forEach(s=>s.pts.forEach(p=>{lo=Math.min(lo,p[1]);hi=Math.max(hi,p[1])}));
+  const limit=Math.min(...series.map(s=>s.d.temp_limit));hi=Math.max(hi,limit)+2;lo=Math.max(0,lo-5);
+  const W=330,H=110,x=t=>((t-start)/86400*W).toFixed(1),y=v=>(H-(v-lo)/(hi-lo)*H).toFixed(1);
+  const lines=series.map(s=>'<polyline fill="none" stroke="'+s.c+'" stroke-width="2" stroke-linejoin="round" points="'+s.pts.map(p=>x(p[0])+','+y(p[1])).join(' ')+'"/>').join('');
+  return '<div class="section">TEMPERATURES · 24 H</div><div class="card"><svg width="100%" height="110" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" role="img" aria-label="Drive temperatures over the last 24 hours"><line x1="0" x2="'+W+'" y1="'+y(limit)+'" y2="'+y(limit)+'" stroke="#6B5414" stroke-dasharray="4 4"/>'+lines+'</svg>'+
+    '<div class="legend">'+series.map(s=>'<span><i style="background:'+s.c+'"></i>'+esc((dLetters(s.d)?dLetters(s.d)+' ':'')+(s.d.label||s.d.name))+'</span>').join('')+'<span style="margin-left:auto;color:#D6C7A0">- - '+esc(Math.round(limit))+'°C alert</span></div></div>';
+}
+function driveCard(d){
+  const stats=[[d.temp?d.temp+'°C':'—','Temp'],[dYears(d.hours),'Powered on']];
+  if(d.wear!=null)stats.push([d.wear+'%','SSD wear']);else if(d.rpm)stats.push([d.rpm,'RPM']);else stats.push([d.used_pct!=null?d.used_pct+'%':'—','Used']);
+  stats.push(d.days_left!=null?['~'+d.days_left,'Days left']:[fmtBytes(d.total),'Capacity']);
+  const notes=d.problems.map(p=>'<div class="dnote '+(d.status==='bad'?'bad':'warn')+'">'+esc(p)+'</div>').join('');
+  const info=d.days_left!=null?'<div class="dnote warn">About <b>'+esc(d.days_left)+' days</b> of space left at your pace ('+esc(fmtBytes(d.daily_bytes))+'/day).</div>':'';
+  return '<div class="dcard"><div class="top"><span class="lt">'+esc(dLetters(d)||'—')+'</span><div class="nm"><b>'+dTitle(d)+'</b><span>'+esc(d.name)+(dKind(d)?' · '+esc(dKind(d)):'')+'</span></div>'+dTag(d)+'</div>'+
+    (d.total?'<div class="row" style="justify-content:space-between;margin-top:12px;font-size:13px"><b style="flex:none">'+esc(fmtBytes(d.free))+' free of '+esc(fmtBytes(d.total))+'</b><span style="flex:none;font:500 12px var(--mono);color:var(--soft)">'+esc(d.used_pct)+'% used</span></div><div class="bar" style="height:8px;margin:6px 0 0"><span style="width:'+clampPct(d.used_pct)+'%;background:'+dBarColor(d)+'"></span></div>':'')+
+    '<div class="dstats">'+stats.map(s=>'<div><b>'+esc(s[0])+'</b><span>'+esc(s[1])+'</span></div>').join('')+'</div>'+
+    notes+(notes?'':info)+(d.uses.length?'<div class="dnote">'+esc(d.uses.join(' · '))+(d.temp?' · alert at '+esc(Math.round(d.temp_limit))+'°C':'')+'</div>':'')+'</div>';
+}
+function renderDrives(r){
+  drivesData=r;const t=r.totals,ds=r.drives;
+  const ago=r.checked?Math.max(0,Math.round((Date.now()/1000-r.checked)/60)):null;
+  $('drivestatus').textContent=ds.length+' drive'+(ds.length===1?'':'s')+(ago!=null?' · checked '+(ago<1?'just now':ago+' min ago'):'');
+  if(!ds.length){$('drivebody').innerHTML=empty('No drives found',r.error||'Windows did not report any drives.');return}
+  const worst=ds.find(d=>d.status==='bad')||ds.find(d=>d.status==='warn');
+  const banner=worst?'<div class="banner '+worst.status+'"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="color:'+(worst.status==='bad'?'var(--red)':'var(--amber)')+';flex:none" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg><div><b>'+t.warn+' drive'+(t.warn===1?' needs':'s need')+' a look</b><span>'+esc((dLetters(worst)?dLetters(worst)+' ':'')+(worst.label||worst.name)+': '+(worst.problems[0]||''))+'</span></div></div>'
+    :'<div class="banner ok"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex:none" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><div><b>All drives healthy</b><span>Windows reports no problems.</span></div></div>';
+  const tiles='<div class="tiles"><div class="tile"><div class="k">Healthy</div><div class="v" style="color:var(--green)">'+t.ok+'</div></div><div class="tile"><div class="k">Need a look</div><div class="v" style="color:'+(t.warn?'var(--amber)':'var(--soft)')+'">'+t.warn+'</div></div><div class="tile"><div class="k">Free of '+esc(fmtBytes(t.total))+'</div><div class="v">'+esc(fmtBytes(t.free))+'</div></div></div>';
+  const tempHint=r.temps_available?'':'<p class="hint" style="margin:0 4px 12px">Temperatures and powered-on hours need NZB Mobile Server to run as administrator, or LibreHardwareMonitor running with its web server on (port 8085).</p>';
+  const a=r.alerts||{};
+  const alerts='<div class="section">ALERTS TO MY PHONE</div><div class="card" id="drivealerts">'+
+    '<label class="tgl"><span>Health changes<small>Windows reports a drive problem</small></span><input type="checkbox" data-dalert="notify_drive_health"'+(a.health?' checked':'')+'></label>'+
+    '<label class="tgl"><span>Too hot<small>Hard drives '+esc(r.temp_alert)+'°C · NVMe '+esc(r.nvme_temp_alert)+'°C</small></span><input type="checkbox" data-dalert="notify_drive_hot"'+(a.hot?' checked':'')+'></label>'+
+    '<label class="tgl"><span>Less than '+esc(a.low_gb||100)+' GB free</span><input type="checkbox" data-dalert="notify_drive_low"'+(a.low?' checked':'')+'></label>'+
+    (a.ready?'':'<p class="hint" style="margin:8px 0 0">Phone alerts aren\'t set up yet: they use ntfy, the same as download alerts.</p>')+'</div>';
+  $('drivebody').innerHTML=banner+tiles+tempHint+'<div class="section">ALL DRIVES</div>'+ds.map(driveCard).join('')+tempChart(ds)+alerts+(r.error?'<p class="hint">'+esc(r.error)+'</p>':'');
+  renderHomeDrives(r);
+}
+async function refreshDrives(force){
+  if(drivesBusy)return;drivesBusy=true;
+  if(!drivesData){$('drivebody').innerHTML=skeleton(3,3)}else renderDrives(drivesData);
+  const b=$('drivecheck');if(force){b.disabled=true;b.textContent='Checking…'}
+  try{renderDrives(await api(force?'/api/drives/check':'/api/drives',force?{}:undefined));drivesAt=Date.now();if(force)toast('Drives checked')}
+  catch(e){if(!drivesData)$('drivebody').innerHTML=empty('Couldn\'t read your drives',e.message);else toast(e.message,true)}
+  finally{drivesBusy=false;b.disabled=false;b.textContent='Check now'}
+}
+async function setDriveAlert(key,on){try{const body={};body[key]=on;renderDrives(await api('/api/drives/alerts',body));toast(on?'Alert turned on':'Alert turned off')}catch(e){toast(e.message,true)}}
+
 async function kodiScan(){
   const b=$('kodiscan');b.disabled=true;
   try{await api('/api/kodi/scan',{});kodiMovies=null;toast('Library scan started on Kodi')}catch(e){toast(e.message,true)}finally{b.disabled=false}
@@ -2893,6 +3309,8 @@ async function watchFinished(){
 }
 function bind(){
   $('pairbtn').addEventListener('click',pair);
+  $('drivecheck').addEventListener('click',()=>refreshDrives(true));
+  $('drivebody').addEventListener('change',e=>{const c=e.target.closest('[data-dalert]');if(c)setDriveAlert(c.dataset.dalert,c.checked)});
   $('token').addEventListener('keydown',e=>{if(e.key==='Enter')pair()});
   document.addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(b)showTab(b.dataset.tab)});
   document.addEventListener('click',e=>{const b=e.target.closest('[data-kact]');if(b)kodiControl(b.dataset.kact,b.dataset.pid)});
@@ -3116,6 +3534,8 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"missing": kodi_missing_episodes()})
         elif path == "/api/stats":
             self.send_json(200, sab_stats())
+        elif path == "/api/drives":
+            self.send_json(200, self._drives_view())
         elif path == "/api/saved":
             self.send_json(200, self._saved_view())
         elif path == "/api/settings":
@@ -3225,6 +3645,16 @@ class MobileHandler(BaseHTTPRequestHandler):
             if not send_notification("NZB Command Center", "Test alert from your phone app — alerts are working.", tags=("bell",)):
                 raise ValueError("Save an ntfy topic URL first.")
             self.send_json(200, {"ok": True})
+        elif path == "/api/drives/check":
+            self.send_json(200, self._drives_view(force=True))
+        elif path == "/api/drives/alerts":
+            def apply(st: dict):
+                for key in ("notify_drive_health", "notify_drive_hot", "notify_drive_low"):
+                    if key in body:
+                        st[key] = bool(body[key])
+            update_settings(apply)
+            log.info("drive alert settings saved ip=%s", self.ip)
+            self.send_json(200, self._drives_view())
         elif path == "/api/kodi/scan":
             kodi_call("VideoLibrary.Scan", {"showdialogs": False})
             log.info("kodi scan ip=%s", self.ip)
@@ -3238,6 +3668,15 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"ok": True})
         else:
             self.send_json(404, {"error": "Not found."})
+
+    def _drives_view(self, force: bool = False) -> dict:
+        report = drive_report(force=force)
+        s = load_settings()
+        report["alerts"] = {"ready": bool(s["ntfy_url"]), "health": s["notify_drive_health"], "hot": s["notify_drive_hot"],
+                            "low": s["notify_drive_low"], "low_gb": s["drive_low_gb"]}
+        report["temp_alert"] = DRIVE_TEMP_ALERT
+        report["nvme_temp_alert"] = DRIVE_TEMP_ALERT + DRIVE_NVME_TEMP_EXTRA
+        return report
 
     def _home(self) -> dict:
         """One call for the Home tab: SABnzbd summary, today's totals and what Kodi is playing."""

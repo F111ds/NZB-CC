@@ -12,6 +12,7 @@ mobile_server.log*
 nzb_caps_cache.json
 nzb_daily_stats.json
 media_inspector_cache.json
+drive_history.json
 
 # --- Python ---
 __pycache__/
