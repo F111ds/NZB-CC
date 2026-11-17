@@ -11,6 +11,11 @@ android {
         // Xiaomi: docs/devices/xiaomi-mitv-aetp0-dofus.md (com.ts.launcher).
         // ColorOS TV: docs/devices/oppo-k9-55-oppocnm632.md (com.oneplus.tv.launcher2).
         applicationId providers.gradleProperty('launcherApplicationId').getOrElse('com.gathin.tvhome')
+        // NZB-CC: -PlauncherApplicationId=com.gathin.tvhome.preview builds the cinema preview, a separate app that
+        // installs beside the launcher: only CinemaActivity and MediaWatch are on, so it never takes Home, the
+        // screensaver or the remote's keys, and uninstalling it leaves the launcher exactly as it was.
+        def cinema = providers.gradleProperty('launcherApplicationId').getOrElse('').endsWith('.preview')
+        manifestPlaceholders = [fullLauncher: cinema ? 'false' : 'true', cinemaPreview: cinema ? 'true' : 'false']
         minSdk 26
         targetSdk 34
         versionCode 1030   // above any upstream build, so it installs over the launcher already on the TV

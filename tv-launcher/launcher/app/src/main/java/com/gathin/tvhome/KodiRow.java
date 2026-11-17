@@ -169,6 +169,11 @@ final class KodiRow {
         return enabled() && !items.isEmpty();
     }
 
+    /** NZB-CC cinema preview: the row's items, newest first (read-only use). */
+    List<Item> items() {
+        return items;
+    }
+
     int count() {
         return items.size();
     }
