@@ -72,7 +72,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.9.0"
+VERSION = "3.9.1"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -1144,9 +1144,9 @@ KODI_TEXT_MAX = 500
 
 
 def kodi_send_text(text: str, done: bool = True) -> dict:
-    """Types `text` into the text box open on Kodi (it replaces what's there). done=True also presses OK.
-
-    Kodi accepts the command even when no text box is open and then ignores it, so check first."""
+    """Types `text` into Kodi: into the on-screen keyboard when it's open, otherwise into the selected
+    text field of whatever dialog is open (e.g. an add-on's "Connect to server" box). It replaces
+    what's there. done=True also presses OK on the keyboard."""
     text = str(text or "")
     if len(text) > KODI_TEXT_MAX:
         raise ValueError(f"That's too long (at most {KODI_TEXT_MAX} characters).")
@@ -1154,10 +1154,9 @@ def kodi_send_text(text: str, done: bool = True) -> dict:
         text = " ".join(text.split())  # pasted line breaks/tabs: Kodi's boxes are one line
     win = kodi_call("GUI.GetProperties", {"properties": ["currentwindow"]}) or {}
     wid = to_int((win.get("currentwindow") or {}).get("id"), 0)
-    if wid not in KODI_TEXT_WINDOWS:
-        raise ValueError("No text box is open on the TV. Select a text field in Kodi first, then send again.")
     kodi_call("Input.SendText", {"text": text, "done": bool(done)})
-    return {"ok": True, "window": KODI_TEXT_WINDOWS[wid]}
+    # Kodi can't tell us whether a text field was selected; outside its keyboard, say what to check.
+    return {"ok": True, "window": KODI_TEXT_WINDOWS.get(wid, "field")}
 
 
 def _art_ref(value) -> str:
@@ -4446,7 +4445,7 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <div class="card hidden" id="kodytype"><label class="kode" for="kodytext" style="display:block;margin-bottom:8px">TYPE ON TV</label>
 <input id="kodytext" class="field" style="margin-bottom:8px" placeholder="Text for the box open on the TV" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="send" maxlength="500">
 <div class="row"><button class="btn sm" id="kodysend">Send &amp; OK</button><button class="btn ghost sm" id="kodysendonly">Send only</button></div>
-<p class="hint" style="margin:8px 2px 0">Select a text box on the TV first (a search, an address, a password). What you send replaces what's in it. “Send &amp; OK” also confirms it.</p></div>
+<p class="hint" style="margin:8px 2px 0">Select a text box on the TV first (a search, an address, a password). What you send replaces what's in it. “Send &amp; OK” also presses OK on Kodi's keyboard.</p></div>
 <div class="seg hidden" id="kodiseg"><button class="on" data-kmode="movies">Movies</button><button data-kmode="tv">TV shows</button></div>
 <div id="kodiTV" class="hidden">
 <div class="section" id="cwtitle">CONTINUE WATCHING</div>
@@ -5290,7 +5289,8 @@ async function kodiType(done){
   const box=$('kodytext'),text=box.value,b1=$('kodysend'),b2=$('kodysendonly');
   if(!text){box.focus();return}
   b1.disabled=b2.disabled=true;
-  try{await api('/api/kodi/text',{text,done});box.value='';toast(done?'Typed on the TV and confirmed':'Typed on the TV')}
+  try{const r=await api('/api/kodi/text',{text,done});box.value='';
+    toast(r.window==='field'?'Sent. If it didn\'t appear, select the text field on the TV and send again.':(done?'Typed on the TV and confirmed':'Typed on the TV'))}
   catch(e){toast(e.message,true)}
   finally{b1.disabled=b2.disabled=false}
 }
