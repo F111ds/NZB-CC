@@ -106,7 +106,9 @@ try {
             if (-not (Test-Path $s.src)) { continue }
             $obj = Get-Content $s.src -Raw -Encoding UTF8 | ConvertFrom-Json
             $clean = Clean $obj
-            $clean | ConvertTo-Json -Depth 30 | Set-Content (Join-Path $dest $s.name) -Encoding UTF8
+            # UTF-8 WITHOUT a byte-order mark: Windows PowerShell's Set-Content -Encoding UTF8 adds one,
+            # and the apps would then read a restored file as damaged.
+            [IO.File]::WriteAllText((Join-Path $dest $s.name), ($clean | ConvertTo-Json -Depth 30), (New-Object System.Text.UTF8Encoding $false))
             $saved += $s.name
         }
         $photos = Join-Path $Folder "tv_photos_folder.txt"
