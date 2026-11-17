@@ -70,7 +70,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.7.1"
+VERSION = "3.7.2"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -2469,7 +2469,7 @@ def jf_overview() -> dict:
     try:
         info = jf_request("/System/Info", timeout=6, conf=conf)
     except (UpstreamError, ConfigError) as exc:
-        out.update(online=False, error=redact(exc))
+        out.update(online=False, problem=redact(exc))  # not "error": the page treats that as a failed request
         return out
     out.update(online=True, ms=int((time.monotonic() - t0) * 1000),
                server=str(info.get("ServerName") or "Jellyfin"), version=str(info.get("Version") or ""))
@@ -3837,7 +3837,7 @@ def drive_report(force: bool = False, with_rate: bool = True) -> dict:
     with _drive_lock:
         checked, error = _drive_state["at"], _drive_state["error"]
     return {
-        "drives": drives, "checked": checked or None, "error": error,
+        "drives": drives, "checked": checked or None, "problem": error,  # not "error": the page treats that as a failed request
         "temps_available": any(d["temp"] for d in drives),
         "totals": {"free": sum(d["free"] for d in drives), "total": sum(d["total"] for d in drives),
                    "ok": sum(d["status"] == "ok" for d in drives),
@@ -4920,7 +4920,7 @@ function renderDrives(r){
   drivesData=r;const t=r.totals,ds=r.drives;
   const ago=r.checked?Math.max(0,Math.round((Date.now()/1000-r.checked)/60)):null;
   $('drivestatus').textContent=ds.length+' drive'+(ds.length===1?'':'s')+(ago!=null?' · checked '+(ago<1?'just now':ago+' min ago'):'');
-  if(!ds.length){$('drivebody').innerHTML=empty('No drives found',r.error||'Windows did not report any drives.');return}
+  if(!ds.length){$('drivebody').innerHTML=empty('No drives found',r.problem||'Windows did not report any drives.');return}
   const worst=ds.find(d=>d.status==='bad')||ds.find(d=>d.status==='warn');
   const banner=worst?'<div class="banner '+worst.status+'"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="color:'+(worst.status==='bad'?'var(--red)':'var(--amber)')+';flex:none" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg><div><b>'+t.warn+' drive'+(t.warn===1?' needs':'s need')+' a look</b><span>'+esc((dLetters(worst)?dLetters(worst)+' ':'')+(worst.label||worst.name)+': '+(worst.problems[0]||''))+'</span></div></div>'
     :'<div class="banner ok"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex:none" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><div><b>All drives healthy</b><span>Windows reports no problems.</span></div></div>';
@@ -4932,7 +4932,7 @@ function renderDrives(r){
     '<label class="tgl"><span>Too hot<small>Hard drives '+esc(r.temp_alert)+'°C · NVMe '+esc(r.nvme_temp_alert)+'°C</small></span><input type="checkbox" data-dalert="notify_drive_hot"'+(a.hot?' checked':'')+'></label>'+
     '<label class="tgl"><span>Less than '+esc(a.low_gb||100)+' GB free</span><input type="checkbox" data-dalert="notify_drive_low"'+(a.low?' checked':'')+'></label>'+
     (a.ready?'':'<p class="hint" style="margin:8px 0 0">Phone alerts aren\'t set up yet: they use ntfy, the same as download alerts.</p>')+'</div>';
-  $('drivebody').innerHTML=banner+tiles+tempHint+'<div class="section">ALL DRIVES</div>'+ds.map(driveCard).join('')+tempChart(ds)+alerts+(r.error?'<p class="hint">'+esc(r.error)+'</p>':'');
+  $('drivebody').innerHTML=banner+tiles+tempHint+'<div class="section">ALL DRIVES</div>'+ds.map(driveCard).join('')+tempChart(ds)+alerts+(r.problem?'<p class="hint">'+esc(r.problem)+'</p>':'');
   renderHomeDrives(r);
 }
 async function refreshDrives(force){
@@ -5003,8 +5003,9 @@ async function jfList(){
 function renderJellyfin(){
   const st=$('jfstatus'),body=$('jfbody');$('jfscan').classList.toggle('hidden',!(jf&&jf.online));
   if(!jf||!jf.configured){st.className='lede';st.textContent='Not connected yet.';$('jfnow').innerHTML='';body.innerHTML=jfConnectForm('');return}
-  if(!jf.online){st.className='lede status error';st.textContent=jf.error||'Jellyfin is offline';$('jfnow').innerHTML='';
-    body.innerHTML='<div class="card kidle">'+JF_ICON+'<span>Can\'t reach Jellyfin at '+esc(jf.url)+'. Is the server on?</span></div>'+(jfConnectOpen?jfConnectForm(jf.url):'<button class="btn ghost full" id="jfchange">Change connection</button>');return}
+  if(!jf.online){st.className='lede status error';st.textContent=jf.problem||'Jellyfin is offline';$('jfnow').innerHTML='';
+    const badKey=/HTTP 40[13]/.test(jf.problem||'');
+    body.innerHTML='<div class="card kidle">'+JF_ICON+'<span>'+(badKey?'Jellyfin at '+esc(jf.url)+' refused the API key'+(jf.source==='desktop'?' saved in the desktop app':'')+'. Enter a current key below.':'Can\'t reach Jellyfin at '+esc(jf.url)+'. Is the server on?')+'</span></div>'+((jfConnectOpen||badKey)?jfConnectForm(jf.url):'<button class="btn ghost full" id="jfchange">Change connection</button>');return}
   st.className='lede';const c=jf.counts;
   st.textContent=[jf.server+(jf.version?' · v'+jf.version:''),jf.ms+' ms',c?c.movies+' movie'+(c.movies===1?'':'s')+' · '+c.shows+' show'+(c.shows===1?'':'s'):''].filter(Boolean).join(' · ');
   renderJfNow(jf.sessions);

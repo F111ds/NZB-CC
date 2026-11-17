@@ -141,7 +141,7 @@ def boom():
     raise RuntimeError("PowerShell missing")
 m._drive_inventory = boom
 r2 = m.drive_report(force=True)
-assert len(r2["drives"]) == 2 and "Could not read drive health" in r2["error"]
+assert len(r2["drives"]) == 2 and "Could not read drive health" in r2["problem"]
 
 # ---------- page wiring ----------
 page = m.PAGE

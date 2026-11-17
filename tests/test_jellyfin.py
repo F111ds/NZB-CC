@@ -184,7 +184,7 @@ cfg["media_server_url"] = "http://127.0.0.1:1"
 assert api("/api/jellyfin")[1]["online"]                                     # phone connection wins
 st, d = api("/api/jellyfin/forget", {})
 assert d["source"] == "desktop" and not d["online"]                          # back to the desktop one (now unreachable)
-assert "error" in d
+assert d["problem"] and "error" not in d   # "error" would make the page treat it as a failed request
 
 # Redaction: the key never appears in an error.
 assert KEY not in m.redact(f"failed with {KEY}")
