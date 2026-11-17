@@ -2665,7 +2665,47 @@ def tv_kodi_watched(limit: int = TV_WATCHED_SIZE) -> list[dict]:
                     "lastplayed": str(ep.get("lastplayed") or ""),
                     "art_ref": _art_ref(art.get("tvshow.poster") or art.get("season.poster"))} | _tv_progress(ep))
     out.sort(key=lambda x: x["lastplayed"], reverse=True)   # "YYYY-MM-DD HH:MM:SS" sorts as text
+    now = _tv_now_watching()
+    if now:   # still open in Kodi (playing, or paused behind Home): first, with where it is now
+        out = [now] + [x for x in out if x["id"] != now["id"]]
     return out
+
+
+def _tv_now_watching() -> dict | None:
+    """The movie or episode open in Kodi's player, as a Recently watched entry, or None.
+
+    Kodi writes the resume point and "last played" only when playback stops, so a movie left playing or paused
+    while the owner pressed Home would otherwise be missing from the row until Kodi was stopped."""
+    try:
+        players = kodi_call("Player.GetActivePlayers", timeout=4)
+        players = [p for p in players if isinstance(p, dict)] if isinstance(players, list) else []
+        video = [p for p in players if p.get("type") == "video"]
+        if not video:
+            return None
+        pid = to_int(video[0].get("playerid"))
+        item = _kdict(_kdict(kodi_call("Player.GetItem", {"playerid": pid, "properties": [
+            "title", "showtitle", "season", "episode", "year", "art", "thumbnail", "streamdetails"]}, timeout=4)).get("item"))
+        props = _kdict(kodi_call("Player.GetProperties", {"playerid": pid, "properties": ["time", "totaltime"]}, timeout=4))
+    except (UpstreamError, ConfigError):
+        return None
+    kind, kid = str(item.get("type") or ""), to_int(item.get("id"))
+    if kind not in ("movie", "episode") or kid <= 0:
+        return None   # a file outside the library: nothing to play it again by
+    pos, total = _kodi_secs(props.get("time")), _kodi_secs(props.get("totaltime"))
+    progress = round(min(1.0, pos / total), 3) if pos > 0 and total > 0 else 0.0
+    base = {"lastplayed": time.strftime("%Y-%m-%d %H:%M:%S"), "progress": progress,
+            "remaining": round((total - pos) / 60) if total > pos else 0, "runtime": round(total / 60), "watched": False}
+    art = _kdict(item.get("art"))
+    if kind == "movie":
+        quality, _hdr = video_quality(item.get("streamdetails"))
+        return base | {"id": f"m{kid}", "movieid": kid, "title": str(item.get("title") or item.get("label") or "Untitled"),
+                       "year": to_int(item.get("year")) or None, "quality": "4K" if quality == "2160p" else quality,
+                       "art_ref": _art_ref(art.get("poster") or item.get("thumbnail"))}
+    show = str(item.get("showtitle") or "")
+    return base | {"id": f"e{kid}", "episodeid": kid, "title": show or str(item.get("title") or "Untitled"),
+                   "episode_title": str(item.get("title") or ""), "season": to_int(item.get("season")),
+                   "episode": to_int(item.get("episode")),
+                   "art_ref": _art_ref(art.get("tvshow.poster") or art.get("season.poster"))}
 
 
 def _tv_save_watched_poster(item: dict) -> bool:

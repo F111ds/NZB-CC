@@ -15,6 +15,7 @@ m.TV_WATCHED_ART_DIR = tmp / "tv_watched_art"
 JPEG = b"\xff\xd8\xff\xe0" + b"0" * 100
 
 kodi_on = {"v": True}
+open_item = {"v": None}   # what Kodi's player has open (playing or paused), or None
 calls, played = [], []
 def fake_kodi(method, params=None, timeout=6):
     calls.append((method, params))
@@ -35,6 +36,12 @@ def fake_kodi(method, params=None, timeout=6):
             {"episodeid": 42, "title": "Pilot", "showtitle": "Some Show", "season": 1, "episode": 2, "runtime": 2700,
              "art": {"tvshow.poster": "image://s/"}, "playcount": 0, "resume": {"position": 900, "total": 2700},
              "lastplayed": "2026-11-16 08:00:00"}]}
+    if method == "Player.GetActivePlayers":
+        return [{"playerid": 1, "type": "video"}] if open_item["v"] else []
+    if method == "Player.GetItem":
+        return {"item": open_item["v"]}
+    if method == "Player.GetProperties":
+        return {"time": {"hours": 0, "minutes": 30, "seconds": 0}, "totaltime": {"hours": 1, "minutes": 38, "seconds": 0}}
     if method == "JSONRPC.Ping":
         return "pong"
     if method == "Player.Open":
@@ -55,6 +62,20 @@ assert done["progress"] == 1.0 and done["watched"] is True
 assert all(it["poster"] == f"/api/tv/poster?id={it['id']}" for it in row["items"])
 assert m.tv_poster("e42") == JPEG and m.tv_poster("m3") == JPEG
 assert m.tv_poster("m4") is None
+
+# A movie left open in Kodi (paused behind Home) has no resume point or "last played" yet: it still comes first,
+# with where the player is now; the same movie further down the list isn't shown twice.
+open_item["v"] = {"type": "movie", "id": 3, "title": "Half Way", "year": 2024, "art": {"poster": "image://p3/"},
+                  "streamdetails": {"video": [{"width": 1920, "height": 1080}]}}
+m.TV_WATCHED_FILE.unlink()
+row = m.tv_watched_row(background=False)
+assert [it["id"] for it in row["items"]] == ["m3", "e42", "m5"], [it["id"] for it in row["items"]]
+now = row["items"][0]
+assert abs(now["progress"] - 30 / 98) < 0.01 and now["remaining"] == 68 and now["quality"] == "1080p"
+open_item["v"] = {"type": "unknown", "id": 0, "label": "some.file.mkv"}   # not in the library: no entry for it
+m.TV_WATCHED_FILE.unlink()
+assert [it["id"] for it in m.tv_watched_row(background=False)["items"]] == ["e42", "m3", "m5"]
+open_item["v"] = None
 
 # Kodi off: the last list stays
 kodi_on["v"] = False

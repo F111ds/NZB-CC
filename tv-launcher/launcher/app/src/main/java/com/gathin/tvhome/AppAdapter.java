@@ -363,15 +363,17 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
         }
         Collections.sort(fresh, (a, b) -> {
-            if (!homeApps.isEmpty()) {   // NZB-CC: home_apps sets the order
+            // The owner's own order first (the reorder button or Move); tiles it does not know (new installs)
+            // follow by the rules below. It must come before home_apps: sorted after it, every move the owner
+            // made among the home_apps was undone the next time the tiles were loaded.
+            int saved = Order.compare(savedRanks, a.component.flattenToShortString(), b.component.flattenToShortString());
+            if (saved != 0) return saved;
+            if (!homeApps.isEmpty()) {   // NZB-CC: home_apps sets the order until the owner moves something
                 int ra = homeRank(a.pkg, a.label), rb = homeRank(b.pkg, b.label);
                 if (ra < 0) ra = Integer.MAX_VALUE;   // added from the library: after the home_apps
                 if (rb < 0) rb = Integer.MAX_VALUE;
                 if (ra != rb) return Integer.compare(ra, rb);
             }
-            // The owner's own order first; tiles it does not know (new installs) follow by the rule below.
-            int saved = Order.compare(savedRanks, a.component.flattenToShortString(), b.component.flattenToShortString());
-            if (saved != 0) return saved;
             int fa = favourites.indexOf(a.pkg), fb = favourites.indexOf(b.pkg);
             if (fa >= 0 || fb >= 0) {
                 if (fa < 0) return 1;
