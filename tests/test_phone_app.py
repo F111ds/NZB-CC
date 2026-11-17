@@ -157,7 +157,7 @@ assert idx["ok"] and "arrival" in idx["movies"], idx
 
 # Kodi off: home still works, Kodi tab says offline
 kodi.shutdown(); kodi.server_close()
-st, home = api("/api/home"); assert st == 200 and home["sab_ok"] and home["kodi"] == {"configured": True, "online": False, "error": "Can't reach Kodi — is it on?"}, home["kodi"]
+st, home = api("/api/home"); assert st == 200 and home["sab_ok"] and home["kodi"] == {"configured": True, "online": False, "problem": "Can't reach Kodi — is it on?"}, home["kodi"]
 st, k = api("/api/kodi"); assert st == 200 and not k["online"]
 # Kodi not configured
 cfg["kodi_url"] = ""; time.sleep(0.05); (tmp / "nzb_manager_config.json").write_text(json.dumps(cfg))

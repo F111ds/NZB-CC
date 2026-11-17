@@ -104,7 +104,7 @@ host = f"127.0.0.1:{tv.server_address[1]}"
 
 # Wrong key: saved, but the TV refuses it and the view says so
 st, t = api("/api/tv/settings", {"host": host, "psk": "wrongkey"})
-assert st == 200 and t["configured"] and "Pre-Shared Key" in t.get("error", ""), t
+assert st == 200 and t["configured"] and "Pre-Shared Key" in t.get("problem", "") and "error" not in t, t
 
 # Right key: TV reported in standby; key never echoed
 st, t = api("/api/tv/settings", {"host": host, "psk": PSK})

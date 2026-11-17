@@ -74,14 +74,14 @@ def dead_port():
 cfg["kodi_url"] = f"127.0.0.1:{dead_port()}"
 cfg_path.write_text(json.dumps(cfg)); m._cfg_state.update(mtime=None, data=None)
 data, _ = home()
-assert data["kodi"] == {"configured": True, "online": False, "error": "Can't reach Kodi — is it on?"}, data["kodi"]
+assert data["kodi"] == {"configured": True, "online": False, "problem": "Can't reach Kodi — is it on?"}, data["kodi"]
 assert m.backend_recently_down("kodi|" + m.get_config()["kodi"]["url"])
 real_fetch, fetched = m.http_fetch, []
 m.http_fetch = lambda url, **kw: fetched.append(url) or real_fetch(url, **kw)
 data, _ = home()
 m.http_fetch = real_fetch
 assert not any("/jsonrpc" in u for u in fetched), fetched   # skipped while remembered as down
-assert data["kodi"]["error"] == "Can't reach Kodi — is it on?"
+assert data["kodi"]["problem"] == "Can't reach Kodi — is it on?"
 
 # ...and tried again once the window has passed; a success clears the memory.
 cfg["kodi_url"] = f"127.0.0.1:{kodi.server_address[1]}"
