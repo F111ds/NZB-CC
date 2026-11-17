@@ -9,7 +9,8 @@ A phone version of NZB Command Center, served on your home network:
   * Queue  - SABnzbd queue and history (pause, delete, retry, speed limit)
   * Kodi   - now playing with a full remote, movies and TV shows (continue watching,
              next episode, missing episodes), "find a better copy" for a movie,
-             and "TV on + Kodi" / "Open Kodi" buttons for a Sony TV (IP control)
+             "TV on + Kodi" / "Open Kodi" buttons for a Sony TV (IP control), and
+             "Type on TV": type on the phone into the text box open in Kodi
   * Jellyfin - now playing (pause / stop), library scan, "do I already have it?" search with
              quality, missing episodes, movies below 1080p, show seasons; connect from the phone
   * Drives - every drive's health, temperature, free space, live read/write activity,
@@ -71,7 +72,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.8.2"
+VERSION = "3.9.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -1136,6 +1137,27 @@ def kodi_control(action: str, pid: int, value=None) -> None:
             kodi_call("Player.SetAudioStream", {"playerid": pid, "stream": "next"})
     else:
         raise ValueError("Invalid player action.")
+
+
+KODI_TEXT_WINDOWS = {10103: "keyboard", 10109: "numeric"}  # Kodi's on-screen keyboard dialogs
+KODI_TEXT_MAX = 500
+
+
+def kodi_send_text(text: str, done: bool = True) -> dict:
+    """Types `text` into the text box open on Kodi (it replaces what's there). done=True also presses OK.
+
+    Kodi accepts the command even when no text box is open and then ignores it, so check first."""
+    text = str(text or "")
+    if len(text) > KODI_TEXT_MAX:
+        raise ValueError(f"That's too long (at most {KODI_TEXT_MAX} characters).")
+    if any(ord(ch) < 32 for ch in text):
+        text = " ".join(text.split())  # pasted line breaks/tabs: Kodi's boxes are one line
+    win = kodi_call("GUI.GetProperties", {"properties": ["currentwindow"]}) or {}
+    wid = to_int((win.get("currentwindow") or {}).get("id"), 0)
+    if wid not in KODI_TEXT_WINDOWS:
+        raise ValueError("No text box is open on the TV. Select a text field in Kodi first, then send again.")
+    kodi_call("Input.SendText", {"text": text, "done": bool(done)})
+    return {"ok": True, "window": KODI_TEXT_WINDOWS[wid]}
 
 
 def _art_ref(value) -> str:
@@ -4421,6 +4443,10 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <div class="remote"><button class="sm" data-kact="home">Home</button><button data-kact="up" aria-label="Up">▲</button><button class="sm" data-kact="info">Info</button><button data-kact="left" aria-label="Left">◀</button><button class="ok" data-kact="select">OK</button><button data-kact="right" aria-label="Right">▶</button><button class="sm" data-kact="back">Back</button><button data-kact="down" aria-label="Down">▼</button><button class="sm" data-kact="menu">Menu</button></div>
 <div class="rinfo" id="kodirinfo"></div>
 </div></details>
+<div class="card hidden" id="kodytype"><label class="kode" for="kodytext" style="display:block;margin-bottom:8px">TYPE ON TV</label>
+<input id="kodytext" class="field" style="margin-bottom:8px" placeholder="Text for the box open on the TV" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="send" maxlength="500">
+<div class="row"><button class="btn sm" id="kodysend">Send &amp; OK</button><button class="btn ghost sm" id="kodysendonly">Send only</button></div>
+<p class="hint" style="margin:8px 2px 0">Select a text box on the TV first (a search, an address, a password). What you send replaces what's in it. “Send &amp; OK” also confirms it.</p></div>
 <div class="seg hidden" id="kodiseg"><button class="on" data-kmode="movies">Movies</button><button data-kmode="tv">TV shows</button></div>
 <div id="kodiTV" class="hidden">
 <div class="section" id="cwtitle">CONTINUE WATCHING</div>
@@ -4878,14 +4904,14 @@ async function refreshKodi(){
   const st=$('kodistatus');loadTv();
   try{
     const d=await api('/api/kodi');
-    const off=()=>{$('kodinow').innerHTML='';['kodilib','kodiTV','kodiseg','kodiremote'].forEach(id=>$(id).classList.add('hidden'));kodiOnline=false};
+    const off=()=>{$('kodinow').innerHTML='';['kodilib','kodiTV','kodiseg','kodiremote','kodytype'].forEach(id=>$(id).classList.add('hidden'));kodiOnline=false};
     if(!d.configured){st.className='lede';st.textContent='Kodi isn\'t set up yet — add it in the desktop app\'s Kodi tab.';off();$('kodiscan').classList.add('hidden');return}
     $('kodiscan').classList.remove('hidden');
     if(!d.online){st.className='lede status error';st.textContent=d.error||'Kodi is offline.';off();return}
     const c=d.counts||{};st.className='lede';st.textContent=(c.movies||0)+' movies · '+(c.shows||0)+' shows · '+(c.episodes||0)+' episodes';
     kodiPid=d.playing?d.playing.playerid:-1;
     $('kodinow').innerHTML=nowCard(d.playing,false);hydrateArt($('kodinow'));
-    kodiOnline=true;$('kodiremote').classList.remove('hidden');$('kodiseg').classList.remove('hidden');
+    kodiOnline=true;$('kodiremote').classList.remove('hidden');$('kodytype').classList.remove('hidden');$('kodiseg').classList.remove('hidden');
     kodiRecent=d.recent||[];kodiMovies=null;kodiShows=null;kodiMissing=null;kodiContinue=d.continue||[];
     setKodiMode(kodiMode);
   }catch(e){st.className='lede status error';st.textContent=e.message}
@@ -5260,6 +5286,15 @@ function openJfMovie(id){
   hydrateArt(panel);
 }
 
+async function kodiType(done){
+  const box=$('kodytext'),text=box.value,b1=$('kodysend'),b2=$('kodysendonly');
+  if(!text){box.focus();return}
+  b1.disabled=b2.disabled=true;
+  try{await api('/api/kodi/text',{text,done});box.value='';toast(done?'Typed on the TV and confirmed':'Typed on the TV')}
+  catch(e){toast(e.message,true)}
+  finally{b1.disabled=b2.disabled=false}
+}
+
 async function kodiScan(){
   const b=$('kodiscan');b.disabled=true;
   try{await api('/api/kodi/scan',{});kodiMovies=null;toast('Library scan started on Kodi')}catch(e){toast(e.message,true)}finally{b.disabled=false}
@@ -5286,6 +5321,9 @@ async function watchFinished(){
 function bind(){
   $('pairbtn').addEventListener('click',pair);
   $('drivecheck').addEventListener('click',()=>refreshDrives(true));
+  $('kodysend').addEventListener('click',()=>kodiType(true));
+  $('kodysendonly').addEventListener('click',()=>kodiType(false));
+  $('kodytext').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();kodiType(true)}});
   $('jfscan').addEventListener('click',jfScan);
   $('jellyfin').addEventListener('click',e=>{
     const a=e.target.closest('[data-jact]');if(a)return jfAction(a.dataset.sid,a.dataset.jact);
@@ -5706,6 +5744,10 @@ class MobileHandler(BaseHTTPRequestHandler):
         elif path == "/api/kodi/control":
             kodi_control(str(body.get("action") or ""), to_int(body.get("playerid"), -1), body.get("value"))
             self.send_json(200, {"ok": True})
+        elif path == "/api/kodi/text":
+            res = kodi_send_text(body.get("text", ""), done=body.get("done", True) is not False)
+            log.info("kodi text (%d chars, done=%s) ip=%s", len(str(body.get("text") or "")), body.get("done", True) is not False, self.ip)
+            self.send_json(200, res)
         elif path == "/api/saved":
             self._post_saved(body)
         elif path == "/api/settings":
