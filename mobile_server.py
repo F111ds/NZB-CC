@@ -70,7 +70,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.7.3"
+VERSION = "3.7.4"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -4892,10 +4892,12 @@ function dTitle(d){return esc(d.label||d.name)}
 async function loadHomeDrives(force){
   if(!force&&Date.now()-drivesAt<120000){if(drivesData)renderHomeDrives(drivesData);return}
   drivesAt=Date.now();
-  try{drivesData=await api('/api/drives');renderHomeDrives(drivesData)}catch{}
+  try{drivesData=await api('/api/drives');renderHomeDrives(drivesData)}
+  catch(e){$('homedrives').innerHTML='<div class="section" style="margin:18px 4px 8px">DRIVES</div><button class="card kidle" data-tab="drives"><span>Couldn\'t check your drives: '+esc(e.message)+' · tap to try again</span></button>'}
 }
 function renderHomeDrives(r){
-  const box=$('homedrives');if(!r||!r.drives||!r.drives.length){box.innerHTML='';return}
+  const box=$('homedrives');
+  if(!r||!r.drives||!r.drives.length){box.innerHTML='<div class="section" style="margin:18px 4px 8px">DRIVES</div><button class="card kidle" data-tab="drives"><span>'+esc((r&&r.problem)||'No drives reported yet')+' · tap for Drive Health</span></button>';return}
   const n=r.totals.warn;
   box.innerHTML='<div class="row" style="justify-content:space-between;margin:18px 4px 8px"><div class="section" style="margin:0;flex:none">DRIVES</div>'+(n?'<span class="tag warn" style="flex:none">'+n+' NEED'+(n===1?'S':'')+' A LOOK</span>':'<span class="tag ok" style="flex:none">ALL HEALTHY</span>')+'</div><div class="card">'+
     r.drives.map(d=>'<button class="drow" data-tab="drives"><div class="dl"><span class="lt">'+esc(dLetters(d)||'—')+'</span><span class="nm">'+dTitle(d)+' <small>· '+esc(dKind(d))+'</small></span>'+dTag(d)+'</div>'+
