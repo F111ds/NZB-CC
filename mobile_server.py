@@ -9,6 +9,8 @@ A phone version of NZB Command Center, served on your home network:
   * Queue  - SABnzbd queue and history (pause, delete, retry, speed limit)
   * Kodi   - now playing with a full remote, movies and TV shows (continue watching,
              next episode, missing episodes), "find a better copy" for a movie
+  * Jellyfin - now playing (pause / stop), library scan, "do I already have it?" search with
+             quality, missing episodes, movies below 1080p, show seasons; connect from the phone
   * Drive Health (from Home) - every drive's health, temperature, free space and a 24 h
              temperature graph, with phone alerts for problems, heat and low space
 It reads the SAME nzb_manager_config.json (and DPAPI-protected keys) as the desktop
@@ -67,7 +69,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.6.0"
+VERSION = "3.7.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -244,13 +246,14 @@ class ConfigError(RuntimeError):
 
 _KNOWN_SECRETS: frozenset[str] = frozenset()
 _EXTRA_SECRETS: frozenset[str] = frozenset()  # phone-only secrets (the ntfy access token)
+_JF_SECRETS: frozenset[str] = frozenset()     # the Jellyfin API key in use
 _SECRET_QS = re.compile(r"(?i)\b(apikey|api_key|passkey|token|r)=([^&\s'\"<>]+)")
 
 
 def redact(text) -> str:
     """Strips API keys from any text (query-string style, plus every key currently configured)."""
     out = _SECRET_QS.sub(lambda m: f"{m.group(1)}=***", str(text))
-    for secret in _KNOWN_SECRETS | _EXTRA_SECRETS:  # frozensets that are only ever swapped whole, never mutated
+    for secret in _KNOWN_SECRETS | _EXTRA_SECRETS | _JF_SECRETS:  # frozensets that are only ever swapped whole, never mutated
         if secret and len(secret) >= 6:
             out = out.replace(secret, "***")
     return out
@@ -1694,6 +1697,403 @@ def download_indexer_nzb(item: dict) -> tuple[bytes, str]:
 
 
 # ==============================================================================
+# 5b2. JELLYFIN
+# ==============================================================================
+# Uses the desktop app's Media Server settings (when it is set to Jellyfin), or a server
+# connected from the phone (stored in mobile_settings.json, the API key DPAPI-protected).
+# A server connected from the phone must be on the home network or Tailscale, so the phone
+# can't point the PC at an arbitrary internet address.
+
+JF_CACHE_SECONDS = 600
+JF_DISCOVERY_PORT = 7359
+_jf_lock = threading.Lock()
+_jf_cache: dict = {}
+
+
+def _desktop_jellyfin() -> tuple[str, str]:
+    try:
+        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "", ""
+    if not isinstance(data, dict) or str(data.get("media_server_type") or "Jellyfin") != "Jellyfin":
+        return "", ""
+    url = str(data.get("media_server_url") or "").strip()
+    try:
+        key = _dpapi_unprotect(str(data.get("media_server_token") or "")).strip()
+    except ConfigError:
+        key = ""
+    return url, key
+
+
+def normalize_jellyfin_url(url: str) -> str:
+    url = str(url or "").strip().rstrip("/")
+    if not url:
+        return ""
+    if not url.lower().startswith(("http://", "https://")):
+        url = "http://" + url
+    parsed = urllib.parse.urlsplit(url)
+    if not parsed.hostname:
+        raise ValueError("That server address doesn't look right.")
+    if not parsed.port and parsed.scheme == "http":
+        url = url.replace(parsed.netloc, f"{parsed.netloc}:8096", 1)
+    return url.split("?", 1)[0].split("#", 1)[0]
+
+
+def jellyfin_conf() -> dict:
+    """{'url', 'key', 'source': 'phone'|'desktop'|''}: the phone's own connection wins."""
+    global _JF_SECRETS
+    s = load_settings()
+    url, key, source = s.get("jellyfin_url", ""), "", ""
+    if url and s.get("jellyfin_token"):
+        try:
+            key, source = _dpapi_unprotect(s["jellyfin_token"]).strip(), "phone"
+        except ConfigError:
+            url = ""
+    if not (url and key):
+        url, key = _desktop_jellyfin()
+        source = "desktop" if url and key else ""
+    try:
+        url = normalize_jellyfin_url(url)
+    except ValueError:
+        url, source = "", ""
+    if key and key not in _JF_SECRETS:
+        _JF_SECRETS = frozenset([key])
+    return {"url": url, "key": key if url else "", "source": source}
+
+
+def jellyfin_configured() -> bool:
+    c = jellyfin_conf()
+    return bool(c["url"] and c["key"])
+
+
+def jf_request(path: str, params: dict | None = None, *, post: bool = False, timeout: float = 10,
+               conf: dict | None = None, raw: bool = False, max_bytes: int = 20_000_000):
+    c = conf or jellyfin_conf()
+    if not (c["url"] and c["key"]):
+        raise ConfigError("Jellyfin isn't connected yet.")
+    url = c["url"] + path + ("?" + urllib.parse.urlencode(params) if params else "")
+    body = http_fetch(url, timeout=timeout, max_bytes=max_bytes, data=b"" if post else None,
+                      headers={"X-Emby-Token": c["key"], "Accept": "application/json" if not raw else "*/*"})
+    if raw:
+        return body
+    if not body.strip():
+        return {}
+    try:
+        return json.loads(body)
+    except ValueError:
+        raise UpstreamError("Jellyfin sent an answer that isn't JSON. Is the address right?") from None
+
+
+def _jf_cached(key: str, fn, ttl: float = JF_CACHE_SECONDS, force: bool = False):
+    conf = jellyfin_conf()
+    ck = (key, conf["url"], conf["key"][:6])
+    with _jf_lock:
+        hit = _jf_cache.get(ck)
+        if hit and not force and time.time() - hit[0] < ttl:
+            return hit[1]
+    value = fn()
+    with _jf_lock:
+        _jf_cache[ck] = (time.time(), value)
+    return value
+
+
+def jf_clear_cache() -> None:
+    with _jf_lock:
+        _jf_cache.clear()
+
+
+def jf_user_id() -> str:
+    def find():
+        users = jf_request("/Users", timeout=6)
+        if not isinstance(users, list) or not users:
+            raise UpstreamError("Jellyfin has no users.")
+        admin = next((u for u in users if (u.get("Policy") or {}).get("IsAdministrator")), users[0])
+        return str(admin.get("Id") or "")
+    return _jf_cached("uid", find, ttl=3600)
+
+
+def _ticks_s(ticks) -> int:
+    return int(to_float(ticks) / 10_000_000)
+
+
+def _jf_quality(item: dict) -> tuple[str, int]:
+    """('1080p', size in bytes) from an item's media sources, or its Height field."""
+    height, size = to_int(item.get("Height")), 0
+    for src in item.get("MediaSources") or []:
+        size = size or to_int(src.get("Size"))
+        for st in src.get("MediaStreams") or []:
+            if st.get("Type") == "Video":
+                height = height or to_int(st.get("Height"))
+    if height >= 1600:
+        label = "2160p"
+    elif height >= 900:
+        label = "1080p"
+    elif height >= 650:
+        label = "720p"
+    elif height > 0:
+        label = "SD"
+    else:
+        label = ""
+    return label, size
+
+
+def _jf_item(x: dict) -> dict:
+    ud = x.get("UserData") or {}
+    kind = str(x.get("Type") or "")
+    quality, size = _jf_quality(x)
+    out = {
+        "id": str(x.get("Id") or ""), "type": kind, "title": str(x.get("Name") or "Untitled"),
+        "year": to_int(x.get("ProductionYear")) or None, "watched": bool(ud.get("Played")),
+        "resume": _ticks_s(ud.get("PlaybackPositionTicks")), "runtime": _ticks_s(x.get("RunTimeTicks")),
+        "quality": quality, "size": size, "added": str(x.get("DateCreated") or "")[:10],
+        "poster": "j:" + str(x.get("Id") or ""),
+    }
+    if kind == "Episode":
+        out.update(show=str(x.get("SeriesName") or ""), show_id=str(x.get("SeriesId") or ""),
+                   season=to_int(x.get("ParentIndexNumber")), episode=to_int(x.get("IndexNumber")),
+                   poster="j:" + str(x.get("SeriesId") or x.get("Id") or ""))
+    return out
+
+
+def jf_sessions() -> list[dict]:
+    out = []
+    for s in jf_request("/Sessions", timeout=6) or []:
+        item = s.get("NowPlayingItem")
+        if not item:
+            continue
+        ps = s.get("PlayState") or {}
+        t = s.get("TranscodingInfo") or {}
+        it = _jf_item(item)
+        total = it["runtime"]
+        pos = _ticks_s(ps.get("PositionTicks"))
+        method = str(ps.get("PlayMethod") or ("Transcode" if t else "DirectPlay"))
+        sub = []
+        if item.get("Type") == "Episode":
+            sub.append(f"S{it['season']:02d}E{it['episode']:02d} · {it['title']}")
+            title = it["show"] or it["title"]
+        else:
+            title = it["title"] + (f" ({it['year']})" if it["year"] else "")
+        out.append({
+            "session": str(s.get("Id") or ""), "user": str(s.get("UserName") or ""),
+            "device": str(s.get("DeviceName") or s.get("Client") or "Device"), "client": str(s.get("Client") or ""),
+            "title": title, "sub": " · ".join(sub), "poster": it["poster"], "item_id": it["id"],
+            "paused": bool(ps.get("IsPaused")), "time": pos, "total": total,
+            "pct": round(pos * 100 / total, 1) if total else 0,
+            "method": "Transcoding" if method.lower() == "transcode" else ("Direct stream" if method.lower() == "directstream" else "Direct play"),
+            "quality": it["quality"],
+        })
+    return out
+
+
+def jf_overview() -> dict:
+    conf = jellyfin_conf()
+    if not (conf["url"] and conf["key"]):
+        return {"configured": False}
+    out = {"configured": True, "source": conf["source"], "url": conf["url"]}
+    t0 = time.monotonic()
+    try:
+        info = jf_request("/System/Info", timeout=6, conf=conf)
+    except (UpstreamError, ConfigError) as exc:
+        out.update(online=False, error=redact(exc))
+        return out
+    out.update(online=True, ms=int((time.monotonic() - t0) * 1000),
+               server=str(info.get("ServerName") or "Jellyfin"), version=str(info.get("Version") or ""))
+    try:
+        out["sessions"] = jf_sessions()
+    except UpstreamError as exc:
+        out["sessions"], out["sessions_error"] = [], redact(exc)
+    try:
+        counts = _jf_cached("counts", lambda: jf_request("/Items/Counts", timeout=8), ttl=300)
+        out["counts"] = {"movies": to_int(counts.get("MovieCount")), "shows": to_int(counts.get("SeriesCount")),
+                         "episodes": to_int(counts.get("EpisodeCount"))}
+    except UpstreamError:
+        out["counts"] = None
+    try:
+        out["recent"] = _jf_cached("recent", jf_recent, ttl=120)
+    except UpstreamError:
+        out["recent"] = []
+    return out
+
+
+def jf_recent(limit: int = 16) -> list[dict]:
+    uid = jf_user_id()
+    res = jf_request(f"/Users/{uid}/Items", {
+        "Recursive": "true", "IncludeItemTypes": "Movie,Episode", "SortBy": "DateCreated", "SortOrder": "Descending",
+        "Limit": limit, "Fields": "ProductionYear,DateCreated", "EnableTotalRecordCount": "false"}, timeout=10)
+    return [_jf_item(x) for x in (res.get("Items") or [])]
+
+
+def jf_search(query: str) -> list[dict]:
+    query = query.strip()[:100]
+    if not query:
+        return []
+    uid = jf_user_id()
+    res = jf_request(f"/Users/{uid}/Items", {
+        "Recursive": "true", "IncludeItemTypes": "Movie,Series", "SearchTerm": query, "Limit": 30,
+        "Fields": "ProductionYear,MediaSources,DateCreated,RecursiveItemCount", "EnableTotalRecordCount": "false"}, timeout=12)
+    items = []
+    for x in res.get("Items") or []:
+        it = _jf_item(x)
+        if it["type"] == "Series":
+            it["episodes"] = to_int(x.get("RecursiveItemCount"))
+        items.append(it)
+    return items
+
+
+def _jf_episodes_all() -> list[dict]:
+    uid = jf_user_id()
+    out, start = [], 0
+    while start < 100_000:
+        res = jf_request(f"/Users/{uid}/Items", {
+            "Recursive": "true", "IncludeItemTypes": "Episode", "StartIndex": start, "Limit": 5000,
+            "Fields": "PremiereDate", "EnableImages": "false", "EnableUserData": "false",
+            "EnableTotalRecordCount": "true"}, timeout=30)
+        page = res.get("Items") or []
+        out.extend(page)
+        start += len(page)
+        if not page or start >= to_int(res.get("TotalRecordCount"), start):
+            break
+    return out
+
+
+def _season_missing(eps: list[dict], today: str) -> list[int]:
+    """Gaps before the newest episode you have, plus aired episodes Jellyfin lists as missing."""
+    have = [to_int(e.get("IndexNumber")) for e in eps if str(e.get("LocationType")) != "Virtual"]
+    virtual = {to_int(e.get("IndexNumber")) for e in eps if str(e.get("LocationType")) == "Virtual"
+               and str(e.get("PremiereDate") or "9999")[:10] <= today and to_int(e.get("IndexNumber")) > 0}
+    return sorted(set(episode_gaps(have)) | (virtual - set(have)))
+
+
+def jf_missing(force: bool = False) -> list[dict]:
+    def build():
+        today = date.today().isoformat()
+        groups: dict[tuple, list] = {}
+        names: dict[str, str] = {}
+        for e in _jf_episodes_all():
+            sid, season = str(e.get("SeriesId") or ""), to_int(e.get("ParentIndexNumber"))
+            if not sid or season <= 0:
+                continue
+            names[sid] = str(e.get("SeriesName") or "Show")
+            groups.setdefault((sid, season), []).append(e)
+        out = []
+        for (sid, season), eps in groups.items():
+            missing = _season_missing(eps, today)
+            if missing:
+                out.append({"show": names[sid], "show_id": sid, "season": season, "missing": missing})
+        out.sort(key=lambda x: (x["show"].lower(), x["season"]))
+        return out
+    return _jf_cached("missing", build, force=force)
+
+
+def jf_upgrades(force: bool = False) -> list[dict]:
+    """Movies below 1080p, worst first."""
+    def build():
+        uid = jf_user_id()
+        res = jf_request(f"/Users/{uid}/Items", {
+            "Recursive": "true", "IncludeItemTypes": "Movie", "Fields": "Height,Width,ProductionYear,DateCreated",
+            "EnableImages": "false", "Limit": 20000, "EnableTotalRecordCount": "false"}, timeout=30)
+        items = [_jf_item(x) for x in res.get("Items") or []]
+        low = [x for x in items if x["quality"] in ("SD", "720p")]
+        low.sort(key=lambda x: (x["quality"] != "SD", x["title"].lower()))
+        return low
+    return _jf_cached("upgrades", build, force=force)
+
+
+def jf_show(show_id: str) -> dict:
+    if not re.fullmatch(r"[0-9a-fA-F-]{8,40}", show_id or ""):
+        raise ValueError("Invalid show.")
+    uid = jf_user_id()
+    s = jf_request(f"/Users/{uid}/Items/{show_id}", timeout=8)
+    res = jf_request(f"/Shows/{show_id}/Episodes", {"UserId": uid, "Fields": "PremiereDate,Overview"}, timeout=15)
+    eps = res.get("Items") or []
+    today = date.today().isoformat()
+    seasons: dict[int, list] = {}
+    for e in eps:
+        seasons.setdefault(to_int(e.get("ParentIndexNumber")), []).append(e)
+    out_seasons = []
+    for num in sorted(seasons):
+        group = seasons[num]
+        owned = [e for e in group if str(e.get("LocationType")) != "Virtual"]
+        out_seasons.append({
+            "season": num,
+            "missing": _season_missing(group, today) if num > 0 else [],
+            "episodes": [{
+                "episode": to_int(e.get("IndexNumber")), "title": str(e.get("Name") or ""),
+                "watched": bool((e.get("UserData") or {}).get("Played")),
+                "aired": str(e.get("PremiereDate") or "")[:10], "runtime": _ticks_s(e.get("RunTimeTicks")),
+            } for e in sorted(owned, key=lambda e: to_int(e.get("IndexNumber")))],
+        })
+    nxt = None
+    try:
+        up = jf_request("/Shows/NextUp", {"UserId": uid, "SeriesId": show_id, "Limit": 1}, timeout=8).get("Items") or []
+        if up:
+            nxt = {"season": to_int(up[0].get("ParentIndexNumber")), "episode": to_int(up[0].get("IndexNumber")),
+                   "title": str(up[0].get("Name") or "")}
+    except UpstreamError:
+        pass
+    owned_all = [e for e in eps if str(e.get("LocationType")) != "Virtual"]
+    return {
+        "id": show_id, "title": str(s.get("Name") or "Show"), "year": to_int(s.get("ProductionYear")) or None,
+        "plot": str(s.get("Overview") or "")[:1500], "genres": list(s.get("Genres") or [])[:4],
+        "poster": "j:" + show_id, "episodes": len(owned_all),
+        "watched": sum(1 for e in owned_all if (e.get("UserData") or {}).get("Played")),
+        "seasons": out_seasons, "next": nxt,
+    }
+
+
+def jf_art(item_id: str) -> tuple[bytes, str]:
+    if not re.fullmatch(r"[0-9a-fA-F-]{8,40}", item_id or ""):
+        raise ValueError("Invalid picture.")
+    raw = jf_request(f"/Items/{item_id}/Images/Primary", {"maxHeight": 450, "quality": 85}, raw=True,
+                     timeout=10, max_bytes=8_000_000)
+    ctype = _image_type(raw)
+    if not ctype:
+        raise UpstreamError("No picture.")
+    return raw, ctype
+
+
+def jf_control(session_id: str, action: str) -> None:
+    cmd = {"playpause": "PlayPause", "stop": "Stop"}.get(action)
+    if not cmd or not re.fullmatch(r"[0-9a-zA-Z-]{4,80}", session_id or ""):
+        raise ValueError("Invalid playback command.")
+    jf_request(f"/Sessions/{session_id}/Playing/{cmd}", post=True, timeout=6)
+
+
+def jf_discover(wait: float = 1.5) -> list[dict]:
+    """Jellyfin servers answering the standard LAN discovery broadcast."""
+    found: dict[str, dict] = {}
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(0.3)
+        sock.sendto(b"Who is JellyfinServer?", ("255.255.255.255", JF_DISCOVERY_PORT))
+        end = time.monotonic() + wait
+        while time.monotonic() < end:
+            try:
+                data, _addr = sock.recvfrom(4096)
+            except socket.timeout:
+                continue
+            try:
+                info = json.loads(data.decode("utf-8", errors="replace"))
+                url = normalize_jellyfin_url(str(info.get("Address") or ""))
+            except (ValueError, AttributeError):
+                continue
+            if url:
+                found[url] = {"url": url, "name": str(info.get("Name") or "Jellyfin")[:60]}
+    except OSError:
+        pass
+    finally:
+        sock.close()
+    return list(found.values())
+
+
+def jf_url_allowed(url: str) -> bool:
+    """A server connected from the phone must be private (home network, Tailscale, this PC)."""
+    host = urllib.parse.urlsplit(url).hostname or ""
+    return bool(host) and not host_is_public(host)
+
+
+# ==============================================================================
 # 5c. PHONE SETTINGS, ALERTS (ntfy), SAVED SEARCHES, STATS, AUTOSTART
 # ==============================================================================
 
@@ -1707,6 +2107,7 @@ _settings_lock = threading.RLock()
 def _default_settings() -> dict:
     return {"ntfy_url": "", "ntfy_token": "", "notify_complete": True, "notify_failed": True, "notify_saved": True,
             "saved_interval_hours": 6, "saved_searches": [],
+            "jellyfin_url": "", "jellyfin_token": "",
             "notify_drive_health": True, "notify_drive_hot": True, "notify_drive_low": True, "drive_low_gb": DRIVE_LOW_GB}
 
 
@@ -2612,6 +3013,12 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 .banner b{display:block;font-size:15px}.banner.warn b{color:var(--amber)}.banner.bad b{color:var(--red)}.banner.ok b{color:var(--green)}.banner span{font-size:12px;color:var(--soft)}
 .tgl{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid #10242C;min-height:48px}.tgl:first-child{border-top:0}.tgl input{width:22px;height:22px;accent-color:var(--teal);flex:none}.tgl small{display:block;color:var(--soft);font-size:12px}
 .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--soft);margin-top:8px}.legend i{display:inline-block;width:9px;height:9px;border-radius:5px;margin-right:5px}
+.jgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.jq{background:var(--card);border:0;border-radius:14px;padding:12px;text-align:left;color:var(--white);display:flex;flex-direction:column;gap:5px;min-height:78px;cursor:pointer}
+.jq b{font-size:14px}.jq span{font-size:12px;color:var(--soft)}.jq.main{background:var(--teal);color:var(--ink)}.jq.main span{color:#0B3B36}.jq.on{outline:2px solid var(--teal)}
+.jq .ct{align-self:flex-start;font:700 11px var(--mono);background:var(--teal);color:var(--ink);padding:1px 7px;border-radius:9px}.jq .ct.warn{background:var(--amber)}
+.qual{font:600 11px var(--mono);padding:3px 7px;border-radius:6px;background:var(--deep);color:var(--text)}.qual.lo{background:#2E2410;color:var(--amber)}
+.jnow .meta{font:500 12px var(--mono);color:var(--soft);margin-top:3px}.tag.tx{background:#2E2410;color:var(--amber)}
 .pills{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}.pills button{border:1px solid var(--line);background:transparent;color:var(--text);border-radius:18px;padding:0 14px;min-height:38px;font-size:13px;font-weight:600}.pills button.on{background:var(--teal);color:var(--ink);border-color:var(--teal)}
 </style></head><body>
 <header><div class="brand"><img src="/icon.png" alt="">NZB Command Center</div><div id="statusbar" class="statusbar hidden"><span id="sabpill" class="spill"><i></i>SABnzbd</span></div></header>
@@ -2626,6 +3033,11 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <button class="shortcut" data-tab="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search your indexers…</button>
 <div id="homekodi"></div>
 <div id="homedrives"></div>
+</section>
+<section id="jellyfin" class="hidden">
+<div class="row" style="align-items:flex-end"><div><h1>Jellyfin</h1><p class="lede" id="jfstatus">Loading…</p></div><button class="btn ghost sm hidden" id="jfscan" style="flex:none;margin-bottom:14px">Scan libraries</button></div>
+<div id="jfnow"></div>
+<div id="jfbody"></div>
 </section>
 <section id="drives" class="hidden">
 <div class="row" style="justify-content:space-between;margin-top:6px"><button class="btn ghost sm" data-tab="home" style="flex:none">‹ Home</button><button class="btn ghost sm" id="drivecheck" style="flex:none">Check now</button></div>
@@ -2700,6 +3112,7 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <button id="tabsearch" class="tab" data-tab="search"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search</button>
 <button id="tabqueue" class="tab" data-tab="queue"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>Queue<span id="queuecount" class="count hidden"></span></button>
 <button id="tabkodi" class="tab" data-tab="kodi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/></svg>Kodi</button>
+<button id="tabjellyfin" class="tab" data-tab="jellyfin"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9.5 17h-19z"/><path d="M12 10l4 7H8z"/></svg>Jellyfin</button>
 </nav>
 <div id="toast" class="toast hidden" role="status"></div>
 <div id="sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-label="Movie details"><div class="panel" id="sheetpanel"></div></div>
@@ -2724,7 +3137,7 @@ function toast(msg,isErr){const t=$('toast');t.textContent=msg;t.className='toas
 function skeleton(n,lines){let h='';for(let i=0;i<n;i++)h+='<div class="skel">'+'<i style="width:'+(85-i*7)+'%"></i><i style="width:55%"></i>'+(lines>2?'<i style="width:35%"></i>':'')+'</div>';return h}
 function empty(title,hint){return '<div class="empty">'+EMPTY_ICON+'<b>'+esc(title)+'</b>'+esc(hint)+'</div>'}
 
-const API_TIMEOUTS={'/api/drives':70000,'/api/drives/check':70000,'/api/search':90000,'/api/add':120000,'/api/add-batch':300000};
+const API_TIMEOUTS={'/api/jellyfin/missing':90000,'/api/jellyfin/upgrades':60000,'/api/jellyfin/connect':30000,'/api/drives':70000,'/api/drives/check':70000,'/api/search':90000,'/api/add':120000,'/api/add-batch':300000};
 async function api(path,body){
   const opt={method:body===undefined?'GET':'POST',headers:{'X-Mobile-Token':token}};
   if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body)}
@@ -2763,7 +3176,7 @@ function fillSearchCategories(keep){
 }
 function fillCategories(cats){sabCats=cats;const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Auto (match)</option><option value="*">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(keep==='*'||cats.includes(keep))sel.value=keep}
 
-function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi','drives'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':(t==='drives'?'home':t);document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi();if(t==='drives')refreshDrives()}
+function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi','drives','jellyfin'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':(t==='drives'?'home':t);document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi();if(t==='drives')refreshDrives();if(t==='jellyfin')refreshJellyfin()}
 
 function savePrefs(){LS.set('nzb_mobile_prefs',JSON.stringify({sort:$('sort').value,minsize:$('minsize').value,maxsize:$('maxsize').value,mingrabs:$('mingrabs').value,indexer:$('indexer').value,prio:$('prio').value,category:$('category').value}));LS.set('nzb_mobile_cat',$('sabcat').value)}
 function loadPrefs(){try{const p=JSON.parse(LS.get('nzb_mobile_prefs','{}'));if(p.sort)$('sort').value=p.sort;if(p.prio!==undefined)$('prio').value=p.prio;if(p.indexer&&[...$('indexer').options].some(o=>o.value===p.indexer))$('indexer').value=p.indexer;['minsize','maxsize','mingrabs'].forEach(k=>{if(p[k]!==undefined)$(k).value=p[k]})}catch{}}
@@ -2993,7 +3406,7 @@ function pumpArt(){
   while(artActive<4&&artQueue.length){
     const j=artQueue.shift();artActive++;
     // "r:<id>" = a search result's poster (the server picks the source); anything else = Kodi artwork.
-    const src=j.ref.startsWith('r:')?'/api/search/art?id='+encodeURIComponent(j.ref.slice(2)):'/api/kodi/art?u='+encodeURIComponent(j.ref);
+    const src=j.ref.startsWith('r:')?'/api/search/art?id='+encodeURIComponent(j.ref.slice(2)):(j.ref.startsWith('j:')?'/api/jellyfin/art?id='+encodeURIComponent(j.ref.slice(2)):'/api/kodi/art?u='+encodeURIComponent(j.ref));
     fetch(src,{headers:{'X-Mobile-Token':token}})
       .then(r=>{if(r.status===404)return null;if(!r.ok)throw new Error('HTTP '+r.status);return r.blob()})
       .then(b=>{if(!b){j.res(null);return}const u=URL.createObjectURL(b);artReady.set(j.ref,u);j.res(u)})  // null = no poster: keep the placeholder, don't ask again
@@ -3284,6 +3697,129 @@ async function refreshDrives(force){
 }
 async function setDriveAlert(key,on){try{const body={};body[key]=on;renderDrives(await api('/api/drives/alerts',body));toast(on?'Alert turned on':'Alert turned off')}catch(e){toast(e.message,true)}}
 
+// ---------- Jellyfin ----------
+let jf=null,jfMode='',jfBusy=false,jfMissing=null,jfUp=null,jfResults=null,jfQuery='',jfConnectOpen=false;
+const JF_ICON='<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9.5 17h-19z"/><path d="M12 10l4 7H8z"/></svg>';
+function jfNowCard(x){
+  const pp=x.paused?ICON.play:ICON.pause;
+  return '<div class="hero jnow"><div class="nowrow"><div class="pthumb">'+artTag(x.poster)+'</div><div class="info"><div class="row" style="justify-content:space-between"><div class="kode" style="flex:1">'+(x.paused?'PAUSED':'NOW PLAYING')+'</div>'+(x.method==='Transcoding'?'<span class="tag tx" style="flex:none">TRANSCODING</span>':'')+'</div><div class="name">'+esc(x.title)+'</div>'+(x.sub?'<div class="sub">'+esc(x.sub)+'</div>':'')+
+    '<div class="meta">'+esc([x.user,x.device,x.method==='Transcoding'?'':x.method,x.quality].filter(Boolean).join(' · '))+'</div></div></div>'+
+    '<div class="bar"><span style="width:'+clampPct(x.pct)+'%"></span></div><div class="ctrls"><span class="tm">'+fmtTime(x.time)+' / '+fmtTime(x.total)+'</span>'+
+    '<button class="round" data-jact="stop" data-sid="'+esc(x.session)+'" aria-label="Stop"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>'+
+    '<button class="round main" data-jact="playpause" data-sid="'+esc(x.session)+'" aria-label="'+(x.paused?'Play':'Pause')+'">'+pp+'</button></div></div>';
+}
+function renderJfNow(list){const box=$('jfnow');box.innerHTML=(list||[]).map(jfNowCard).join('');hydrateArt(box)}
+async function refreshJfNow(){if(!jf||!jf.online)return;try{renderJfNow((await api('/api/jellyfin/now')).sessions)}catch{}}
+function jfConnectForm(prefill){
+  return '<div class="card"><div class="kode" style="margin-bottom:10px">CONNECT JELLYFIN</div>'+
+    '<div id="jffound"><button class="btn ghost sm full" id="jffind">Find Jellyfin on my network</button></div>'+
+    '<label class="label" for="jfurl" style="margin-top:12px">Server address</label><input id="jfurl" class="field" placeholder="http://192.168.68.60:8096" autocomplete="off" autocapitalize="off" autocorrect="off" inputmode="url" value="'+esc(prefill||'')+'">'+
+    '<label class="label" for="jfkey">API key</label><input id="jfkey" class="field" type="password" placeholder="From Jellyfin: Dashboard → API Keys → +" autocomplete="off" autocapitalize="off" autocorrect="off">'+
+    '<button class="btn full" id="jfsave">Test &amp; save</button><p class="hint" style="margin:10px 2px 0">In Jellyfin open Dashboard → API Keys, tap +, name it “NZB Command Center” and copy the key. You can also set it up in the desktop app (Media Server tab).</p></div>';
+}
+function jfQuick(){
+  const c=jf.counts||{};
+  const q=(mode,title,sub,ct,cls)=>'<button class="jq'+(jfMode===mode?' on':'')+'" data-jmode="'+mode+'">'+(ct!=null?'<span class="ct'+(cls?' '+cls:'')+'">'+esc(ct)+'</span>':'')+'<b>'+title+'</b><span>'+sub+'</span></button>';
+  return '<div class="jgrid">'+q('missing','Missing episodes','Gaps in your shows',jfMissing?jfMissing.reduce((n,x)=>n+x.missing.length,0):null,'')+q('upgrades','Low quality','Movies below 1080p',jfUp?jfUp.length:null,'warn')+'</div>';
+}
+function jfItemRow(x){
+  const tap=x.type==='Series'?' data-jshow="'+esc(x.id)+'"':' data-jmovie="'+esc(x.id)+'"';
+  const meta=x.type==='Series'?[x.year,x.episodes?x.episodes+' episodes':'','TV show'].filter(Boolean).join(' · '):[x.year,x.size?fmtBytes(x.size):'',x.watched?'watched':(x.resume?'resume at '+fmtTime(x.resume):'')].filter(Boolean).join(' · ');
+  return '<div class="qrow"><button class="pthumb"'+tap+' aria-label="Details for '+esc(x.title)+'">'+artTag(x.poster)+'</button><div class="info tap"'+tap+'><div class="t">'+esc(x.title)+'</div><div class="m">'+esc(meta)+'</div>'+(x.type==='Movie'?'<div class="rl"><span class="badge lib">✓ In Jellyfin</span>'+(x.quality?'<span class="qual'+(x.quality==='SD'||x.quality==='720p'?' lo':'')+'">'+esc(x.quality)+'</span>':'')+'</div>':'')+'</div>'+
+    (x.type==='Movie'?'<button class="btn ghost sm" style="flex:none" data-jbetter="'+esc(x.title+(x.year?' '+x.year:''))+'">'+(x.quality==='2160p'?'Search':'Better copy')+'</button>':'')+'</div>';
+}
+function jfMissingRow(x){
+  const eps=x.missing.map(n=>'E'+String(n).padStart(2,'0')),q=x.show+' S'+String(x.season).padStart(2,'0')+(x.missing.length===1?'E'+String(x.missing[0]).padStart(2,'0'):'');
+  return '<div class="miss"><span data-jshow="'+esc(x.show_id)+'" style="cursor:pointer"><b>'+esc(x.show)+'</b> · Season '+esc(x.season)+'<br>Missing '+esc(eps.slice(0,12).join(', ')+(eps.length>12?' …':''))+'</span><button class="btn sm" data-tvsearch="'+esc(q)+'">Search</button></div>';
+}
+async function jfList(){
+  const box=$('jflist');if(!box)return;
+  if(jfMode==='search'){
+    if(jfResults===null){box.innerHTML=skeleton(3,2);try{jfResults=(await api('/api/jellyfin/search?q='+encodeURIComponent(jfQuery))).items||[]}catch(e){box.innerHTML=empty('Search failed',e.message);return}}
+    box.innerHTML='<div class="section">'+jfResults.length+' IN YOUR LIBRARY</div>'+(jfResults.map(jfItemRow).join('')||empty('Not in Jellyfin','You don\'t have “'+jfQuery+'” yet.'))+
+      '<button class="btn ghost full" data-jbetter="'+esc(jfQuery)+'" data-jcat="" style="margin-top:4px">Search your indexers for “'+esc(jfQuery)+'”</button>';
+    hydrateArt(box);return;
+  }
+  if(jfMode==='missing'){
+    if(jfMissing===null){box.innerHTML='<div class="section">CHECKING YOUR SHOWS…</div>'+skeleton(4,2);try{jfMissing=(await api('/api/jellyfin/missing')).missing||[]}catch(e){box.innerHTML=empty('Couldn\'t check',e.message);return}renderJellyfin();return}
+    box.innerHTML='<div class="section">'+jfMissing.length+' SEASON'+(jfMissing.length===1?'':'S')+' WITH GAPS</div>'+(jfMissing.slice(0,80).map(jfMissingRow).join('')||empty('No gaps found','Every season has all its episodes up to the newest one you have.'));return;
+  }
+  if(jfMode==='upgrades'){
+    if(jfUp===null){box.innerHTML='<div class="section">CHECKING QUALITY…</div>'+skeleton(4,2);try{jfUp=(await api('/api/jellyfin/upgrades')).movies||[]}catch(e){box.innerHTML=empty('Couldn\'t check',e.message);return}renderJellyfin();return}
+    box.innerHTML='<div class="section">'+jfUp.length+' MOVIE'+(jfUp.length===1?'':'S')+' BELOW 1080P</div>'+(jfUp.slice(0,100).map(jfItemRow).join('')||empty('All good','Every movie is 1080p or better.'));hydrateArt(box);return;
+  }
+  const r=jf.recent||[];
+  box.innerHTML=r.length?'<div class="section">RECENTLY ADDED</div><div class="cw">'+r.map(x=>{const tap=x.type==='Episode'?' data-jshow="'+esc(x.show_id)+'"':' data-jmovie="'+esc(x.id)+'"';return '<button class="citem"'+tap+'><div class="ph">'+artTag(x.poster)+'</div><div class="t">'+esc(x.type==='Episode'?x.show:x.title)+'</div><div class="m">'+esc(x.type==='Episode'?'S'+String(x.season).padStart(2,'0')+'E'+String(x.episode).padStart(2,'0'):(x.year||''))+'</div></button>'}).join('')+'</div>':'';
+  hydrateArt(box);
+}
+function renderJellyfin(){
+  const st=$('jfstatus'),body=$('jfbody');$('jfscan').classList.toggle('hidden',!(jf&&jf.online));
+  if(!jf||!jf.configured){st.className='lede';st.textContent='Not connected yet.';$('jfnow').innerHTML='';body.innerHTML=jfConnectForm('');return}
+  if(!jf.online){st.className='lede status error';st.textContent=jf.error||'Jellyfin is offline';$('jfnow').innerHTML='';
+    body.innerHTML='<div class="card kidle">'+JF_ICON+'<span>Can\'t reach Jellyfin at '+esc(jf.url)+'. Is the server on?</span></div>'+(jfConnectOpen?jfConnectForm(jf.url):'<button class="btn ghost full" id="jfchange">Change connection</button>');return}
+  st.className='lede';const c=jf.counts;
+  st.textContent=[jf.server+(jf.version?' · v'+jf.version:''),jf.ms+' ms',c?c.movies+' movie'+(c.movies===1?'':'s')+' · '+c.shows+' show'+(c.shows===1?'':'s'):''].filter(Boolean).join(' · ');
+  renderJfNow(jf.sessions);
+  const nothing=(jf.sessions||[]).length?'':'<div class="card kidle">'+ICON.play+'<span>Nothing playing on Jellyfin right now.</span></div>';
+  body.innerHTML=nothing+'<label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="jfq" placeholder="Do I already have it?" enterkeyhint="search" autocomplete="off" aria-label="Search your Jellyfin library" value="'+esc(jfQuery)+'"></label>'+
+    jfQuick()+'<div id="jflist"></div>'+
+    '<details class="opts" style="margin-top:14px"><summary>Connection<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></summary><div class="body"><p class="hint" style="margin:0 0 10px">'+esc(jf.url)+' · set up '+(jf.source==='phone'?'from this phone':'in the desktop app')+'</p>'+
+    (jf.source==='phone'?'<button class="btn danger sm full" id="jfforget">Disconnect</button>':'')+(jfConnectOpen?jfConnectForm(''):'<button class="btn ghost sm full" id="jfchange" style="margin-top:8px">Connect a different server</button>')+'</div></details>';
+  jfList();
+}
+async function refreshJellyfin(){
+  if(jfBusy)return;jfBusy=true;
+  if(!jf){$('jfbody').innerHTML=skeleton(3,2)}
+  try{jf=await api('/api/jellyfin');renderJellyfin()}
+  catch(e){$('jfstatus').className='lede status error';$('jfstatus').textContent=e.message;if(!jf)$('jfbody').innerHTML=''}
+  finally{jfBusy=false}
+}
+async function jfAction(sid,action){try{await api('/api/jellyfin/control',{session:sid,action});setTimeout(refreshJfNow,500)}catch(e){toast(e.message,true)}}
+async function jfScan(){const b=$('jfscan');b.disabled=true;try{await api('/api/jellyfin/scan',{});jfMissing=null;jfUp=null;toast('Library scan started on Jellyfin')}catch(e){toast(e.message,true)}finally{b.disabled=false}}
+async function jfFind(){
+  const box=$('jffound');box.innerHTML='<p class="hint" style="margin:0">Looking on your network…</p>';
+  try{const d=await api('/api/jellyfin/discover');const sv=d.servers||[];
+    box.innerHTML=sv.length?'<div class="kode" style="margin-bottom:6px">FOUND ON YOUR NETWORK</div>'+sv.map(x=>'<button class="shortcut" data-jpick="'+esc(x.url)+'" style="color:var(--white)"><span style="flex:1"><b>'+esc(x.name)+'</b><br><small style="font-family:var(--mono);color:var(--soft)">'+esc(x.url)+'</small></span><span style="color:var(--teal);font-weight:700;font-size:13px">Use this</span></button>').join(''):'<p class="hint" style="margin:0">None found. Type the address below (the PC running Jellyfin, port 8096).</p>'}
+  catch(e){box.innerHTML='<p class="hint" style="margin:0">'+esc(e.message)+'</p>'}
+}
+async function jfSave(){
+  const b=$('jfsave');b.disabled=true;b.textContent='Testing…';
+  try{jf=await api('/api/jellyfin/connect',{url:$('jfurl').value.trim(),key:$('jfkey').value.trim()});jfConnectOpen=false;jfMissing=jfUp=jfResults=null;renderJellyfin();toast('Connected to Jellyfin')}
+  catch(e){toast(e.message,true);b.disabled=false;b.textContent='Test & save'}
+}
+async function jfForget(){if(!confirm('Disconnect the Jellyfin server set up on this phone?'))return;try{jf=await api('/api/jellyfin/forget',{});jfMissing=jfUp=jfResults=null;renderJellyfin()}catch(e){toast(e.message,true)}}
+async function openJfShow(id){
+  const panel=$('sheetpanel');
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button><div class="empty"><b>Loading…</b></div>';
+  $('sheet').classList.remove('hidden');document.body.style.overflow='hidden';
+  if(!sheetOpen){sheetOpen=true;try{history.pushState({sheet:1},'')}catch{}}
+  let d;try{d=await api('/api/jellyfin/show?id='+encodeURIComponent(id))}catch(e){panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button>'+empty('Couldn\'t load this show',e.message);return}
+  const n=d.next,openSeason=n?n.season:((d.seasons.find(s=>s.missing.length)||d.seasons[d.seasons.length-1]||{}).season);
+  const totalMiss=d.seasons.reduce((a,s)=>a+s.missing.length,0);
+  const seasons=d.seasons.map(s=>{
+    const w=s.episodes.filter(e=>e.watched).length,name=s.season===0?'Specials':'Season '+s.season;
+    const miss=s.missing.length?'<div class="miss"><span>Missing '+esc(s.missing.map(x=>'E'+String(x).padStart(2,'0')).join(', '))+'</span><button class="btn sm" data-tvsearch="'+esc(d.title+' S'+String(s.season).padStart(2,'0')+(s.missing.length===1?'E'+String(s.missing[0]).padStart(2,'0'):''))+'">Search</button></div>':'';
+    const rows=s.episodes.map(e=>'<div class="eprow'+(e.watched?' w':'')+'"><span class="n">E'+String(e.episode).padStart(2,'0')+'</span><div class="info"><div class="t">'+esc(e.title)+'</div><div class="m">'+esc([e.aired,runtimeText(e.runtime),e.watched?'watched':''].filter(Boolean).join(' · '))+'</div></div></div>').join('');
+    return '<details class="season"'+(s.season===openSeason?' open':'')+'><summary>'+esc(name)+'<span class="m">'+w+'/'+s.episodes.length+' watched'+(s.missing.length?' · '+s.missing.length+' missing':'')+'</span></summary>'+miss+rows+'</details>';
+  }).join('');
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button><div class="fan" style="aspect-ratio:3/1"></div>'+
+    '<div class="dhead"><button class="dposter" data-view="'+esc(d.poster)+'" aria-label="View poster full size">'+artTag(d.poster)+'</button><div class="dtitle"><h2>'+esc(d.title)+'</h2><div class="m">'+esc([d.year,d.episodes+' episodes',d.watched+' watched',totalMiss?totalMiss+' missing':''].filter(Boolean).join(' · '))+'</div></div></div>'+
+    ((d.genres||[]).length?'<div class="chips">'+d.genres.map(g=>'<span class="chip">'+esc(g)+'</span>').join('')+'</div>':'')+
+    '<div class="dbody">'+(d.plot?'<p class="plot">'+esc(d.plot)+'</p>':'')+(n?'<p class="hint">Next up: <b style="color:var(--white)">'+esc(epCode(n))+' · '+esc(n.title)+'</b></p>':'')+
+    (totalMiss>1?'<button class="btn full" data-tvsearch="'+esc(d.title)+'" style="margin-bottom:6px">Search for this show</button>':'')+'<div style="margin-top:8px">'+seasons+'</div></div>';
+  panel.scrollTop=0;hydrateArt(panel);
+}
+function openJfMovie(id){
+  const pool=[].concat(jf&&jf.recent||[],jfResults||[],jfUp||[]),x=pool.find(m=>m.id===id);if(!x)return;
+  const panel=$('sheetpanel');
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button><div class="fan" style="aspect-ratio:3/1"></div><div class="dhead"><button class="dposter" data-view="'+esc(x.poster)+'" aria-label="View poster full size">'+artTag(x.poster)+'</button><div class="dtitle"><h2>'+esc(x.title)+'</h2><div class="m">'+esc([x.year,runtimeText(x.runtime)].filter(Boolean).join(' · '))+'</div></div></div>'+
+    '<div class="dbody"><div class="rl" style="margin:14px 0"><span class="badge lib">✓ In Jellyfin</span>'+(x.quality?'<span class="qual'+(x.quality==='SD'||x.quality==='720p'?' lo':'')+'">'+esc(x.quality)+'</span>':'')+(x.size?'<span class="rc">'+esc(fmtBytes(x.size))+'</span>':'')+(x.watched?'<span class="rc">watched</span>':'')+'</div>'+
+    '<button class="btn full" data-jbetter="'+esc(x.title+(x.year?' '+x.year:''))+'">Find a better copy</button></div>';
+  $('sheet').classList.remove('hidden');document.body.style.overflow='hidden';
+  if(!sheetOpen){sheetOpen=true;try{history.pushState({sheet:1},'')}catch{}}
+  hydrateArt(panel);
+}
+
 async function kodiScan(){
   const b=$('kodiscan');b.disabled=true;
   try{await api('/api/kodi/scan',{});kodiMovies=null;toast('Library scan started on Kodi')}catch(e){toast(e.message,true)}finally{b.disabled=false}
@@ -3310,6 +3846,22 @@ async function watchFinished(){
 function bind(){
   $('pairbtn').addEventListener('click',pair);
   $('drivecheck').addEventListener('click',()=>refreshDrives(true));
+  $('jfscan').addEventListener('click',jfScan);
+  $('jellyfin').addEventListener('click',e=>{
+    const a=e.target.closest('[data-jact]');if(a)return jfAction(a.dataset.sid,a.dataset.jact);
+    const m=e.target.closest('[data-jmode]');if(m){jfMode=jfMode===m.dataset.jmode?'':m.dataset.jmode;return renderJellyfin()}
+    const pk=e.target.closest('[data-jpick]');if(pk){$('jfurl').value=pk.dataset.jpick;$('jfkey').focus();return}
+    if(e.target.closest('#jffind'))return jfFind();
+    if(e.target.closest('#jfsave'))return jfSave();
+    if(e.target.closest('#jfforget'))return jfForget();
+    if(e.target.closest('#jfchange')){jfConnectOpen=true;return renderJellyfin()}
+  });
+  $('jellyfin').addEventListener('keydown',e=>{if(e.target.id==='jfq'&&e.key==='Enter'){e.preventDefault();jfQuery=e.target.value.trim();jfMode=jfQuery?'search':'';jfResults=null;e.target.blur();renderJellyfin()}});
+  document.addEventListener('click',e=>{
+    const sh=e.target.closest('[data-jshow]');if(sh){if(e.target.closest('#sheet'))closeSheet();return openJfShow(sh.dataset.jshow)}
+    const mv=e.target.closest('[data-jmovie]');if(mv&&!e.target.closest('#sheet'))return openJfMovie(mv.dataset.jmovie);
+    const bt=e.target.closest('[data-jbetter]');if(bt){if(e.target.closest('#sheet'))closeSheet();goSearch(bt.dataset.jbetter,{category:bt.dataset.jcat!==undefined?bt.dataset.jcat:'2000'})}
+  });
   $('drivebody').addEventListener('change',e=>{const c=e.target.closest('[data-dalert]');if(c)setDriveAlert(c.dataset.dalert,c.checked)});
   $('token').addEventListener('keydown',e=>{if(e.key==='Enter')pair()});
   document.addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(b)showTab(b.dataset.tab)});
@@ -3366,7 +3918,7 @@ function bind(){
   setInterval(watchFinished,15000);
   $('recent').addEventListener('click',e=>{const b=e.target.closest('[data-recent]');if(b)useRecent(b.dataset.recent)});
   renderRecent();
-  setInterval(()=>{if(document.hidden||$('app').classList.contains('hidden'))return;if(activeTab==='home')refreshHome();else if(activeTab==='kodi')refreshKodiNow()},5000);
+  setInterval(()=>{if(document.hidden||$('app').classList.contains('hidden'))return;if(activeTab==='home')refreshHome();else if(activeTab==='kodi')refreshKodiNow();else if(activeTab==='jellyfin')refreshJfNow()},5000);
 }
 bind();
 if(token)connect();
@@ -3536,6 +4088,8 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, sab_stats())
         elif path == "/api/drives":
             self.send_json(200, self._drives_view())
+        elif path.startswith("/api/jellyfin"):
+            self._get_jellyfin(path)
         elif path == "/api/saved":
             self.send_json(200, self._saved_view())
         elif path == "/api/settings":
@@ -3645,6 +4199,8 @@ class MobileHandler(BaseHTTPRequestHandler):
             if not send_notification("NZB Command Center", "Test alert from your phone app — alerts are working.", tags=("bell",)):
                 raise ValueError("Save an ntfy topic URL first.")
             self.send_json(200, {"ok": True})
+        elif path.startswith("/api/jellyfin/"):
+            self._post_jellyfin(path, body)
         elif path == "/api/drives/check":
             self.send_json(200, self._drives_view(force=True))
         elif path == "/api/drives/alerts":
@@ -3666,6 +4222,73 @@ class MobileHandler(BaseHTTPRequestHandler):
             sab_request("config", {"name": "speedlimit", "value": "0" if mbps == 0 else f"{int(round(mbps * 1024))}K"})
             log.info("speed limit %s MB/s ip=%s", mbps, self.ip)
             self.send_json(200, {"ok": True})
+        else:
+            self.send_json(404, {"error": "Not found."})
+
+    def _get_jellyfin(self, path: str) -> None:
+        qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        arg = lambda k: qs.get(k, [""])[0]
+        if path == "/api/jellyfin":
+            self.send_json(200, jf_overview())
+        elif path == "/api/jellyfin/now":
+            self.send_json(200, {"sessions": jf_sessions()})
+        elif path == "/api/jellyfin/search":
+            self.send_json(200, {"items": jf_search(arg("q"))})
+        elif path == "/api/jellyfin/show":
+            self.send_json(200, jf_show(arg("id")))
+        elif path == "/api/jellyfin/missing":
+            self.send_json(200, {"missing": jf_missing(force=arg("fresh") == "1")})
+        elif path == "/api/jellyfin/upgrades":
+            self.send_json(200, {"movies": jf_upgrades(force=arg("fresh") == "1")})
+        elif path == "/api/jellyfin/discover":
+            self.send_json(200, {"servers": jf_discover()})
+        elif path == "/api/jellyfin/art":
+            try:
+                raw, ctype = jf_art(arg("id"))
+            except UpstreamError:
+                self.send_json(404, {"error": "No picture."})
+                return
+            self._send(200, raw, ctype, {"Cache-Control": "private, max-age=86400"})
+        else:
+            self.send_json(404, {"error": "Not found."})
+
+    def _post_jellyfin(self, path: str, body: dict) -> None:
+        if path == "/api/jellyfin/control":
+            jf_control(str(body.get("session") or ""), str(body.get("action") or ""))
+            self.send_json(200, {"ok": True})
+        elif path == "/api/jellyfin/scan":
+            jf_request("/Library/Refresh", post=True, timeout=10)
+            jf_clear_cache()
+            log.info("jellyfin scan ip=%s", self.ip)
+            self.send_json(200, {"ok": True})
+        elif path == "/api/jellyfin/connect":
+            url = normalize_jellyfin_url(str(body.get("url") or "")[:300])
+            key = str(body.get("key") or "").strip()
+            if not url:
+                raise ValueError("Enter your Jellyfin server's address.")
+            if not jf_url_allowed(url):
+                raise ValueError("From the phone you can only connect a Jellyfin server on your home network or Tailscale. "
+                                 "Set an internet address in the desktop app instead.")
+            if not re.fullmatch(r"[A-Za-z0-9]{16,64}", key):
+                raise ValueError("That API key doesn't look right. Copy it from Jellyfin: Dashboard → API Keys.")
+            global _JF_SECRETS
+            _JF_SECRETS = frozenset([key])
+            info = jf_request("/System/Info", timeout=8, conf={"url": url, "key": key, "source": "phone"})
+
+            def change(st: dict) -> None:
+                st["jellyfin_url"] = url
+                st["jellyfin_token"] = _dpapi_protect(key)
+            update_settings(change)
+            jf_clear_cache()
+            log.info("jellyfin connected from phone (%s) ip=%s", info.get("ServerName"), self.ip)
+            self.send_json(200, jf_overview())
+        elif path == "/api/jellyfin/forget":
+            def clear(st: dict) -> None:
+                st["jellyfin_url"] = st["jellyfin_token"] = ""
+            update_settings(clear)
+            jf_clear_cache()
+            log.info("jellyfin phone connection removed ip=%s", self.ip)
+            self.send_json(200, jf_overview())
         else:
             self.send_json(404, {"error": "Not found."})
 
