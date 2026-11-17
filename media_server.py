@@ -194,6 +194,12 @@ def _format_http_err(exc: Exception, server_name: str = "Server") -> str:
 # 1. JELLYFIN & PLEX API CLIENTS
 # ==============================================================================
 
+def jellyfin_auth_header(api_key: str, client: str = "NZB Command Center", device: str = "Desktop") -> str:
+    """The standard Jellyfin/Emby Authorization header carrying an API key."""
+    return (f'MediaBrowser Client="{client}", Device="{device}", DeviceId="nzbcc-{device.lower()}", '
+            f'Version="1.0", Token="{api_key}"')
+
+
 class JellyfinClient:
     def __init__(self, base_url: str, api_key: str):
         self.base_url = (base_url or "").strip().rstrip("/")
@@ -205,12 +211,18 @@ class JellyfinClient:
     def _request(self, path: str, method: str = "GET", params: dict | None = None, timeout: float = 10.0):
         if not self.base_url or not self.api_key:
             raise ValueError("Jellyfin URL and API key are required.")
+        if not re.fullmatch(r"[A-Za-z0-9]{16,64}", self.api_key):
+            raise ValueError("That isn't a Jellyfin API key (it should be one word of 32 letters and numbers). "
+                             "Copy it again from Jellyfin: Dashboard > API Keys.")
 
         url = f"{self.base_url}{path}"
         if params:
             url = f"{url}?{urllib.parse.urlencode(params)}"
 
         headers = {
+            # Jellyfin 10.11+ refuses the legacy X-Emby-Token header by default; the
+            # MediaBrowser Authorization header works on every version, so send both.
+            "Authorization": jellyfin_auth_header(self.api_key),
             "X-Emby-Token": self.api_key,
             "Accept": "application/json",
         }

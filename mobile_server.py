@@ -8,7 +8,12 @@ A phone version of NZB Command Center, served on your home network:
   * Search - your Newznab indexers, with a category drop-down per indexer; send to SABnzbd
   * Queue  - SABnzbd queue and history (pause, delete, retry, speed limit)
   * Kodi   - now playing with a full remote, movies and TV shows (continue watching,
-             next episode, missing episodes), "find a better copy" for a movie
+             next episode, missing episodes), "find a better copy" for a movie,
+             and "TV on + Kodi" / "Open Kodi" buttons for a Sony TV (IP control)
+  * Jellyfin - now playing (pause / stop), library scan, "do I already have it?" search with
+             quality, missing episodes, movies below 1080p, show seasons; connect from the phone
+  * Drive Health (from Home) - every drive's health, temperature, free space and a 24 h
+             temperature graph, with phone alerts for problems, heat and low space
 It reads the SAME nzb_manager_config.json (and DPAPI-protected keys) as the desktop
 app, including its Kodi settings, and never modifies it. Phone-only
 settings (alerts, saved searches) live in mobile_settings.json. Add the page to your
@@ -65,7 +70,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.5.1"
+VERSION = "3.7.3"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -227,6 +232,263 @@ APP_ICON_PNG_B64 = (
 )
 ICON_PNG = base64.b64decode("".join(APP_ICON_PNG_B64))
 
+# Second home-screen icon that opens the app straight on the Kodi tab (/kodi): a TV with a play button,
+# drawn in the same style as the main icon. The 512px one fills the square for Android's round/squircle masks.
+KODI_ICON_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAYAAAA9zQYyAAAmZUlEQVR42u19eZhVxZn++1XVOXft7tsNDTQKigoqzaqgmMRAx31JZqLT"
+    "mO3nL/MkmUySyTLzJBo1CTBJZomPjiZxfjqZBJOJWbo16iTjjKA26MQo4gKNyOICKotAr7fvds6p+n5/nNtNgywNdPc993q+fkof4di3"
+    "btV7vnq/t776ihB0YyaEFhwj4iB3TwWmJ0uWiOaljbRnVT0BwOpFiwywFCAyIYoC52CoGa20B/U0Dou4FWCAGISSg51KOTDNaBV7VtXT"
+    "6qYmDRx6MM5du7LGsaNCVHls0pnQW5fIRFWCjVDUfsqFXYd7pplb5J5V9bR61SqDZcvMewLQzS0tEs3NaCXSg/+8ceuaSYqds03Bmc/M"
+    "9STFTHhaMtBIRBKGQ1SV2qQAG95KSmXY9bYL29oG22qXEq+cceqCLQfMKbNoBqgVMKNJU0YH0AxqBovBX+68LY9U53T1IhJoYs99Hxue"
+    "IeOxuIhGACkAIoAB1l4IpMDQDYCUHJgbGANTcKD7spokbSYh1pCQTxrIle3TFry933OzHC1gjzSgqZlZDH5zZ2x56hIBfMK4+mIZiZxM"
+    "sQhIENj1YAqOMX0Zo7t64e3eR2wMnK3bBbQpJTkKrd+MgTVlkhHxKERtNav6WoiqJIlIRJJtgQAYx4VJZ3rJlqsAeiBL6d++Ou3KAgAs"
+    "bGtTqxct0iMJ7JGDSUuLxOLFGgCmb2ixlWz4FAifAfA+UZUAjAF7nvH2dRln63YqbHxVFLZsJ3fHbpieNEw64zsFN/TQgfLQlgIDEPEo"
+    "ZHUSqqEe9mmTONI4le0zTzVWwzgStiUhBNj1wPnCJhb0Wy4U/t+GWRe/08+1W2mxOVzcFCxAF6NgEJl+IDPx34pIZAZZCux67HV06UL7"
+    "Fpl9Zh3lX3wF3u69YE8DQoAsBZISUKJfJgqdc2CMwFzEoDZgrQHX8/8tCLK2BtGZUxFfMIejc6cbddI4CNuWMAYmk3uHBd09GNhgFsOt"
+    "Yg0rVopvngaAmZueugLAD2TEngEhwEbrwqbXqe/xZ0T2qbVwd+4BtAFFIyBbgYjADBT/AYQxYBngm4qt6Gs9DyZfAJgh61KInzcLiYsv"
+    "MNF5M4y0LQUQTKHwDhjft1a9fPfzn/+828wsDxYIAgHohdymVlOTd+bzKybaidhtQsmPQQgwWDtbt1Pv71aKTNuzMOkMKBYF2Zb/6YaL"
+    "IA6togDuaphcDqQkYvNmovraSzk2f6YmKRWEgHHdZ8kpfHV944eeXcIslgE8HNz6xAE9iGLMan/iMras5TIaaTBaG93RjZ5f/V6k/7Aa"
+    "JpuDSMZBUoKNCUFc+ewEEAJghsnkACLEF8xB7WeuZXvqqYYAaVzPA/M32s+68A7Al3Rbi3FXaQDNSwTIF9BnvrJ6KQm5hKQAC+FlVv5R"
+    "df5bC7xdeyGScV+K0+Gm33vShB8Pmb4sRCyCmo9diZqPX63JUkJYFpmC08J7uv+6/cKru06Ughw3oJcwi2VEZub6P9RSJHW3iEUXG9cx"
+    "uqsXnT++T/Q99keQbUNEbD9oCC20olMz6QyiM6dhzN9+mu2zT9dCCMWO+yL3ZT6zfs4lLy5sa1Orm5q8UQP0AJif+kMtxtU8KuPx+cZz"
+    "3MJLm619t/47nDfehqip8mmF4VBDDq24ovuIIymh+7IQ8SjGfOmTSF61yCMixZ7u0n3Zy14+55Ln+mOyEQf0AWAeW/OoiEbms4Cbfugx"
+    "q+Nf7gUYELFo6JVDO7q39jRMXxbVf3EZxnz1eg2QhDFdOpM7blCLY+XMB4A5FpnPrL30Ayusjlt/ClIKFI2EYA7t6KYNIAREqgq9Lf+D"
+    "jtuXS/ZcQ1LUykTs0cYXVs5fTU1eM7fIkfHQxbzkme3/lYJV9MxsvI47f6F6Wh6BrEoWH+OQYYR2LAwEkBK6J43YOdMx/vtfM7IqKdjT"
+    "XaaQvXTDrEvX9rOCYfXQC7FKgoghEj+RyXg/zVA9v30EojoJLoK5v6NhC9vR2gBWtIZMVSH7XDs67/qVYECTpWpJRVvO2rhyzDKAh3rQ"
+    "Y0iA7ucyM9sfXyprqq41nuOmH3rM2nv7zyCqE37wxyacorAdd2PPgxxTg97fP4F9t/1MstaejEenWEb+BkTcPESsHvWhZm6Rq6nJm/HC"
+    "Y5dQJLrEeNorrNts7bv9XohopJ+OhOtnaCdunoZIVaOn9b/R+8AKxYAnq6ounrnu8aWtRHohtx31hBUdLQgElvKsdSvqYUfXw7bG6e5e"
+    "3vU33xXurj2gSAQw4WZJaMNoVEwM8TQabv8mIrPO0mSMMNnCJe2zP/T44HyhY/bQzWgkEDEL9WORiI0Hken80S+F88bbENFoCObQRiBS"
+    "ZIAEWGvs/cFPYXr7CEIQLHHPeVueqW5F8xH5tDgS1WilxXp2++OXikS82WijM489LdMr/giRqgqludBGzowBxWNwXn8LXct/J5jIk8nk"
+    "6dl85kYQmSPxaTqMnkIA0xlb/9uKFqLrZDIxzdvbyTs+/x2hu3pAlhXy5tBG3gSBs3k03P5Njp03y3CuoNlxZ7XP+tCWJQAdSsoTh6Ya"
+    "fuJ1zIl+TFUlz2Q2pvuXDwtv1x5QxA4VjbCNmrDHxOj891YyfVmIRNxm8M0g4o1opaFRDvZP6k7fsMFmxk0gYmfrdkr/YZWfNRdSjdBG"
+    "kXrIeBz5dZvQ9/ifBLMxZNnXzVz3+JmttFgvYRZHBXTRO7PE3k/IZPJMNtr0PPCoMNmcfzQqtNBGM0Y0DIrY6H1gBenePpZV8QgT3wwA"
+    "h/LS7wJ0a9HXG8/7ElmS85teR+bxZyASMf/cX7gShm00m/GP6RU2v4HM438SbAxDyGtnrH9sfCst1gcrHuJgZQNEZnb7qiYZi53DnseZ"
+    "lU9Lk86ApArdRWglctMApET6f54ik8sbVZVMAPhrn1EciGFxMOEAAG28v5TJuPD2dZrMk2tBsYh/bCq00ErEpUU8gsLG11B4+VWCFADj"
+    "U9M3tNitgDk0oJmplUif+cpDVSC6mI1BoX2L9Hbu9g+0hspG2ErYSAhwPo/sn14U7GkjIpHTFI2dCyIenGIq9vvmVgEAEa9moUzEG9jV"
+    "JvP0S8TagChMCA2t1MGhAUVs5Nash073GZGIC224GQD2oJ7eBej+P9Qwl4hoFF5Hp8m/8DIoaod0I7QAIJpBEQvOtrfhbH6dIAmkTRNa"
+    "WuRqLNLvAvRqLNLgJQKG3wcBFDZvE+6uvYBtgZnDRS9spW0MQEiYnIPcCxv9eodSnjl7at0EEA3kd/iAXrJEgIgbN1xwEgl5NrsahY1b"
+    "iT0NgghHM2yBOA3AhgEpkd/4GplcQctkPMFKnT+YMgsAaG5s9E/CUKRRxqMJU3BMYcs2ghD7a5mFFloQaIdtwdm+A153D4tIBNp48wdT"
+    "ZgUAe5r9/zDGzLGiETh79hn3rV2CLDlI3QgttAAA2hIwnd3wdu2hyOSJIGBOkTKbAQ89DovYf54bICV0Zy90d+/+CqChhRYUIwEuOPB2"
+    "7SMAIGDsuWvvsfq9rgD2b3eDeTYI8HbtJX93UIZpoqEFC89EYG3gbt9BrA2YMdWxT0r2B4YHbKygPz+aQ5kutODTD/90C9i2zcDGigIz"
+    "gcjMfvHBlKaq6expFLa8IdjxIOICzGG6aGgBwrFhQEgUtmwjky8YGYvVFPKiEcDqZrSKgYwjIy0CF+8t9MoIxOEu5vB7vnLopqf9vgoi"
+    "kvvv2zwghY64yKWJ4Od8cPAUDiKQKLIjZhjPCwtCDt/ggpQcGN9g1vEuYpIG43Z/J8smJ5SIUKz8Di+dBzNDKAk7Ve2X7DUcOuthWM6d"
+    "zm4Y1wUzQ0ajkFHbvyGkTNIfygLQpCR0Ng+dyyM6fizqPzAPY86fjcSpJyN+0nhYyUSYbzIMKx97HjJv7UJu5x50rm1Hx5r1yL65EyQI"
+    "qipZFjcvqKAPMgAU9nWhpnEqJl1zKcZf9H4kJjWAlAR72vcm4S2zw8U4EJ04DiQlJv3F5Sjs68Tep57HjodXYs+Tz0El4xCWAgf4JgZ1"
+    "RKpSQppESsIUHLDWOPPL12PKp69FdNwYuH0ZuH2ZomRDYWrrMJvnuMW5Z6hYFJM+egkmXrkIO/7zMWy6/WdwOrqhqpP+/ZFULoA+VJnI"
+    "0XQUUsJLZ2ClqjHnBzdg/EXvg9ubRn5fF0gKkAh3MEc0VumHgWY43b0AESZfdxVqz2nESzf8M7qefxn2mFqwV4JLUY+CS4EhIXoUTyZI"
+    "Aa8vg8SUk3H+8n/CuKYFyO/rBGszcM90mHw2So0ASAkIgfy+LsRPOQnzf/J9NFx+IdzubpAUKHkK3lAAXbLuEUE7DqxUFebedjNqGqeh"
+    "sK8bQqqiTBeirFRNWApeOgMVj2P2rTchNbfRp35CBAjOx3olxSiY8TTm/PONqJkxDYWObggrPG0eFPmXpITO5SEshXPv/A6iE+phHDdQ"
+    "m1uBATRJiUJXD07/7GKMu+gCFDp9MHOYuhogTLMf32RziDbUY8Z3vgxdKAQqMA+G+yOCzuVR0zgVUz59LZzeNEiKATCHoA4YqJWE05PG"
+    "uKbzcdJHLsaO/3wMVr9O/Z730AyQENDZPCZdcxmi48aAA7aMhXYoJwSAGad8/GoIpQKz4XIEHZr3txH2zsZxEB0/BuMvugBuX+bYa+iF"
+    "OdvDNhdDflQIuH051Mw4E7Vzp6PzuXaoZHzkvfQALgNKOYgIXjaP+g/MQ2zyRLjpzDHpzKyNHzgKCk+KnShW3OLKOERgMxuIeBT1ixZg"
+    "39MvBGJVVYHwCsag7vw5x3VCxqpOotDZDVNw/CyxENTHPQ+R+joYx/U3TIYCzuLqWnvujNHxzmUBaPaDjMSpJ/s5rhg6KIVlYdOtP8Gu"
+    "R9rAnglTSE8wlknNOQvTv/U3sFPVQ5LjCART8BCbUA+rpgpuTxpUYj6tSu0V2PNg1dYgdtJ4GGdonoG1gVWTxKZbf4Ktd94Lu66mP0oJ"
+    "gXnccyGw4+HH4Pb0Yd7d3/PnYeCq1yN4aM+DlapG/OQGdO3tgrKskpa+KLmHZmaIiA2VTMAUlyw+WlBgKRQ6urHrkTbYdTUQthVm3A2D"
+    "xcaPReeadehu34zaeTPhZbIgEkedP4rYAaccgxWOkX7bmAFjwEZjaNlQfiK/KRSKFIX9dMZQ6RgO1gEww8vl4eN4aPMBNv6taKOBmYHf"
+    "fwy5HGUlMfEozzhRxWf7+UewytPCPMxjmWgpYAoOvP77Zip48+d4/ASFgD5wAIcj22okg1dVncTMH9yA6rNOh9PZDda6Yi9SCvR8hB56"
+    "+EA99oPn4bzf3IFpX/8sZCQCt7sXJMJDB4GnHGGIdYjxIILXmwEYOOPL1+O8X9+Bho9cBLcv4wdScv8BhLJ/f0eJpoyOyuFrBwM/IwuU"
+    "4s9QA+Ti+uZv5/f3bzQWveJnCQFmoLCvG7FJDZh12y2YcPWHsPWO5ejdsAWqKg5hWWV6F3r/XPDRxIR3iQ58EGpGfB4O8xlqSCRqNMja"
+    "cBC9UewnKQmdd6DzBdQ3XYC682dj+88fxPbl98Pp7IZVU+X/b+VUXmFwcfGgzsXxnSkMbSgjS8Kv4uT1pgFmnPGV/TTES2egB9GQ0N5z"
+    "QWG5xNWDP7tYOU36w1jY14X45AbMuv0WzL3nu0iecSqcrp4yVUPKU+cIZbth7CcpCS9fgJvuw9imBZj/m38pSzWkXCW7kHKMhDpQBG2/"
+    "GnL6V67H/JCGlBrQQTmUPhK+ZHT62U9DnH3diJ8ymIacArerG6y9ANS1KNf5MMeocpRQPSgXlWMojw+oIbkCNBcwtmkBas+bje2/eBBv"
+    "Lr8fTkfA1JDhxPN7XeU4OMFvKC3I/Rysl4MEIATcngyYgdO/fD3m/Sq4NISPYz6CQqRDDj2a/HowDZk8ETNu/xbm3PM9JM44FW7ZqiGh"
+    "bBcCW0mYvAMv3YexTRdg/m/uwBlf/1yYG1JZst2x/5RLPw/5IwAIgtubBjPjtK9cj3m/vgMTAkBD+Di+Zxno0GFUPRqK634a0oXY5AbM"
+    "uP0WzL7nu0iUXA0J+nyElKMMaEihSEMWYF5IQ4bJQ1PooEu2JXbQpsxpX7ke5/76Dkz4cJGGZPMgITEqpYXLYT76zQskhy7/re9hmyc5"
+    "KEV18kTM+JdvYdbdvhoyWrkh5br9fcDGigEgUaL9iqF+4GCNdxQH8pj7OSz8urgpkytgbNMFqD1/Nt76+YN4c3krCnu7YKWqAjkfpdzj"
+    "CklZ0Ln1AA3pAxiY8qVPYd5vfohJn/qzcHCGDugwdyAIC+sBnygIxtMwjov4aZNR1XhGsdxAOBeHpRxB4dBDfb4c+jkcn2i08atL1cTQ"
+    "+b9r8drtP0X32nZYNckRq7o61O8YaA5dHpAOUlg4wp+kDUgKWLXVyL25E2/c9UvsfmgF2BjYY1LFakWjERIOB/RLCegw266088YMNgaq"
+    "OglTcPDW8vux7e5fo7B7r5+dR1Qsgxawd3U0s+2C7qFDytHvlbVPL+IxdD61Fm/cuRzda9ohkzFYdTU+kJkD8x2DdmIlvDMtKC/0AL2o"
+    "Qe7Nndh214+w+0GfXlh1NWBjRsYrV5ip0nPFYxQxD3iOg9vP46UXP7sf2+/51YH0Qo/WFcQH1TE4pvkIRh2D0EOX1CsPphfP+fTiuSK9"
+    "qK3ZX6I2tPKjHO8lDt1PL1SRXmy/64cD6sUAvShh5aXK5NChyjH8M3cQvXh7+f3YfneRXqRGUL2oRJUjqNe6HftolKcO7dOLCFQ8OqBe"
+    "9Kw5iF4ExtdVmg4d2gnDASheY6QNMEi92H7XL9+tXuhQvRhhQI/+Wn58HDrA/WSGOWhz5M27S6VejNxc8KjPRahylFS96CqqFz2jvDkS"
+    "euhSx4QVkA89sDmSKtKLf/0hdj+4AjAGqq4GMAYm4JsjfJwhDQckHzqU7Yajn+xfLadqkjD5Ir0obo6omioQUVnx5MqT7cLkpCH3c4Be"
+    "1PibI9vuXI6e59ohE0X1wtMlK7kwSgLO6C7r5SPblRtPNiAlB6kXP8Q7/epFbZh7ESAPTaVi0WXhopkZrDVUdQLacfH28tYyUC8qaS4G"
+    "/34KMoceakWk/XV9Rr+TDLIUVG01Otr+hO0/vLdC1YuhV0QqbR2rkHKcGJiVgruvE9vvXI7drY+AmcPUzuBTjtAOCWYpobN5bPjcTcjv"
+    "eKcs1YsQ0EGMsEtVj5gIJl+AzuUGci+4AjdHaP87HOz5OGZABzhvvv/w/qhXGCACCVW59GJwkXYchw492rIdDRnQJRB4j7VsLBVhLYBR"
+    "lfcrecu6fyyPp4QvlQLRQaUchsGeN7QLpolgXBf2uDpUzTkbex5aCXvcWH+3Dsd3R/V7PkQAQETwetKITpqIxPQzYHIF0BCBPRAUB2Dw"
+    "SwtoZgjLgtvZjfybuxCZOA7acY8+kEQwBRenfesrcLvT6F2zDgfq56Edu3tlRCdNxLRbb4ZKVcNkc8DRyvcWlR+vqxe57W9D2FbJ44rS"
+    "e2giGMdFfudupOQ5gyIMOrw/IQJ7LlRtNab/2z+gr30zTC7vT0CYxXbs1I39MU1OPwMqVTMIzEeeBwZDWBJORye8njRIqZKPfyAoBzOj"
+    "9/l2jG++AgdfO3xEUDsOQISaeTP9klihnRDvMPkCTDY7CMxHmQdjICIW0us3QXenoQZO3gQN0KMYE7I2kLEoep55Ce7eLoh4BNBmaIFJ"
+    "8Rkvkw0BOSzOmo5OMw7GtGZ0rV7jX13Xn0M6ChrCkAFNQ4wmh9M7U8RGbtvb6HxqDcZfcznc7h6/oPdQo7zwqoZhw8pQH2RmyFgU2S3b"
+    "0P2n5yESUf+42aghmg8v1BzNQY94QVRmQArseWgFTN7BwJULo92ZsA190rSBiESw9w+Pw+3qBSl1QPZHqQobB8K1sTFQVUl0rX4Wex5e"
+    "UUz08UKXGVRPrg1kMo6+ja9i5733Q1UnA5MCEJw7VoyBTCaw/bZ/R2bLNsiqJExxkELdIjh0hJlBSoKNwWvL7oDJO4G6nSs4PWGGsBSc"
+    "jm5s/cY/wO1NQ8aiB4A6bKVlGcwMECDiMby+7E70PLsOMhkHGxMC+nBLmapOovf5DXjtplthHBcyFg1TMwMyNxACMpnAWz/+OXbd9zCs"
+    "VHXgsg3VEcLY/W00B851YdWl0LHiSTif7sRZP1oKu2EcvJ40QAgvnxxtM1ykg3HAGLx2860+mOtSpYlzjoLLQKKDPQ+qphrpda9g/eK/"
+    "Qefjf4SsTvjLGzOM1n7+AHNIB4a7Me8fY21AURuqrgbZV7djw/Vfx65f/94Hc0DzwAOb4M9aQyXjcDu68cpf3Yz6P7sEEz7xESRmngUV"
+    "i8A4Ltj1/FPVbEJPOgxGIJCSIKVAERswGtmt27Hv949j1733w+SdQNKMsgB0P28jS0HZFvY+vBL7HmlD1dwZqF20ANXzZiLSMA4qVQ0Z"
+    "iVVksv3o0wsDt7sX3r4upNdvQvfqZ9HzzAtwu3qhqpKQiVjgT+gE/whWcQlU1UmwYaTXrkfP089DJhNQNUlEJzVAJhPFXarQjts7F4+T"
+    "5bbvgNeThtfdCxJif32RIs0LupXNmcJ+wMpEHDLpD77Xk0Z6b6c/0EShYH3inAPCtkDSrzcCcNlVRz0CoA2CV+gJYKMHcjxISoi4CrP6"
+    "h3VB9BWEIR+4GP0eHhGTpS8FdiLfq1j4JbSRHOOA4vkwfQtF3dAqykJAhxYCOrTQyi4oDDqFDi2k9scAaA4hHVqA4Xw8dTlCPIdWfng+"
+    "AocOgRxaJXHo96IRlecOTajFh4A+wKSUAADHdcsiX+Fgs20bRAQdlvYNAS2VRLa7F9AeUhMmIGLbKKcqecwGe3ftBjwP0VTKPzBvOAT0"
+    "ey0qJCIwM7J79+GiKy/Hxz92HT7wwfcjnkjA4PgKcJYE0J7G82tfwIMPPYz77vs1hJSwIxEYU6nZh0NUObRQREx+kGgqOxXTr/zK0I6L"
+    "W763DN+56ZuwAWSB8rmCbZD9+RVX4JorrsAVl1+Gr33179Dd2wtl2xUM6kEYJQKL/efyFIgYzKIeq3o71nmbIcV5kalTDCkl2XBFOmih"
+    "FLJ79+GWf/x7fO/GG9Hp5v1KQEUuXW5WMAbaaHziox9FVW0KH73yz8HKqsi5IxDY1YhMncIiYpPX3ZtmcjYDQCuazQCyV1OTx0AORBCJ"
+    "WEUHgLnuHjRddTm+fcM30OnkIISAUgpEVJZNSgnbsrE3n8GHFzXh6zffgHxXN5Ss0BDJGIh4DCQlsTasvFx6wFkBQDNaqbgUvwHDkHU1"
+    "EIl40a1XXrIxex4+8amPI0JioNh3RQRESqHAjI9/4jrEUim4nluhkZ+EmjCGIQQI2BHLuQUw0wCg96CeAMAI8TqMgTVhHMtUdYCTvI8/"
+    "EHQcB6mGCbjwwg8gh/KlGYekUkIgZ1xMPXUK5pwzB042BykrK/+M2YAsC/bkk7hYQnnnM+9bnPPZCLEAgHHYy0V0b+aCA1FTRfak8WDX"
+    "PcTdGeXdmA2i0QgS8RgqUbVlZlhCoiqZAIw+hDJQxo381VXWVsM6uYHhH8vb7LMM7PfQ05c2MwAQY53O5RwZjYjotNPArlcxy/Fg87SG"
+    "p3XFntxiAG4lFrskAjsuIpMaoMbWErsuSMnnAGDPqlX7Ab1sGRkwk5Ydb5iC+wbZFsVmNxoSIlB30A2H97JtGx07d+GFF15ElFFR0hYz"
+    "IyItvPXOTqxf1w4Vi8FUyml4LiocBRexmWdCJhNCpzMOCe9pAFi9apUZAHQ/Bds4Y7FDRM+AgWjjGUaOqYVxXTDRARWYyrkRCbDr4YHW"
+    "hyCJoCsI0K7nIk4Cj654HB1vvQ3bjsAwV8bcFV9YSInYuTMNKUnseNs807UNzIRlyw4E9EL4LpuUaDMFB/bkiRQ7pxGczZfPttlQ6Ibn"
+    "IVpbi5b/uA/3/efDqI/E4ThOWXtqZobjOKiPJLBx+xtYessSWNVV0KaCogQiGMeBPbkB8XNnGBgGJD29ccZip3kQjgeEytVYpAHAzhdW"
+    "FBi9qra6umrhAu599CkiosrS6MmXfr76xa+iOpHAhy+6GAUAOe2UZeaarWykpI2Nr72G6z/9Gex95x1Eq6sHShFXxJQJAZ0rIH7eHKix"
+    "dcLkCgDofv9vW/EuQPfvGD5PtKvxpZV/JBJXJM6fY6z6lNTZfPHOk8qAtTEaMmKju7cHH/nwNbjppm/guuZmTD1rGmyIskhNGjwT23e8"
+    "jZUrHsOSpX+Pvbt2I1ZTDa0rKyhkMEgAVQvPY6GUcLq73/EikSd9ODebwb5qwBZym1pNTd6MDU98UiYSvwRY77jhn2TXg49CBbxI3/G+"
+    "9WBGoasbkVQN5s6dg2QiAQ0GlYMGQoDRBuvXt6Pz7bchq6pg2XZFeeYBdaPgwD71ZEz51Z2eqqtVXlf3TzfMuuizzcyylUi/20MDWI0m"
+    "DWZKr1r1QNJL/71dXzel+uqLTPfvHxOVmETen/scG1sHz9N45n+fLr/ELAJkLIbY2DEw2lQemAfoRh7Vl30QqrZG6nSfpwTfDgDTD9Lg"
+    "3uWGBrz0+seWqFRqqSkU9Jt/fYvse+o5iKoEUKFFEalYTJ3KUJ02xVrZlTox7HlQqWpM+e2PtT2pQXqdPW0bZl10EcAEogMA+a590dVY"
+    "pMFMEUfepXvSHSJiizHXX8PvIm6V5q3ZX7611mXXKvkIFgkBk84g1Xwl7JMnkMkVIAV/FwTuz0E6IqBBxM2AeH5e0z5jzI8BosT75+mq"
+    "RQtg0hlAhrVpQhtFqa7InWsXX6UBkMnlVq2beXEbmEUrLdZHB7QvghgwU9wyP9K96S5SSoz72l+yiEUAXWH5AWELbCNJMJkM6r/0f2BN"
+    "HA92PJK2XAbszxAdEqB9L90qnpt+SQfA3yZARKdPNWM/ex10TxqkZOg9QhtZkxK6J42qD70PqY9crIkhdTZ7/7qzm1Y1c4s8lHc+PKD7"
+    "tT1mUbeX7vHSfS/CsBzz2Y/pxLkzoXvTvi4dWmgjFQi6LmR1EhO++QUm24LJ5dIEcyOYaTpePmzQII7wS3kJgNVNTZ4Q4jPsuJqiETQs"
+    "+SqLZBzsehW1JR5agEwImEwW42/8AiJTp2iSUnLBual91iWvN6NVLKNl5tgBDWAZkWnmFrm+cdGLXCh8XUgho7PO1hO++UXodB9AIqR6"
+    "YRvelGeloDu6UHfdR5BafJVHgNK9fQ+0z774roXcpg5HNYYEaABopcV6Ibep9tkX36HTmQeIoFJ/caU35vproTs7gZB6hDZcTENKeJ09"
+    "SMyfjfE3fN6QYaWz+Tdg1OfATP35RicE6EHatIBRnzPZXDsBasK3v6LrPvlR6O7uYpAYupewnYCioSR0Xx/ic6dj0t3fNyIZh3HdLHv5"
+    "xe2zLuxaUjxiNSyALqoe1D7rwi4uFD7Jnu4Cs5zwrS+bxIK5cDs6AKUGxLzQQhuqcVHR8NJ9kLXVOOkHN7GqSzERCeTdL26YdenahW1t"
+    "atlBO4KHheqxfHi/XNL4wsr5MhF7lKSo1X0Zs+sf/1V0/fYPUGNS/vVrYfHA0IZKMywFr7MH8bmNOPkHN7F9ykmGQNLks3/VPuOin/Sn"
+    "Ygz59x1rBxa2tanVTU3eAKiVrAWR3rnkdrnvPx6ASqV89cOEF2GGdmRpjoSA19mFxPzZmHz3PxhVl2JoI00+/1ftM5qOGczHBWhgfwLT"
+    "AKgtVcvGeJ2/+J3afdtPwFpDxovX6JZP3cPQRoVfAKQk2HGhMznUffzDmHDjF7SMRyWEgMkdP5hxIlA7ANTJ+H3CtqayIC/zzItq57du"
+    "Q37L65CpGv/h0FuHNsgr6940ZHUVJnzzC6i97moPbBR7Om1y+a9tmHXRz44XzCcE6MGc+qyVvxtjTa6/T0Yil7HRRnensedH94qOXz4E"
+    "AJBVcb/Eawjs9y6QpYDJOzDZLKo+9H403PRFjkydogEodpytlMl/at3ci9ecCJhPGNAAgJYWicW+2D1r05NLQGIpKQlI6WX++Jx8546f"
+    "Uea5dRCRCEQ85qc6hsB+bwG54MBkMrBPORnjvvR/kfqzSzUpKUlJmLzT4ry554ubLrmmoz8+O6GPHB5uxARfJzSz2p+4jC3rhzIencba"
+    "QGeyuve/nhAd//Eg5V7eDFLKL7QnBJgNYEJFpBJpBcAwuQJMPg/rpAbULb4KtYuv1tbEcUQMoQuFHjL07fVnf+BHANDc0iJbFy8+4eM2"
+    "wxqu9S8X565dWePWxL7Orr5BJhM2wPB60rr3v54Q3Q89Stl1r8Dk8hCRCCgaKYJ7UBGG0MoKwChWQWVmcMGByedBQiAy7TTUXL6Qa5uv"
+    "MvbJEwiAMAUXzOY35Jkl66d/cAuYffQPYdNk1AF98Js2a2PbDAj1d6z1J2V10gYAk83p7IsvU3rVM6Lvf9ei8Oo2fwCUAtk2yJLFN5yK"
+    "zj8EeLDwS/7UMIMNgz0Ndlyw64Ckgj15IhLnz0HVogWcWHCOUXUpCQJMNg9ms1IKuvWlaReuBPZLwMPav5GRZ5iaAdF/GnfWxrYZLNTf"
+    "QZtrZTJWDaUAz2Mv3adz6zeL7LMvUXbdK1R4bTu8ji5wvgAuFkkhIYtZfSGwSy65ERVP/huAJIRtQaZqYE+eiNisszgxfxbH5800amyd"
+    "IKUEmKF7+jSUeGIwkMEssHQp+qsdBR/QA4OwRDSjkfozpGZueeZkaPezYF4M8NmyKgmSPt0w2Zz2OrvZeWsnuTvegfP6m4INI79xC7Gn"
+    "w1TVIJgxiE47jUUiBjVhLEdOOZmtSQ2sxtSRrEpIUhKsGZzLQ7vu20KI/zaW+vGG0y9Y348HtDYShoErlwbQ+z22aEbrALCbmeXWV588"
+    "X7v0UbBeyNo0ymQiLqJRQJDfPP87m1zehLQjOF5axCKCpPBTh4s7wuy48HrTmgRtIZLPsuCHYiLTtmbalb0DokFrqxhJII8uoA9DRfqt"
+    "ceuaScoU5rE25xrXnQ9QLRHOYMNCxGM1JELvHAjKIQg6ncmSEgX2zG5IuUvY1nqSWEdGramZmtsyWENuZpatfsA3ajptqZBCaGkRC+vr"
+    "aXVTkz4UQZ65/alae68nnZiYTgxFzMxah8gu1YRJyWxZpN30VjFpYt9ZNZt6D5Vs38wtEige4Rsm5aL8bMkS0cwsF7a1qaKMEwK3LLw2"
+    "i4VtbWpg3rj080YBHiwCgGa0hoVAAmPNaF26lLF0qe95A+iB/z8GWCmwLNVnZwAAAABJRU5ErkJggg=="
+)
+KODI_ICON_MASKABLE_PNG_B64 = (
+    "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"
+    "AAAASUVORK5CYII="
+)
+KODI_ICON_PNG = base64.b64decode("".join(KODI_ICON_PNG_B64))
+KODI_ICON_MASKABLE_PNG = base64.b64decode("".join(KODI_ICON_MASKABLE_PNG_B64))
+
 
 # ==============================================================================
 # 1. ERRORS, REDACTION, SMALL HELPERS
@@ -242,13 +504,14 @@ class ConfigError(RuntimeError):
 
 _KNOWN_SECRETS: frozenset[str] = frozenset()
 _EXTRA_SECRETS: frozenset[str] = frozenset()  # phone-only secrets (the ntfy access token)
+_JF_SECRETS: frozenset[str] = frozenset()     # the Jellyfin API key in use
 _SECRET_QS = re.compile(r"(?i)\b(apikey|api_key|passkey|token|r)=([^&\s'\"<>]+)")
 
 
 def redact(text) -> str:
     """Strips API keys from any text (query-string style, plus every key currently configured)."""
     out = _SECRET_QS.sub(lambda m: f"{m.group(1)}=***", str(text))
-    for secret in _KNOWN_SECRETS | _EXTRA_SECRETS:  # frozensets that are only ever swapped whole, never mutated
+    for secret in _KNOWN_SECRETS | _EXTRA_SECRETS | _JF_SECRETS:  # frozensets that are only ever swapped whole, never mutated
         if secret and len(secret) >= 6:
             out = out.replace(secret, "***")
     return out
@@ -1197,6 +1460,323 @@ def kodi_missing_episodes(cap: int = 400) -> list[dict]:
 
 
 # ==============================================================================
+# 3c. SONY TV - power on and open Kodi (Sony "IP control" REST API + Wake-on-LAN)
+# ==============================================================================
+# On the TV: Settings > Network > Remote start: On, and
+# Settings > Network > Home network > IP control > Authentication: "Normal and Pre-Shared Key" + a key.
+
+TV_WAKE_SECONDS = 45       # how long to wait for the TV to come out of standby
+TV_KODI_SECONDS = 60       # how long to wait for Kodi to answer after it's opened
+MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$")
+_tv_lock = threading.Lock()
+_tv_job: dict = {"state": "idle", "message": "", "at": 0.0}
+
+
+def tv_psk(settings: dict) -> str:
+    global _EXTRA_SECRETS
+    try:
+        key = _dpapi_unprotect(str(settings.get("tv_psk") or ""))
+    except ConfigError:
+        return ""
+    if key and len(key) >= 4 and key not in _EXTRA_SECRETS:
+        _EXTRA_SECRETS = _EXTRA_SECRETS | {key}
+    return key
+
+
+def tv_host(settings: dict | None = None) -> str:
+    """The TV's address: the one saved for the TV, else the host from the Kodi URL (Kodi runs on the TV)."""
+    settings = settings if settings is not None else load_settings()
+    host = str(settings.get("tv_host") or "").strip()
+    if host:
+        return host
+    try:
+        return urllib.parse.urlsplit(get_config()["kodi"]["url"]).hostname or ""
+    except ConfigError:
+        return ""
+
+
+def tv_host_is_local(host: str) -> bool:
+    """True only if the TV address points at the home network (every address a name resolves to is private)."""
+    name = host.rsplit(":", 1)[0] if re.fullmatch(r".+:\d{1,5}", host) else host
+    try:
+        addrs = {info[4][0].split("%")[0] for info in socket.getaddrinfo(name, None)}
+    except (OSError, ValueError, UnicodeError):
+        return False
+    try:
+        return bool(addrs) and not any(ipaddress.ip_address(a).is_global for a in addrs)
+    except ValueError:
+        return False
+
+
+def validate_tv_host(host: str) -> str:
+    host = str(host or "").strip()
+    if not host:
+        return ""
+    if "://" in host:
+        host = urllib.parse.urlsplit(host).netloc
+    m_ = re.fullmatch(r"([A-Za-z0-9.\-]{1,253})(?::(\d{1,5}))?", host)
+    if not m_ or (m_.group(2) and not 1 <= int(m_.group(2)) <= 65535):
+        raise ValueError("Enter the TV's address like 192.168.1.40.")
+    if not tv_host_is_local(host):
+        raise ValueError("That address isn't on your home network (or can't be found). Use the TV's IP, like 192.168.1.40.")
+    return host
+
+
+def tv_configured(settings: dict | None = None) -> bool:
+    settings = settings if settings is not None else load_settings()
+    return bool(tv_host(settings) and tv_psk(settings))
+
+
+def sony_call(service: str, method: str, params: list | None = None, version: str = "1.0",
+              timeout: float = 4, settings: dict | None = None):
+    settings = settings if settings is not None else load_settings()
+    host, key = tv_host(settings), tv_psk(settings)
+    if not host or not key:
+        raise UpstreamError("Set up TV control first (TV address and Pre-Shared Key).")
+    if not tv_host_is_local(host):
+        raise UpstreamError("The TV address isn't on your home network, so the key wasn't sent. Fix it in TV setup.")
+    payload = {"method": method, "id": 1, "params": params or [], "version": version}
+    url = f"http://{host}/sony/{service}"   # host may carry a :port
+    try:
+        raw = http_fetch(url, timeout=timeout, max_bytes=512 * 1024, data=json.dumps(payload).encode("utf-8"),
+                         headers={"Content-Type": "application/json", "X-Auth-PSK": key})
+    except UpstreamError as exc:
+        msg = str(exc)
+        if msg.startswith("HTTP 403") or msg.startswith("HTTP 401"):
+            raise UpstreamError("The TV refused the Pre-Shared Key. Check it matches the TV's IP control setting.") from None
+        if msg.startswith(("Connection failed", "Network error")):
+            raise UpstreamError("Can't reach the TV.") from None
+        raise UpstreamError(f"TV: {msg}") from None
+    try:
+        body = json.loads(raw.decode("utf-8", errors="replace"))
+    except ValueError:
+        raise UpstreamError("The TV sent an invalid response.") from None
+    if isinstance(body, dict) and body.get("error"):
+        err = body["error"]
+        code = err[0] if isinstance(err, list) and err else err
+        if code in (40005,):   # "Display is turned off" style errors
+            raise UpstreamError("The TV is in standby.")
+        raise UpstreamError(f"TV error {err}")
+    return (body.get("result") or [None])[0] if isinstance(body, dict) else None
+
+
+IRCC_WAKEUP = "AAAAAQAAAAEAAAAuAw=="   # the remote's "power on" code (discrete, not a toggle)
+
+
+def sony_ircc(code: str, settings: dict | None = None, timeout: float = 3) -> None:
+    """Sends a remote-control (IR) code over the network. Some Sony TVs only wake from this."""
+    settings = settings if settings is not None else load_settings()
+    host, key = tv_host(settings), tv_psk(settings)
+    if not host or not key:
+        raise UpstreamError("Set up TV control first (TV address and Pre-Shared Key).")
+    if not tv_host_is_local(host):
+        raise UpstreamError("The TV address isn't on your home network, so the key wasn't sent. Fix it in TV setup.")
+    body = ('<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+            's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>'
+            '<u:X_SendIRCC xmlns:u="urn:schemas-sony-com:service:IRCC:1"><IRCCCode>' + code +
+            '</IRCCCode></u:X_SendIRCC></s:Body></s:Envelope>')
+    try:
+        http_fetch(f"http://{host}/sony/IRCC", timeout=timeout, max_bytes=64 * 1024, data=body.encode("utf-8"),
+                   headers={"Content-Type": 'text/xml; charset="UTF-8"',
+                            "SOAPACTION": '"urn:schemas-sony-com:service:IRCC:1#X_SendIRCC"', "X-Auth-PSK": key})
+    except UpstreamError as exc:
+        msg = str(exc)
+        if msg.startswith(("HTTP 401", "HTTP 403")):
+            raise UpstreamError("The TV refused the Pre-Shared Key. Check it matches the TV's IP control setting.") from None
+        if msg.startswith(("Connection failed", "Network error")):
+            raise UpstreamError("Can't reach the TV.") from None
+        raise UpstreamError(f"TV: {msg}") from None
+
+
+def tv_power_state(settings: dict | None = None) -> str:
+    """'on', 'standby' (network alive, screen off) or 'off' (unreachable)."""
+    try:
+        res = sony_call("system", "getPowerStatus", timeout=3, settings=settings)
+    except UpstreamError as exc:
+        if "Pre-Shared Key" in str(exc) or "Set up TV control" in str(exc):
+            raise
+        return "off"
+    return "on" if _kdict(res).get("status") == "active" else "standby"
+
+
+def send_wol(mac: str) -> None:
+    """Wake-on-LAN magic packet to the whole local network (helps a TV whose network is asleep)."""
+    if not MAC_RE.match(mac or ""):
+        return
+    packet = b"\xff" * 6 + bytes.fromhex(re.sub(r"[:-]", "", mac)) * 16
+    targets = {"255.255.255.255"}
+    try:
+        targets.add(str(ipaddress.ip_network(get_local_ip() + "/24", strict=False).broadcast_address))
+    except ValueError:
+        pass
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        for target in targets:
+            for port in (9, 7):
+                try:
+                    sock.sendto(packet, (target, port))
+                except OSError:
+                    pass
+
+
+def tv_learn_mac(settings: dict) -> None:
+    """While the TV is on, remember its network card address so Wake-on-LAN can be used later."""
+    if settings.get("tv_mac_manual"):
+        return
+    try:
+        nets = sony_call("system", "getNetworkSettings", [{"netif": ""}], timeout=3, settings=settings) or []
+    except UpstreamError:
+        return
+    host = tv_host(settings)
+    best = ""
+    for n in nets if isinstance(nets, list) else []:
+        mac = str(_kdict(n).get("hwAddr") or "")
+        if MAC_RE.match(mac) and (not best or _kdict(n).get("ipAddrV4") == host.split(":")[0]):
+            best = mac
+    if best and best.lower() != str(settings.get("tv_mac") or "").lower():
+        def change(st: dict) -> None:
+            st["tv_mac"] = best
+        update_settings(change)
+
+
+def tv_kodi_uri(settings: dict, refresh: bool = False) -> str:
+    """The TV's launch address for Kodi (looked up once, then remembered)."""
+    cached = str(settings.get("tv_kodi_uri") or "")
+    if cached and not refresh:
+        return cached
+    apps = sony_call("appControl", "getApplicationList", settings=settings) or []
+    uri = ""
+    for app in apps if isinstance(apps, list) else []:
+        a = _kdict(app)
+        if "kodi" in str(a.get("title") or "").lower() or "xbmc" in str(a.get("uri") or "").lower():
+            uri = str(a.get("uri") or "")
+            break
+    if not uri:
+        raise UpstreamError("Kodi isn't installed on the TV (it's not in the TV's app list).")
+    if uri != cached:
+        def change(st: dict) -> None:
+            st["tv_kodi_uri"] = uri
+        update_settings(change)
+    return uri
+
+
+def tv_open_kodi(settings: dict | None = None) -> None:
+    """Brings Kodi to the front on the TV (starts it if it isn't running)."""
+    settings = settings if settings is not None else load_settings()
+    try:
+        sony_call("appControl", "setActiveApp", [{"uri": tv_kodi_uri(settings), "data": ""}], timeout=6, settings=settings)
+    except UpstreamError as exc:
+        if "standby" in str(exc) or "Can't reach" in str(exc):
+            raise
+        # The remembered launch address may be stale (Kodi reinstalled/updated): look it up again once.
+        sony_call("appControl", "setActiveApp", [{"uri": tv_kodi_uri(settings, refresh=True), "data": ""}],
+                  timeout=6, settings=settings)
+
+
+def wait_for_kodi(seconds: float) -> bool:
+    if not kodi_configured():
+        return True
+    url = get_config()["kodi"]["url"]
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        mark_backend("kodi|" + url)   # forget an earlier "Kodi is off" so we really ask again
+        try:
+            kodi_call("JSONRPC.Ping", timeout=3)
+            return True
+        except UpstreamError:
+            time.sleep(2)
+    return False
+
+
+def _set_tv_job(state: str, message: str = "") -> None:
+    with _tv_lock:
+        _tv_job.update(state=state, message=message, at=time.time())
+
+
+def tv_job_view() -> dict:
+    with _tv_lock:
+        return dict(_tv_job)
+
+
+def tv_start(launch_kodi: bool = True) -> bool:
+    """Starts 'TV on (+ open Kodi)' in the background. False if one is already running."""
+    with _tv_lock:
+        if _tv_job["state"] in ("waking", "launching", "waiting"):
+            return False
+        _tv_job.update(state="waking", message="Turning the TV on…", at=time.time())
+    threading.Thread(target=_tv_worker, args=(launch_kodi,), daemon=True, name="tv-on").start()
+    return True
+
+
+def _tv_worker(launch_kodi: bool) -> None:
+    try:
+        settings = load_settings()
+        state = tv_power_state(settings)
+        log.info("tv on: TV is %s (MAC %s)", state, settings.get("tv_mac") or "not known yet")
+        if state != "on":
+            mac = str(settings.get("tv_mac") or "")
+            deadline = time.monotonic() + TV_WAKE_SECONDS
+            next_send, reached, sent_ok = 0.0, state == "standby", False
+            while time.monotonic() < deadline:
+                if time.monotonic() >= next_send:
+                    # Every few seconds, try every way of waking it: Wake-on-LAN, the power API, the remote's IR code.
+                    send_wol(mac)
+                    for label, fn in (("setPowerStatus", lambda: sony_call("system", "setPowerStatus", [{"status": True}],
+                                                                           timeout=3, settings=settings)),
+                                      ("IRCC WakeUp", lambda: sony_ircc(IRCC_WAKEUP, settings=settings))):
+                        try:
+                            fn()
+                            reached = sent_ok = True
+                            log.info("tv on: %s accepted", label)
+                        except UpstreamError as exc:
+                            if "Pre-Shared Key" in str(exc):
+                                raise
+                            log.info("tv on: %s failed: %s", label, redact(exc))
+                    next_send = time.monotonic() + 8
+                now_state = tv_power_state(settings)
+                if now_state == "on":
+                    break
+                if now_state == "standby":
+                    reached = True
+                time.sleep(2)
+            else:
+                if not reached:
+                    hint = ("The TV can't be reached while it's off. On the TV turn on Settings › Network › Remote start"
+                            + ("." if mac else ", then use Open Kodi once while the TV is on so the app can learn its network address."))
+                elif sent_ok:
+                    hint = "The TV got the wake command but stayed off. Try turning Remote start off and on again on the TV."
+                else:
+                    hint = "The TV answered but refused to turn on. Check Remote start is on in the TV's Network settings."
+                raise UpstreamError(hint)
+            log.info("tv on: TV woke up")
+            time.sleep(3)  # the TV's home screen takes a moment after waking
+        tv_learn_mac(settings)
+        if not launch_kodi:
+            _set_tv_job("done", "TV is on.")
+            return
+        _set_tv_job("launching", "Opening Kodi…")
+        for attempt in range(3):
+            try:
+                tv_open_kodi(settings)
+                break
+            except UpstreamError:
+                if attempt == 2:
+                    raise
+                time.sleep(3)
+        _set_tv_job("waiting", "Waiting for Kodi…")
+        if wait_for_kodi(TV_KODI_SECONDS):
+            _set_tv_job("done", "Kodi is ready.")
+        else:
+            _set_tv_job("error", "Kodi opened on the TV but isn't answering yet. Check Kodi's remote control setting.")
+        log.info("tv on%s finished", " + kodi" if launch_kodi else "")
+    except UpstreamError as exc:
+        _set_tv_job("error", str(exc))
+    except Exception as exc:  # never leave the phone waiting on a crashed worker
+        log.warning("TV start failed: %s", redact(exc))
+        _set_tv_job("error", "Something went wrong turning the TV on.")
+
+
+# ==============================================================================
 # 4. NEWZNAB SEARCH
 # ==============================================================================
 
@@ -1692,6 +2272,411 @@ def download_indexer_nzb(item: dict) -> tuple[bytes, str]:
 
 
 # ==============================================================================
+# 5b2. JELLYFIN
+# ==============================================================================
+# Uses the desktop app's Media Server settings (when it is set to Jellyfin), or a server
+# connected from the phone (stored in mobile_settings.json, the API key DPAPI-protected).
+# A server connected from the phone must be on the home network or Tailscale, so the phone
+# can't point the PC at an arbitrary internet address.
+
+JF_CACHE_SECONDS = 600
+JF_DISCOVERY_PORT = 7359
+_jf_lock = threading.Lock()
+_jf_cache: dict = {}
+
+
+def _desktop_jellyfin() -> tuple[str, str]:
+    try:
+        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "", ""
+    if not isinstance(data, dict) or str(data.get("media_server_type") or "Jellyfin") != "Jellyfin":
+        return "", ""
+    url = str(data.get("media_server_url") or "").strip()
+    try:
+        key = _dpapi_unprotect(str(data.get("media_server_token") or "")).strip()
+    except ConfigError:
+        key = ""
+    return url, key
+
+
+def normalize_jellyfin_url(url: str) -> str:
+    url = str(url or "").strip().rstrip("/")
+    if not url:
+        return ""
+    if not url.lower().startswith(("http://", "https://")):
+        url = "http://" + url
+    parsed = urllib.parse.urlsplit(url)
+    if not parsed.hostname:
+        raise ValueError("That server address doesn't look right.")
+    if not parsed.port and parsed.scheme == "http":
+        url = url.replace(parsed.netloc, f"{parsed.netloc}:8096", 1)
+    return url.split("?", 1)[0].split("#", 1)[0]
+
+
+def jellyfin_conf() -> dict:
+    """{'url', 'key', 'source': 'phone'|'desktop'|''}: the phone's own connection wins."""
+    global _JF_SECRETS
+    s = load_settings()
+    url, key, source = s.get("jellyfin_url", ""), "", ""
+    if url and s.get("jellyfin_token"):
+        try:
+            key, source = _dpapi_unprotect(s["jellyfin_token"]).strip(), "phone"
+        except ConfigError:
+            url = ""
+    if not (url and key):
+        url, key = _desktop_jellyfin()
+        source = "desktop" if url and key else ""
+    try:
+        url = normalize_jellyfin_url(url)
+    except ValueError:
+        url, source = "", ""
+    if key and key not in _JF_SECRETS:
+        _JF_SECRETS = frozenset([key])
+    return {"url": url, "key": key if url else "", "source": source}
+
+
+def jellyfin_configured() -> bool:
+    c = jellyfin_conf()
+    return bool(c["url"] and c["key"])
+
+
+def jf_auth_header(key: str) -> str:
+    """Jellyfin 10.11+ refuses the legacy X-Emby-Token header by default; this standard
+    Authorization header works on every version (both are sent)."""
+    return (f'MediaBrowser Client="NZB Command Center", Device="Phone server", DeviceId="nzbcc-mobile", '
+            f'Version="{VERSION}", Token="{key}"')
+
+
+def jf_request(path: str, params: dict | None = None, *, post: bool = False, timeout: float = 10,
+               conf: dict | None = None, raw: bool = False, max_bytes: int = 20_000_000):
+    c = conf or jellyfin_conf()
+    if not (c["url"] and c["key"]):
+        raise ConfigError("Jellyfin isn't connected yet.")
+    url = c["url"] + path + ("?" + urllib.parse.urlencode(params) if params else "")
+    body = http_fetch(url, timeout=timeout, max_bytes=max_bytes, data=b"" if post else None,
+                      headers={"Authorization": jf_auth_header(c["key"]), "X-Emby-Token": c["key"],
+                               "Accept": "application/json" if not raw else "*/*"})
+    if raw:
+        return body
+    if not body.strip():
+        return {}
+    try:
+        return json.loads(body)
+    except ValueError:
+        raise UpstreamError("Jellyfin sent an answer that isn't JSON. Is the address right?") from None
+
+
+def _jf_cached(key: str, fn, ttl: float = JF_CACHE_SECONDS, force: bool = False):
+    conf = jellyfin_conf()
+    ck = (key, conf["url"], conf["key"][:6])
+    with _jf_lock:
+        hit = _jf_cache.get(ck)
+        if hit and not force and time.time() - hit[0] < ttl:
+            return hit[1]
+    value = fn()
+    with _jf_lock:
+        _jf_cache[ck] = (time.time(), value)
+    return value
+
+
+def jf_clear_cache() -> None:
+    with _jf_lock:
+        _jf_cache.clear()
+
+
+def jf_user_id() -> str:
+    def find():
+        users = jf_request("/Users", timeout=6)
+        if not isinstance(users, list) or not users:
+            raise UpstreamError("Jellyfin has no users.")
+        admin = next((u for u in users if (u.get("Policy") or {}).get("IsAdministrator")), users[0])
+        return str(admin.get("Id") or "")
+    return _jf_cached("uid", find, ttl=3600)
+
+
+def _ticks_s(ticks) -> int:
+    return int(to_float(ticks) / 10_000_000)
+
+
+def _jf_quality(item: dict) -> tuple[str, int]:
+    """('1080p', size in bytes) from an item's media sources, or its Height field."""
+    height, size = to_int(item.get("Height")), 0
+    for src in item.get("MediaSources") or []:
+        size = size or to_int(src.get("Size"))
+        for st in src.get("MediaStreams") or []:
+            if st.get("Type") == "Video":
+                height = height or to_int(st.get("Height"))
+    if height >= 1600:
+        label = "2160p"
+    elif height >= 900:
+        label = "1080p"
+    elif height >= 650:
+        label = "720p"
+    elif height > 0:
+        label = "SD"
+    else:
+        label = ""
+    return label, size
+
+
+def _jf_item(x: dict) -> dict:
+    ud = x.get("UserData") or {}
+    kind = str(x.get("Type") or "")
+    quality, size = _jf_quality(x)
+    out = {
+        "id": str(x.get("Id") or ""), "type": kind, "title": str(x.get("Name") or "Untitled"),
+        "year": to_int(x.get("ProductionYear")) or None, "watched": bool(ud.get("Played")),
+        "resume": _ticks_s(ud.get("PlaybackPositionTicks")), "runtime": _ticks_s(x.get("RunTimeTicks")),
+        "quality": quality, "size": size, "added": str(x.get("DateCreated") or "")[:10],
+        "poster": "j:" + str(x.get("Id") or ""),
+    }
+    if kind == "Episode":
+        out.update(show=str(x.get("SeriesName") or ""), show_id=str(x.get("SeriesId") or ""),
+                   season=to_int(x.get("ParentIndexNumber")), episode=to_int(x.get("IndexNumber")),
+                   poster="j:" + str(x.get("SeriesId") or x.get("Id") or ""))
+    return out
+
+
+def jf_sessions() -> list[dict]:
+    out = []
+    for s in jf_request("/Sessions", timeout=6) or []:
+        item = s.get("NowPlayingItem")
+        if not item:
+            continue
+        ps = s.get("PlayState") or {}
+        t = s.get("TranscodingInfo") or {}
+        it = _jf_item(item)
+        total = it["runtime"]
+        pos = _ticks_s(ps.get("PositionTicks"))
+        method = str(ps.get("PlayMethod") or ("Transcode" if t else "DirectPlay"))
+        sub = []
+        if item.get("Type") == "Episode":
+            sub.append(f"S{it['season']:02d}E{it['episode']:02d} · {it['title']}")
+            title = it["show"] or it["title"]
+        else:
+            title = it["title"] + (f" ({it['year']})" if it["year"] else "")
+        out.append({
+            "session": str(s.get("Id") or ""), "user": str(s.get("UserName") or ""),
+            "device": str(s.get("DeviceName") or s.get("Client") or "Device"), "client": str(s.get("Client") or ""),
+            "title": title, "sub": " · ".join(sub), "poster": it["poster"], "item_id": it["id"],
+            "paused": bool(ps.get("IsPaused")), "time": pos, "total": total,
+            "pct": round(pos * 100 / total, 1) if total else 0,
+            "method": "Transcoding" if method.lower() == "transcode" else ("Direct stream" if method.lower() == "directstream" else "Direct play"),
+            "quality": it["quality"],
+        })
+    return out
+
+
+def jf_overview() -> dict:
+    conf = jellyfin_conf()
+    if not (conf["url"] and conf["key"]):
+        return {"configured": False}
+    out = {"configured": True, "source": conf["source"], "url": conf["url"]}
+    t0 = time.monotonic()
+    try:
+        info = jf_request("/System/Info", timeout=6, conf=conf)
+    except (UpstreamError, ConfigError) as exc:
+        out.update(online=False, problem=redact(exc))  # not "error": the page treats that as a failed request
+        return out
+    out.update(online=True, ms=int((time.monotonic() - t0) * 1000),
+               server=str(info.get("ServerName") or "Jellyfin"), version=str(info.get("Version") or ""))
+    try:
+        out["sessions"] = jf_sessions()
+    except UpstreamError as exc:
+        out["sessions"], out["sessions_error"] = [], redact(exc)
+    try:
+        counts = _jf_cached("counts", lambda: jf_request("/Items/Counts", timeout=8), ttl=300)
+        out["counts"] = {"movies": to_int(counts.get("MovieCount")), "shows": to_int(counts.get("SeriesCount")),
+                         "episodes": to_int(counts.get("EpisodeCount"))}
+    except UpstreamError:
+        out["counts"] = None
+    try:
+        out["recent"] = _jf_cached("recent", jf_recent, ttl=120)
+    except UpstreamError:
+        out["recent"] = []
+    return out
+
+
+def jf_recent(limit: int = 16) -> list[dict]:
+    uid = jf_user_id()
+    res = jf_request(f"/Users/{uid}/Items", {
+        "Recursive": "true", "IncludeItemTypes": "Movie,Episode", "SortBy": "DateCreated", "SortOrder": "Descending",
+        "Limit": limit, "Fields": "ProductionYear,DateCreated", "EnableTotalRecordCount": "false"}, timeout=10)
+    return [_jf_item(x) for x in (res.get("Items") or [])]
+
+
+def jf_search(query: str) -> list[dict]:
+    query = query.strip()[:100]
+    if not query:
+        return []
+    uid = jf_user_id()
+    res = jf_request(f"/Users/{uid}/Items", {
+        "Recursive": "true", "IncludeItemTypes": "Movie,Series", "SearchTerm": query, "Limit": 30,
+        "Fields": "ProductionYear,MediaSources,DateCreated,RecursiveItemCount", "EnableTotalRecordCount": "false"}, timeout=12)
+    items = []
+    for x in res.get("Items") or []:
+        it = _jf_item(x)
+        if it["type"] == "Series":
+            it["episodes"] = to_int(x.get("RecursiveItemCount"))
+        items.append(it)
+    return items
+
+
+def _jf_episodes_all() -> list[dict]:
+    uid = jf_user_id()
+    out, start = [], 0
+    while start < 100_000:
+        res = jf_request(f"/Users/{uid}/Items", {
+            "Recursive": "true", "IncludeItemTypes": "Episode", "StartIndex": start, "Limit": 5000,
+            "Fields": "PremiereDate", "EnableImages": "false", "EnableUserData": "false",
+            "EnableTotalRecordCount": "true"}, timeout=30)
+        page = res.get("Items") or []
+        out.extend(page)
+        start += len(page)
+        if not page or start >= to_int(res.get("TotalRecordCount"), start):
+            break
+    return out
+
+
+def _season_missing(eps: list[dict], today: str) -> list[int]:
+    """Gaps before the newest episode you have, plus aired episodes Jellyfin lists as missing."""
+    have = [to_int(e.get("IndexNumber")) for e in eps if str(e.get("LocationType")) != "Virtual"]
+    virtual = {to_int(e.get("IndexNumber")) for e in eps if str(e.get("LocationType")) == "Virtual"
+               and str(e.get("PremiereDate") or "9999")[:10] <= today and to_int(e.get("IndexNumber")) > 0}
+    return sorted(set(episode_gaps(have)) | (virtual - set(have)))
+
+
+def jf_missing(force: bool = False) -> list[dict]:
+    def build():
+        today = date.today().isoformat()
+        groups: dict[tuple, list] = {}
+        names: dict[str, str] = {}
+        for e in _jf_episodes_all():
+            sid, season = str(e.get("SeriesId") or ""), to_int(e.get("ParentIndexNumber"))
+            if not sid or season <= 0:
+                continue
+            names[sid] = str(e.get("SeriesName") or "Show")
+            groups.setdefault((sid, season), []).append(e)
+        out = []
+        for (sid, season), eps in groups.items():
+            missing = _season_missing(eps, today)
+            if missing:
+                out.append({"show": names[sid], "show_id": sid, "season": season, "missing": missing})
+        out.sort(key=lambda x: (x["show"].lower(), x["season"]))
+        return out
+    return _jf_cached("missing", build, force=force)
+
+
+def jf_upgrades(force: bool = False) -> list[dict]:
+    """Movies below 1080p, worst first."""
+    def build():
+        uid = jf_user_id()
+        res = jf_request(f"/Users/{uid}/Items", {
+            "Recursive": "true", "IncludeItemTypes": "Movie", "Fields": "Height,Width,ProductionYear,DateCreated",
+            "EnableImages": "false", "Limit": 20000, "EnableTotalRecordCount": "false"}, timeout=30)
+        items = [_jf_item(x) for x in res.get("Items") or []]
+        low = [x for x in items if x["quality"] in ("SD", "720p")]
+        low.sort(key=lambda x: (x["quality"] != "SD", x["title"].lower()))
+        return low
+    return _jf_cached("upgrades", build, force=force)
+
+
+def jf_show(show_id: str) -> dict:
+    if not re.fullmatch(r"[0-9a-fA-F-]{8,40}", show_id or ""):
+        raise ValueError("Invalid show.")
+    uid = jf_user_id()
+    s = jf_request(f"/Users/{uid}/Items/{show_id}", timeout=8)
+    res = jf_request(f"/Shows/{show_id}/Episodes", {"UserId": uid, "Fields": "PremiereDate,Overview"}, timeout=15)
+    eps = res.get("Items") or []
+    today = date.today().isoformat()
+    seasons: dict[int, list] = {}
+    for e in eps:
+        seasons.setdefault(to_int(e.get("ParentIndexNumber")), []).append(e)
+    out_seasons = []
+    for num in sorted(seasons):
+        group = seasons[num]
+        owned = [e for e in group if str(e.get("LocationType")) != "Virtual"]
+        out_seasons.append({
+            "season": num,
+            "missing": _season_missing(group, today) if num > 0 else [],
+            "episodes": [{
+                "episode": to_int(e.get("IndexNumber")), "title": str(e.get("Name") or ""),
+                "watched": bool((e.get("UserData") or {}).get("Played")),
+                "aired": str(e.get("PremiereDate") or "")[:10], "runtime": _ticks_s(e.get("RunTimeTicks")),
+            } for e in sorted(owned, key=lambda e: to_int(e.get("IndexNumber")))],
+        })
+    nxt = None
+    try:
+        up = jf_request("/Shows/NextUp", {"UserId": uid, "SeriesId": show_id, "Limit": 1}, timeout=8).get("Items") or []
+        if up:
+            nxt = {"season": to_int(up[0].get("ParentIndexNumber")), "episode": to_int(up[0].get("IndexNumber")),
+                   "title": str(up[0].get("Name") or "")}
+    except UpstreamError:
+        pass
+    owned_all = [e for e in eps if str(e.get("LocationType")) != "Virtual"]
+    return {
+        "id": show_id, "title": str(s.get("Name") or "Show"), "year": to_int(s.get("ProductionYear")) or None,
+        "plot": str(s.get("Overview") or "")[:1500], "genres": list(s.get("Genres") or [])[:4],
+        "poster": "j:" + show_id, "episodes": len(owned_all),
+        "watched": sum(1 for e in owned_all if (e.get("UserData") or {}).get("Played")),
+        "seasons": out_seasons, "next": nxt,
+    }
+
+
+def jf_art(item_id: str) -> tuple[bytes, str]:
+    if not re.fullmatch(r"[0-9a-fA-F-]{8,40}", item_id or ""):
+        raise ValueError("Invalid picture.")
+    raw = jf_request(f"/Items/{item_id}/Images/Primary", {"maxHeight": 450, "quality": 85}, raw=True,
+                     timeout=10, max_bytes=8_000_000)
+    ctype = _image_type(raw)
+    if not ctype:
+        raise UpstreamError("No picture.")
+    return raw, ctype
+
+
+def jf_control(session_id: str, action: str) -> None:
+    cmd = {"playpause": "PlayPause", "stop": "Stop"}.get(action)
+    if not cmd or not re.fullmatch(r"[0-9a-zA-Z-]{4,80}", session_id or ""):
+        raise ValueError("Invalid playback command.")
+    jf_request(f"/Sessions/{session_id}/Playing/{cmd}", post=True, timeout=6)
+
+
+def jf_discover(wait: float = 1.5) -> list[dict]:
+    """Jellyfin servers answering the standard LAN discovery broadcast."""
+    found: dict[str, dict] = {}
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(0.3)
+        sock.sendto(b"Who is JellyfinServer?", ("255.255.255.255", JF_DISCOVERY_PORT))
+        end = time.monotonic() + wait
+        while time.monotonic() < end:
+            try:
+                data, _addr = sock.recvfrom(4096)
+            except socket.timeout:
+                continue
+            try:
+                info = json.loads(data.decode("utf-8", errors="replace"))
+                url = normalize_jellyfin_url(str(info.get("Address") or ""))
+            except (ValueError, AttributeError):
+                continue
+            if url:
+                found[url] = {"url": url, "name": str(info.get("Name") or "Jellyfin")[:60]}
+    except OSError:
+        pass
+    finally:
+        sock.close()
+    return list(found.values())
+
+
+def jf_url_allowed(url: str) -> bool:
+    """A server connected from the phone must be private (home network, Tailscale, this PC)."""
+    host = urllib.parse.urlsplit(url).hostname or ""
+    return bool(host) and not host_is_public(host)
+
+
+# ==============================================================================
 # 5c. PHONE SETTINGS, ALERTS (ntfy), SAVED SEARCHES, STATS, AUTOSTART
 # ==============================================================================
 
@@ -1704,7 +2689,11 @@ _settings_lock = threading.RLock()
 
 def _default_settings() -> dict:
     return {"ntfy_url": "", "ntfy_token": "", "notify_complete": True, "notify_failed": True, "notify_saved": True,
-            "saved_interval_hours": 6, "saved_searches": []}
+            "saved_interval_hours": 6, "saved_searches": [],
+            "jellyfin_url": "", "jellyfin_token": "",
+            "notify_drive_health": True, "notify_drive_hot": True, "notify_drive_low": True, "drive_low_gb": DRIVE_LOW_GB,
+            # Sony TV power / app launch (TV on + Kodi). Blank tv_host = the host from the Kodi URL.
+            "tv_host": "", "tv_psk": "", "tv_mac": "", "tv_mac_manual": False, "tv_kodi_uri": ""}
 
 
 def load_settings() -> dict:
@@ -1773,7 +2762,7 @@ def ntfy_token(settings: dict) -> str:
     except ConfigError:
         return ""
     if token and token not in _EXTRA_SECRETS:
-        _EXTRA_SECRETS = frozenset([token])
+        _EXTRA_SECRETS = _EXTRA_SECRETS | {token}
     return token
 
 
@@ -1875,6 +2864,603 @@ def run_saved_search(search_id: str, notify: bool = True) -> dict:
     return {"new": len(fresh), "error": error}
 
 
+# ---- TV home row: the newest movies, for the TV launcher ------------------------------
+# The TV's home screen shows the newest movies with their posters and starts one in Kodi in
+# one press, even when Kodi was not running. Kodi only answers while it runs, so this server
+# keeps the row: Kodi's recently added movies (whenever Kodi is reachable, remembered for when
+# it isn't) merged with finished SABnzbd movie downloads Kodi hasn't scanned yet. Posters are
+# saved on disk next to this file, so the row survives restarts of this server and of Kodi.
+TV_ROW_SIZE = 12
+TV_REFRESH_SECS = 300
+TV_PLAY_WAIT_SECS = 45              # how long /api/tv/play waits for a Kodi that was just started
+TV_STATE_FILE = BASE_DIR / "tv_recent.json"
+TV_ART_DIR = BASE_DIR / "tv_art"
+TV_ID_RE = re.compile(r"[ksme][A-Za-z0-9_]{1,80}")
+# "Recently watched" (GET /api/tv/watched): Kodi's movies and episodes started or finished, the last
+# played first, with how far in each is. Kept on disk like the downloads row, so the TV still has it
+# while Kodi is closed. Only items with a poster are listed; ids are m<movieid> and e<episodeid>.
+TV_WATCHED_SIZE = 10
+TV_WATCHED_REFRESH_SECS = 120
+TV_WATCHED_FILE = BASE_DIR / "tv_watched.json"
+TV_WATCHED_ART_DIR = BASE_DIR / "tv_watched_art"
+TV_WATCHED_ID_RE = re.compile(r"[me][0-9]{1,12}")
+VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".mpg", ".mpeg", ".webm", ".iso"}
+TV_KODI_PROPS = ["title", "year", "runtime", "file", "art", "thumbnail", "dateadded", "playcount", "streamdetails"]
+_tv_lock = threading.Lock()
+_tv_refreshing = threading.Lock()
+
+
+def tv_load_state() -> dict:
+    try:
+        data = json.loads(TV_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    return {"updated": to_float(data.get("updated")), "kodi": [x for x in data.get("kodi") or [] if isinstance(x, dict)],
+            "items": [x for x in data.get("items") or [] if isinstance(x, dict)],
+            "path_map": [p for p in data.get("path_map") or [] if isinstance(p, list) and len(p) == 2]}
+
+
+def tv_save_state(state: dict) -> None:
+    tmp = TV_STATE_FILE.with_name(TV_STATE_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, TV_STATE_FILE)
+
+
+def _split_path(path: str) -> list[str]:
+    return [p for p in re.split(r"[\\/]+", str(path or "")) if p]
+
+
+def tv_learn_prefix(local_folder: str, kodi_file: str) -> tuple[str, str] | None:
+    """('D:\\Movies', 'smb://HAL9000/Movies') from a download folder and the file Kodi plays from it.
+
+    Both paths contain the download's folder ("Movie (2020)"); what comes before it is how Kodi
+    reaches this PC's folder. None when Kodi's path doesn't contain it."""
+    m = re.match(r"^([a-z][a-z0-9+.-]*://[^/]*)(/.*)?$", kodi_file or "", re.I)
+    head, rest = (m.group(1), m.group(2) or "") if m else ("", kodi_file or "")
+    k_parts = _split_path(rest)[:-1]          # Kodi's folders, without the file name
+    l_parts = _split_path(local_folder)
+    if len(l_parts) < 2:
+        return None
+    # The download's own folder ("Movie (2020)") is the distinctive part; the video can sit in a
+    # subfolder of it on Kodi's side. Everything before that folder is how each side reaches it.
+    job = l_parts[-1].lower()
+    at = max((i for i, part in enumerate(k_parts) if part.lower() == job), default=-1)
+    if at < 0:
+        return None
+    common = 1
+    k_parts = k_parts[: at + 1]
+    local_prefix = "\\".join(l_parts[: len(l_parts) - common]) if "\\" in local_folder or ":" in l_parts[0] else \
+        "/" + "/".join(l_parts[: len(l_parts) - common])
+    kodi_prefix = head + "/" + "/".join(k_parts[: len(k_parts) - common]) if head else \
+        "/".join(k_parts[: len(k_parts) - common])
+    return local_prefix, kodi_prefix.rstrip("/")
+
+
+def tv_map_path(local_path: str, path_map: list) -> str:
+    """The path Kodi plays a local file by, using the learned prefixes ("" when none fits)."""
+    norm = str(local_path or "").replace("/", "\\").lower()
+    for local_prefix, kodi_prefix in sorted(path_map, key=lambda p: -len(p[0])):
+        lp = str(local_prefix).replace("/", "\\").rstrip("\\").lower()
+        if norm == lp or norm.startswith(lp + "\\"):
+            tail = str(local_path)[len(lp):].replace("\\", "/").lstrip("/")
+            sep = "/" if "://" in kodi_prefix or kodi_prefix.startswith("/") else "\\"
+            return kodi_prefix.rstrip("/\\") + sep + (tail if sep == "/" else tail.replace("/", "\\"))
+    return ""
+
+
+def tv_video_file(storage: str) -> str:
+    """The main video file of a finished download (the largest video in its folder), or ""."""
+    p = Path(str(storage or ""))
+    try:
+        if p.is_file():
+            return str(p) if p.suffix.lower() in VIDEO_EXTS else ""
+        best, size = "", 0
+        for root, dirs, files in os.walk(p):
+            if root[len(str(p)):].count(os.sep) >= 2:
+                dirs[:] = []
+            for f in files:
+                if Path(f).suffix.lower() in VIDEO_EXTS and "sample" not in f.lower():
+                    s = (Path(root) / f).stat().st_size
+                    if s > size:
+                        best, size = str(Path(root) / f), s
+        return best
+    except OSError:
+        return ""
+
+
+def _kodi_time(text: str) -> float:
+    try:
+        return time.mktime(time.strptime(str(text or "")[:19], "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return 0.0
+
+
+def tv_kodi_recent(limit: int = TV_ROW_SIZE) -> list[dict]:
+    res = _kdict(kodi_call("VideoLibrary.GetRecentlyAddedMovies",
+                           {"properties": TV_KODI_PROPS, "limits": {"start": 0, "end": limit}}, timeout=10))
+    out = []
+    for mv in res.get("movies") or []:
+        if not isinstance(mv, dict) or to_int(mv.get("movieid")) <= 0:
+            continue
+        art = _kdict(mv.get("art"))
+        quality, _hdr = video_quality(mv.get("streamdetails"))
+        out.append({"id": f"k{to_int(mv.get('movieid'))}", "movieid": to_int(mv.get("movieid")),
+                    "title": str(mv.get("title") or "Untitled"), "year": to_int(mv.get("year")) or None,
+                    "runtime": to_int(mv.get("runtime")) // 60, "quality": "4K" if quality == "2160p" else quality,
+                    "added": _kodi_time(mv.get("dateadded")), "watched": to_int(mv.get("playcount")) > 0,
+                    "file": str(mv.get("file") or ""), "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail"))})
+    return out
+
+
+def _same_movie(a: dict, b: dict) -> bool:
+    if _norm_title(a.get("title")) != _norm_title(b.get("title")):
+        return False
+    ya, yb = to_int(a.get("year")), to_int(b.get("year"))
+    return not ya or not yb or abs(ya - yb) <= 1
+
+
+def tv_sab_movies(limit: int = 60) -> list[dict]:
+    slots = sab_request("history", {"limit": limit}).get("history", {}).get("slots", [])
+    out = []
+    for x in slots:
+        name, cat = str(x.get("name") or ""), str(x.get("category") or "")
+        if str(x.get("status", "")).lower() != "completed" or release_kind(name, cat) != "movie":
+            continue
+        clean, year, _hint = artwork_query(name, cat)
+        nzo = re.sub(r"[^A-Za-z0-9_]", "", str(x.get("nzo_id") or ""))[:80]
+        if not clean or not nzo:
+            continue
+        out.append({"id": f"s{nzo}", "title": clean, "year": to_int(year) or None, "added": float(to_int(x.get("completed"))),
+                    "quality": release_resolution(name), "storage": str(x.get("storage") or ""), "watched": False})
+    return out
+
+
+def _tv_save_poster(item: dict) -> bool:
+    TV_ART_DIR.mkdir(exist_ok=True)
+    dest = TV_ART_DIR / f"{item['id']}.img"
+    if dest.exists():
+        return True
+    raw = None
+    try:
+        if item.get("art_ref"):
+            raw = kodi_art(item["art_ref"])[0]
+        else:
+            url = lookup_poster_url(item["title"], str(item.get("year") or ""), "movie")
+            if url and _fetchable_image_url(url, set()):
+                raw = http_fetch(url, timeout=8, max_bytes=MAX_ART_BYTES, headers={"Accept": "image/*"})
+    except (UpstreamError, ValueError, ConfigError):
+        raw = None
+    if not raw or not _image_type(raw):
+        return False
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_bytes(raw)
+    os.replace(tmp, dest)
+    return True
+
+
+def tv_refresh() -> dict:
+    """Rebuilds the row. Never raises for an offline Kodi or SABnzbd: the last good part is kept."""
+    with _tv_refreshing:
+        state = tv_load_state()
+        kodi_items, kodi_ok = state["kodi"], False
+        try:
+            if kodi_configured():
+                kodi_items, kodi_ok = tv_kodi_recent(), True
+        except (UpstreamError, ConfigError):
+            pass
+        try:
+            sab_items = tv_sab_movies()
+        except (UpstreamError, ConfigError):
+            sab_items = []
+        path_map = [tuple(p) for p in state["path_map"]]
+        for s in sab_items:          # learn how Kodi reaches this PC's folders from downloads it already has
+            k = next((k for k in kodi_items if _same_movie(s, k) and k.get("file")), None)
+            pair = tv_learn_prefix(s["storage"], k["file"]) if k and s["storage"] else None
+            if pair and pair not in path_map:
+                path_map.append(pair)
+        merged = list(kodi_items)
+        for s in sab_items:
+            if any(_same_movie(s, k) for k in kodi_items):
+                continue
+            video = tv_video_file(s["storage"])
+            s["file"] = tv_map_path(video, path_map) if video else ""
+            merged.append(s)
+        merged.sort(key=lambda x: -to_float(x.get("added")))
+        items = merged[:TV_ROW_SIZE]
+        newest_kodi = max((to_float(k.get("added")) for k in kodi_items), default=0.0)
+        for it in items:
+            it.pop("storage", None)
+            it["poster"] = _tv_save_poster(it)
+            it["in_kodi"] = bool(it.get("movieid"))
+            it["new"] = not it.get("watched") and to_float(it.get("added")) >= time.time() - 3 * 86400
+        if TV_ART_DIR.exists():   # forget posters the row no longer shows
+            keep = {f"{it['id']}.img" for it in items} | {f"{k['id']}.img" for k in kodi_items}
+            for f in TV_ART_DIR.glob("*.img"):
+                if f.name not in keep:
+                    f.unlink(missing_ok=True)
+        state = {"updated": time.time(), "kodi_online": kodi_ok, "newest_kodi": newest_kodi,
+                 "kodi": kodi_items, "items": items, "path_map": [list(p) for p in path_map][-20:]}
+        with _tv_lock:
+            tv_save_state(state)
+        return state
+
+
+def tv_row(background: bool = True) -> dict:
+    """The row as the TV reads it; a stale row is returned at once and rebuilt on a worker thread."""
+    state = tv_load_state()
+    if time.time() - state["updated"] > TV_REFRESH_SECS:
+        if background and state["items"]:
+            if not _tv_refreshing.locked():
+                threading.Thread(target=tv_refresh, name="tv-row", daemon=True).start()
+        else:
+            state = tv_refresh()
+    items = [{k: it.get(k) for k in ("id", "title", "year", "runtime", "quality", "added", "watched", "new",
+                                      "in_kodi", "movieid", "file")}
+             | {"poster": f"/api/tv/poster?id={it['id']}" if it.get("poster") else ""} for it in state["items"]]
+    return {"updated": state["updated"], "items": items}
+
+
+def tv_poster(item_id: str) -> bytes | None:
+    if not TV_ID_RE.fullmatch(item_id or ""):
+        raise ValueError("Invalid item.")
+    folder = TV_WATCHED_ART_DIR if TV_WATCHED_ID_RE.fullmatch(item_id) else TV_ART_DIR
+    try:
+        return (folder / f"{item_id}.img").read_bytes()
+    except OSError:
+        return None
+
+
+def _tv_wait_for_kodi(wait: float) -> None:
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            kodi_call("JSONRPC.Ping", timeout=3)
+            return
+        except UpstreamError:
+            if time.monotonic() >= deadline:
+                raise UpstreamError("Kodi didn't start in time.")
+            time.sleep(1.5)
+
+
+def tv_play(item_id: str, wait: float = TV_PLAY_WAIT_SECS, from_start: bool = False) -> dict:
+    """Plays a row item in Kodi. The TV starts Kodi first, so this waits for Kodi to answer."""
+    if not TV_ID_RE.fullmatch(item_id or ""):
+        raise ValueError("Invalid item.")
+    if TV_WATCHED_ID_RE.fullmatch(item_id):   # recently watched: resume where it was left, or from the start
+        _tv_wait_for_kodi(wait)
+        kind = "episodeid" if item_id[0] == "e" else "movieid"
+        target = {kind: int(item_id[1:])}
+        kodi_call("Player.Open", {"item": target, "options": {"resume": not from_start}})
+        return {"ok": True, "played": target}
+    item = next((x for x in tv_load_state()["items"] if x.get("id") == item_id), None)
+    if not item:
+        raise ValueError("That movie isn't in the row any more.")
+    _tv_wait_for_kodi(wait)
+    target = None
+    if item.get("movieid"):
+        target = {"movieid": int(item["movieid"])}
+    else:   # a download Kodi hadn't scanned: look for it now, else play the file itself
+        res = _kdict(kodi_call("VideoLibrary.GetMovies", {"properties": ["title", "year"], "filter": {
+            "field": "title", "operator": "is", "value": item["title"]}}, timeout=10))
+        hit = next((m for m in res.get("movies") or [] if _same_movie(item, m)), None)
+        if hit:
+            target = {"movieid": to_int(hit.get("movieid"))}
+        elif item.get("file"):
+            target = {"file": item["file"]}
+    if not target:
+        raise ValueError("Kodi can't find this movie yet. Update Kodi's library and try again.")
+    kodi_call("Player.Open", {"item": target})
+    return {"ok": True, "played": target}
+
+
+# Screensaver photos (GET /api/tv/photos, /api/tv/photo): pictures from a folder on this PC, which
+# the TV's screensaver shows one after another. The folder is the first line of tv_photos_folder.txt
+# next to this file, else the user's Pictures folder (or OneDrive's). Only files found by walking that
+# folder can be served, by an id derived from their path; nothing else on the PC is reachable.
+TV_PHOTOS_FILE = BASE_DIR / "tv_photos_folder.txt"
+TV_PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+TV_PHOTO_MAX_FILES = 5000
+TV_PHOTO_MAX_BYTES = 40 * 1024 * 1024
+TV_PHOTO_ID_RE = re.compile(r"[0-9a-f]{16}")
+_tv_photo_lock = threading.Lock()
+_tv_photo_index: dict = {"at": 0.0, "folder": "", "items": {}}
+
+
+def tv_photos_folder() -> Path | None:
+    try:
+        line = TV_PHOTOS_FILE.read_text(encoding="utf-8-sig").strip().splitlines()[0].strip().strip('"')
+        if line and Path(line).is_dir():
+            return Path(line)
+    except (OSError, IndexError):
+        pass
+    home = Path.home()
+    for cand in (home / "Pictures", home / "OneDrive" / "Pictures", home / "OneDrive" / "Imágenes", home / "Imágenes"):
+        if cand.is_dir():
+            return cand
+    return None
+
+
+def tv_photo_index(max_age: float = 600) -> dict:
+    """{id: (path, mtime)} for the pictures in the folder, re-walked at most every max_age seconds."""
+    folder = tv_photos_folder()
+    key = str(folder or "")
+    with _tv_photo_lock:
+        if _tv_photo_index["folder"] == key and time.time() - _tv_photo_index["at"] < max_age:
+            return _tv_photo_index["items"]
+        items: dict = {}
+        if folder:
+            for root, dirs, files in os.walk(folder):
+                dirs[:] = sorted(d for d in dirs if not d.startswith((".", "$")))
+                for f in sorted(files):
+                    if Path(f).suffix.lower() not in TV_PHOTO_EXTS or f.startswith("."):
+                        continue
+                    full = Path(root) / f
+                    try:
+                        st = full.stat()
+                    except OSError:
+                        continue
+                    if not 0 < st.st_size <= TV_PHOTO_MAX_BYTES:
+                        continue
+                    rel = str(full.relative_to(folder)).replace("\\", "/")
+                    items[hashlib.sha1(rel.encode("utf-8")).hexdigest()[:16]] = (str(full), st.st_mtime)
+                    if len(items) >= TV_PHOTO_MAX_FILES:
+                        break
+                if len(items) >= TV_PHOTO_MAX_FILES:
+                    break
+        _tv_photo_index.update(at=time.time(), folder=key, items=items)
+        return items
+
+
+def tv_photos_list() -> dict:
+    items = tv_photo_index()
+    folder = tv_photos_folder()
+    return {"folder": folder.name if folder else "", "count": len(items),
+            "items": [{"id": pid, "name": Path(path).stem[:80], "date": time.strftime("%Y-%m-%d", time.localtime(mtime))}
+                      for pid, (path, mtime) in sorted(items.items(), key=lambda kv: -kv[1][1])]}
+
+
+def tv_photo(photo_id: str) -> bytes | None:
+    if not TV_PHOTO_ID_RE.fullmatch(photo_id or ""):
+        raise ValueError("Invalid photo.")
+    hit = tv_photo_index().get(photo_id)
+    if not hit:
+        return None
+    try:
+        raw = Path(hit[0]).read_bytes()
+    except OSError:
+        return None
+    return raw if _image_type(raw) else None
+
+
+def tv_mark_watched(item_id: str) -> dict:
+    """Marks a recently-watched item as watched in Kodi (play count 1, resume point cleared)."""
+    if not TV_WATCHED_ID_RE.fullmatch(item_id or ""):
+        raise ValueError("Invalid item.")
+    num = int(item_id[1:])
+    done = {"playcount": 1, "resume": {"position": 0, "total": 0}}
+    if item_id[0] == "e":
+        kodi_call("VideoLibrary.SetEpisodeDetails", dict(done, episodeid=num))
+    else:
+        kodi_call("VideoLibrary.SetMovieDetails", dict(done, movieid=num))
+    with _tv_lock:   # show it finished right away in the saved list too
+        state = tv_watched_load()
+        for it in state["items"]:
+            if it.get("id") == item_id:
+                it.update(progress=1.0, remaining=0, watched=True)
+        tmp = TV_WATCHED_FILE.with_name(TV_WATCHED_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, TV_WATCHED_FILE)
+    return {"ok": True}
+
+
+def tv_finished(limit: int = 10) -> dict:
+    """Downloads SABnzbd finished most recently (movies and episodes), newest first, for the TV's
+    "Ready to watch" note. A poster is offered when the TV row already has one for that title."""
+    slots = sab_request("history", {"limit": 30}).get("history", {}).get("slots", [])
+    row = tv_load_state()["items"]
+    out = []
+    for x in slots:
+        if str(x.get("status", "")).lower() != "completed":
+            continue
+        name, cat = str(x.get("name") or ""), str(x.get("category") or "")
+        clean, year, kind = artwork_query(name, cat)
+        nzo = re.sub(r"[^A-Za-z0-9_]", "", str(x.get("nzo_id") or ""))[:80]
+        if not clean or not nzo or kind not in ("movie", "tv"):
+            continue
+        ep = re.search(r"\bS(\d{1,2})E(\d{1,3})\b", name.replace(".", " "), re.I)
+        title = f"{clean} S{int(ep.group(1))} E{int(ep.group(2))}" if kind == "tv" and ep else clean
+        poster = ""
+        if kind == "movie":
+            hit = next((it for it in row if it.get("poster") and _same_movie({"title": clean, "year": year}, it)), None)
+            if hit:
+                poster = f"/api/tv/poster?id={hit['id']}"
+        out.append({"id": f"s{nzo}", "title": title, "year": to_int(year) or None, "kind": kind,
+                    "completed": to_int(x.get("completed")), "poster": poster})
+        if len(out) >= limit:
+            break
+    out.sort(key=lambda it: -it["completed"])
+    return {"items": out}
+
+
+_tv_watched_refreshing = threading.Lock()
+_TV_SEEN_FILTER = {"or": [{"field": "inprogress", "operator": "true", "value": ""},
+                          {"field": "playcount", "operator": "greaterthan", "value": "0"}]}
+
+
+def _tv_progress(raw: dict) -> dict:
+    """{"progress": 0..1, "remaining": minutes left, "runtime": minutes} from Kodi's resume point."""
+    resume = _kdict(raw.get("resume"))
+    pos, total = to_float(resume.get("position")), to_float(resume.get("total"))
+    if total <= 0:
+        total = to_float(raw.get("runtime"))
+    watched = to_int(raw.get("playcount")) > 0
+    if pos > 0 and total > 0:
+        progress, remaining = min(1.0, pos / total), round((total - pos) / 60)
+    else:
+        progress, remaining = (1.0 if watched else 0.0), 0
+    return {"progress": round(progress, 3), "remaining": remaining, "runtime": round(total / 60), "watched": watched}
+
+
+def tv_kodi_watched(limit: int = TV_WATCHED_SIZE) -> list[dict]:
+    """Movies and episodes started or finished in Kodi, the last played first."""
+    common = {"filter": _TV_SEEN_FILTER, "sort": {"method": "lastplayed", "order": "descending"},
+              "limits": {"start": 0, "end": limit * 2}}
+    movies = _kdict(kodi_call("VideoLibrary.GetMovies", dict(common, properties=[
+        "title", "year", "runtime", "art", "thumbnail", "playcount", "resume", "lastplayed", "streamdetails"]),
+        timeout=10)).get("movies") or []
+    episodes = _kdict(kodi_call("VideoLibrary.GetEpisodes", dict(common, properties=[
+        "title", "showtitle", "season", "episode", "runtime", "art", "playcount", "resume", "lastplayed"]),
+        timeout=10)).get("episodes") or []
+    out = []
+    for mv in movies:
+        if not isinstance(mv, dict) or to_int(mv.get("movieid")) <= 0:
+            continue
+        art = _kdict(mv.get("art"))
+        quality, _hdr = video_quality(mv.get("streamdetails"))
+        out.append({"id": f"m{to_int(mv.get('movieid'))}", "movieid": to_int(mv.get("movieid")),
+                    "title": str(mv.get("title") or "Untitled"), "year": to_int(mv.get("year")) or None,
+                    "quality": "4K" if quality == "2160p" else quality,
+                    "lastplayed": str(mv.get("lastplayed") or ""),
+                    "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail"))} | _tv_progress(mv))
+    for ep in episodes:
+        if not isinstance(ep, dict) or to_int(ep.get("episodeid")) <= 0:
+            continue
+        art = _kdict(ep.get("art"))
+        show = str(ep.get("showtitle") or "")
+        out.append({"id": f"e{to_int(ep.get('episodeid'))}", "episodeid": to_int(ep.get("episodeid")),
+                    "title": show or str(ep.get("title") or "Untitled"), "episode_title": str(ep.get("title") or ""),
+                    "season": to_int(ep.get("season")), "episode": to_int(ep.get("episode")),
+                    "lastplayed": str(ep.get("lastplayed") or ""),
+                    "art_ref": _art_ref(art.get("tvshow.poster") or art.get("season.poster"))} | _tv_progress(ep))
+    out.sort(key=lambda x: x["lastplayed"], reverse=True)   # "YYYY-MM-DD HH:MM:SS" sorts as text
+    now = _tv_now_watching()
+    if now:   # still open in Kodi (playing, or paused behind Home): first, with where it is now
+        out = [now] + [x for x in out if x["id"] != now["id"]]
+    return out
+
+
+def _tv_now_watching() -> dict | None:
+    """The movie or episode open in Kodi's player, as a Recently watched entry, or None.
+
+    Kodi writes the resume point and "last played" only when playback stops, so a movie left playing or paused
+    while the owner pressed Home would otherwise be missing from the row until Kodi was stopped."""
+    try:
+        players = kodi_call("Player.GetActivePlayers", timeout=4)
+        players = [p for p in players if isinstance(p, dict)] if isinstance(players, list) else []
+        video = [p for p in players if p.get("type") == "video"]
+        if not video:
+            return None
+        pid = to_int(video[0].get("playerid"))
+        item = _kdict(_kdict(kodi_call("Player.GetItem", {"playerid": pid, "properties": [
+            "title", "showtitle", "season", "episode", "year", "art", "thumbnail", "streamdetails"]}, timeout=4)).get("item"))
+        props = _kdict(kodi_call("Player.GetProperties", {"playerid": pid, "properties": ["time", "totaltime"]}, timeout=4))
+    except (UpstreamError, ConfigError):
+        return None
+    kind, kid = str(item.get("type") or ""), to_int(item.get("id"))
+    if kind not in ("movie", "episode") or kid <= 0:
+        return None   # a file outside the library: nothing to play it again by
+    pos, total = _kodi_secs(props.get("time")), _kodi_secs(props.get("totaltime"))
+    progress = round(min(1.0, pos / total), 3) if pos > 0 and total > 0 else 0.0
+    base = {"lastplayed": time.strftime("%Y-%m-%d %H:%M:%S"), "progress": progress,
+            "remaining": round((total - pos) / 60) if total > pos else 0, "runtime": round(total / 60), "watched": False}
+    art = _kdict(item.get("art"))
+    if kind == "movie":
+        quality, _hdr = video_quality(item.get("streamdetails"))
+        return base | {"id": f"m{kid}", "movieid": kid, "title": str(item.get("title") or item.get("label") or "Untitled"),
+                       "year": to_int(item.get("year")) or None, "quality": "4K" if quality == "2160p" else quality,
+                       "art_ref": _art_ref(art.get("poster") or item.get("thumbnail"))}
+    show = str(item.get("showtitle") or "")
+    return base | {"id": f"e{kid}", "episodeid": kid, "title": show or str(item.get("title") or "Untitled"),
+                   "episode_title": str(item.get("title") or ""), "season": to_int(item.get("season")),
+                   "episode": to_int(item.get("episode")),
+                   "art_ref": _art_ref(art.get("tvshow.poster") or art.get("season.poster"))}
+
+
+def _tv_save_watched_poster(item: dict) -> bool:
+    TV_WATCHED_ART_DIR.mkdir(exist_ok=True)
+    dest = TV_WATCHED_ART_DIR / f"{item['id']}.img"
+    if dest.exists():
+        return True
+    if not item.get("art_ref"):
+        return False
+    try:
+        raw = kodi_art(item["art_ref"])[0]
+    except (UpstreamError, ValueError, ConfigError):
+        return False
+    if not raw or not _image_type(raw):
+        return False
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_bytes(raw)
+    os.replace(tmp, dest)
+    return True
+
+
+def tv_watched_load() -> dict:
+    try:
+        data = json.loads(TV_WATCHED_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    return {"updated": to_float(data.get("updated")), "items": [x for x in data.get("items") or [] if isinstance(x, dict)]}
+
+
+def tv_watched_refresh() -> dict:
+    """Re-reads the list from Kodi; while Kodi is closed the last list is kept."""
+    with _tv_watched_refreshing:
+        state = tv_watched_load()
+        try:
+            if not kodi_configured():
+                return state
+            found = tv_kodi_watched()
+        except (UpstreamError, ConfigError):
+            return state
+        items = []
+        for it in found:   # no poster, no tile
+            if _tv_save_watched_poster(it):
+                it.pop("art_ref", None)
+                items.append(it)
+            if len(items) >= TV_WATCHED_SIZE:
+                break
+        if TV_WATCHED_ART_DIR.exists():
+            keep = {f"{it['id']}.img" for it in items}
+            for f in TV_WATCHED_ART_DIR.glob("*.img"):
+                if f.name not in keep:
+                    f.unlink(missing_ok=True)
+        state = {"updated": time.time(), "items": items}
+        with _tv_lock:
+            tmp = TV_WATCHED_FILE.with_name(TV_WATCHED_FILE.name + ".tmp")
+            tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, TV_WATCHED_FILE)
+        return state
+
+
+def tv_watched_row(background: bool = True, fresh: bool = False) -> dict:
+    """Recently watched as the TV reads it; a stale list is returned at once and re-read on a worker thread.
+    fresh: read Kodi now (the TV asks this when Home comes back, so what was just watched shows at once);
+    at most every 10 seconds, and the saved list when Kodi doesn't answer."""
+    state = tv_watched_load()
+    if fresh and time.time() - state["updated"] > 10:
+        try:
+            return tv_watched_row_from(tv_watched_refresh())
+        except Exception:
+            log.exception("Reading Kodi's recently watched list failed")
+    if time.time() - state["updated"] > TV_WATCHED_REFRESH_SECS:
+        if background and state["items"]:
+            if not _tv_watched_refreshing.locked():
+                threading.Thread(target=tv_watched_refresh, name="tv-watched", daemon=True).start()
+        else:
+            state = tv_watched_refresh()
+    return tv_watched_row_from(state)
+
+
+def tv_watched_row_from(state: dict) -> dict:
+    keys = ("id", "title", "episode_title", "year", "season", "episode", "runtime", "quality", "watched",
+            "progress", "remaining", "movieid", "episodeid", "lastplayed")
+    items = [{k: it.get(k) for k in keys} | {"poster": f"/api/tv/poster?id={it['id']}"} for it in state["items"]]
+    return {"updated": state["updated"], "items": items}
+
+
 class BackgroundWorker:
     """Sends download alerts and runs saved searches while the server is up."""
 
@@ -1884,6 +3470,10 @@ class BackgroundWorker:
     def __init__(self):
         self._seen: set[str] | None = None
         self._next_history = 0.0
+        self._next_drives = time.time() + 60  # first drive check a minute after start-up
+        self._drive_sent: dict[str, float] = {}
+        self._next_tv = 0.0
+        self._next_watched = 0.0
         self._stop = threading.Event()
 
     def start(self) -> None:
@@ -1905,9 +3495,35 @@ class BackgroundWorker:
         if settings["ntfy_url"] and now >= self._next_history:
             self._next_history = now + self.HISTORY_EVERY
             self.check_history(settings)
+        if now >= self._next_tv:
+            self._next_tv = now + TV_REFRESH_SECS
+            try:
+                tv_refresh()
+            except Exception:
+                log.exception("Refreshing the TV row failed")
+        if now >= self._next_watched:
+            self._next_watched = now + TV_WATCHED_REFRESH_SECS
+            try:
+                tv_watched_refresh()
+            except Exception:
+                log.exception("Refreshing the TV's recently watched row failed")
         due = due_saved_search(settings, now)
         if due:  # one per tick spreads indexer API use out
             run_saved_search(due["id"], notify=True)
+        if now >= self._next_drives:
+            self._next_drives = now + DRIVE_CHECK_EVERY
+            self.check_drives(settings, now)
+
+    def check_drives(self, settings: dict, now: float) -> None:
+        """Refreshes drive health (also logging temperatures for the 24 h graph) and sends drive alerts."""
+        report = drive_report(force=True, with_rate=False)
+        if not settings["ntfy_url"]:
+            return
+        for title, message, prio in drive_alerts(report, settings, self._drive_sent, now):
+            try:
+                send_notification(title, message, tags=("floppy_disk",), priority=prio, settings=settings)
+            except UpstreamError as exc:
+                log.warning("Drive alert failed: %s", redact(exc))
 
     def check_history(self, settings: dict) -> None:
         try:
@@ -1955,6 +3571,311 @@ def sab_stats(days: int = 7) -> dict:
         elif status == "failed":
             bucket["failed"] += 1
     return {"totals": {k: to_int(st.get(k)) for k in ("day", "week", "month", "total")}, "days": list(buckets.values())}
+
+
+# ==============================================================================
+# 5d. DRIVE HEALTH
+# ==============================================================================
+# Physical disks, health and SMART-style counters come from Windows (Get-PhysicalDisk and
+# Get-StorageReliabilityCounter) every 10 minutes; free space is read live. Temperatures need the
+# server to run as administrator, or LibreHardwareMonitor's web server (port 8085) to be on.
+
+DRIVE_CHECK_EVERY = 600
+DRIVE_HISTORY_FILE = BASE_DIR / "drive_history.json"
+DRIVE_HISTORY_HOURS = 24
+DRIVE_TEMP_ALERT = 55          # °C for hard drives and SATA SSDs
+DRIVE_NVME_TEMP_EXTRA = 15     # NVMe SSDs are rated hotter (~70 °C)
+DRIVE_WARM_MARGIN = 4          # "running warm" this close to the limit
+DRIVE_LOW_GB = 100
+DRIVE_ALERT_REPEAT = 24 * 3600
+LHM_PORT = 8085
+
+DRIVES_PS = r"""
+$r = @{}
+try { $r.disks = @(Get-PhysicalDisk | ForEach-Object {
+    $rc = $null; try { $rc = $_ | Get-StorageReliabilityCounter -ErrorAction Stop } catch {}
+    @{ id = "$($_.DeviceId)"; name = ("" + $_.FriendlyName).Trim(); media = "$($_.MediaType)"; bus = "$($_.BusType)";
+       size = [double]$_.Size; health = "$($_.HealthStatus)"; spindle = $_.SpindleSpeed;
+       temp = $(if ($rc) { $rc.Temperature } else { $null }); wear = $(if ($rc) { $rc.Wear } else { $null });
+       hours = $(if ($rc) { $rc.PowerOnHours } else { $null });
+       read_errors = $(if ($rc) { $rc.ReadErrorsUncorrected } else { $null }) } }) } catch {}
+try { $r.parts = @(Get-Partition | Where-Object { $_.DriveLetter } | ForEach-Object { @{ disk = "$($_.DiskNumber)"; letter = "$($_.DriveLetter)" } }) } catch {}
+try { $r.volumes = @(Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { @{ letter = "$($_.DriveLetter)"; label = $_.FileSystemLabel } }) } catch {}
+$r | ConvertTo-Json -Compress -Depth 4
+"""
+
+_DRIVE_MEDIA = {"3": "HDD", "4": "SSD", "5": "SCM", "hdd": "HDD", "ssd": "SSD", "scm": "SCM"}
+_DRIVE_BUS = {"7": "USB", "11": "SATA", "17": "NVMe", "10": "SAS", "8": "RAID", "1": "SCSI", "3": "ATA", "12": "SD",
+              "usb": "USB", "sata": "SATA", "nvme": "NVMe", "sas": "SAS", "raid": "RAID", "scsi": "SCSI", "ata": "ATA"}
+_DRIVE_HEALTH = {"0": "Healthy", "1": "Warning", "2": "Unhealthy", "5": "Unknown",
+                 "healthy": "Healthy", "warning": "Warning", "unhealthy": "Unhealthy", "unknown": "Unknown"}
+
+_drive_lock = threading.Lock()
+_drive_state: dict = {"at": 0.0, "inv": None, "error": "", "history": None, "sab_dir": ("", 0.0)}
+
+
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def run_powershell(script: str, timeout: float = 45) -> dict:
+    """Runs a PowerShell script that prints one JSON object (Windows only, no window)."""
+    import subprocess
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+                          capture_output=True, text=True, timeout=timeout, creationflags=flags)
+    out = (proc.stdout or "").strip()
+    if not out:
+        raise UpstreamError((proc.stderr or "PowerShell returned nothing").strip()[:200])
+    data = json.loads(out)
+    return data if isinstance(data, dict) else {}
+
+
+def lhm_drive_temps(port: int = LHM_PORT) -> dict[str, float]:
+    """Drive temperatures from LibreHardwareMonitor's web server, keyed by lower-case drive name."""
+    try:
+        raw = http_fetch(f"http://127.0.0.1:{port}/data.json", timeout=2, max_bytes=4_000_000)
+        tree = json.loads(raw)
+    except Exception:
+        return {}
+    temps: dict[str, float] = {}
+
+    def walk(node, hw_name=""):
+        image = str(node.get("ImageURL") or "").lower()
+        if any(k in image for k in ("hdd", "nvme", "ssd")) and node.get("Text"):
+            hw_name = str(node["Text"]).strip().lower()
+        for child in node.get("Children") or []:
+            if hw_name and str(node.get("Text", "")).lower() == "temperatures":
+                m = re.match(r"\s*([\d.,]+)", str(child.get("Value") or ""))
+                if m and hw_name not in temps:
+                    temps[hw_name] = to_float(m.group(1).replace(",", "."), 0.0)
+            walk(child, hw_name)
+
+    if isinstance(tree, dict):
+        walk(tree)
+    return {k: v for k, v in temps.items() if v > 0}
+
+
+def _drive_inventory() -> dict:
+    """Disks, partitions and volume labels. Windows: PowerShell; elsewhere: the root file system only."""
+    if os.name == "nt":
+        data = run_powershell(DRIVES_PS)
+        return {"disks": _as_list(data.get("disks")), "parts": _as_list(data.get("parts")),
+                "volumes": _as_list(data.get("volumes"))}
+    return {"disks": [{"id": "0", "name": "System disk", "media": "", "bus": "", "size": 0, "health": "Unknown"}],
+            "parts": [{"disk": "0", "letter": "/"}], "volumes": []}
+
+
+def drive_inventory(force: bool = False) -> dict:
+    with _drive_lock:
+        fresh = _drive_state["inv"] is not None and time.time() - _drive_state["at"] < DRIVE_CHECK_EVERY
+        if fresh and not force:
+            return _drive_state["inv"]
+    try:
+        inv = _drive_inventory()
+        err = ""
+    except Exception as exc:  # keep the last good answer when one check fails
+        log.warning("Drive check failed: %s", exc)
+        inv, err = None, f"Could not read drive health ({str(exc)[:120]})."
+    with _drive_lock:
+        if inv is not None:
+            _drive_state.update(inv=inv, at=time.time(), error="")
+        else:
+            _drive_state["error"] = err
+            _drive_state["at"] = time.time()  # don't retry on every request
+        return _drive_state["inv"] or {"disks": [], "parts": [], "volumes": []}
+
+
+def _load_drive_history() -> dict:
+    if _drive_state["history"] is None:
+        try:
+            data = json.loads(DRIVE_HISTORY_FILE.read_text(encoding="utf-8"))
+            _drive_state["history"] = data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            _drive_state["history"] = {}
+    return _drive_state["history"]
+
+
+def record_drive_temps(temps: dict[str, float], now: float | None = None) -> None:
+    """Keeps 24 h of temperature samples per disk (at most one per 10 minutes)."""
+    now = time.time() if now is None else now
+    cutoff = now - DRIVE_HISTORY_HOURS * 3600
+    with _drive_lock:
+        hist = _load_drive_history()
+        changed = False
+        for key, temp in temps.items():
+            pts = [p for p in hist.get(key, []) if isinstance(p, list) and len(p) == 2 and p[0] >= cutoff]
+            if not pts or now - pts[-1][0] >= DRIVE_CHECK_EVERY - 30:
+                pts.append([round(now), round(float(temp), 1)])
+                changed = True
+            hist[key] = pts
+        for key in [k for k, v in hist.items() if not v]:
+            del hist[key]
+        if changed:
+            try:
+                tmp = DRIVE_HISTORY_FILE.with_name(DRIVE_HISTORY_FILE.name + ".tmp")
+                tmp.write_text(json.dumps(hist), encoding="utf-8")
+                os.replace(tmp, DRIVE_HISTORY_FILE)
+            except OSError as exc:
+                log.warning("Could not save drive history: %s", exc)
+
+
+def drive_temp_history(key: str) -> list:
+    with _drive_lock:
+        return list(_load_drive_history().get(key, []))
+
+
+def _letter_of(path: str) -> str:
+    path = str(path or "").strip()
+    if os.name == "nt":
+        return path[0].upper() if len(path) >= 2 and path[1] == ":" else ""
+    return "/" if path.startswith("/") else ""
+
+
+def sab_complete_dir() -> str:
+    """SABnzbd's completed-downloads folder (cached for 10 minutes)."""
+    cached, at = _drive_state["sab_dir"]
+    if time.time() - at < DRIVE_CHECK_EVERY:
+        return cached
+    folder = ""
+    try:
+        misc = sab_request("get_config", {"section": "misc"}, timeout=8).get("config", {}).get("misc", {})
+        folder = str(misc.get("complete_dir") or "")
+    except (UpstreamError, ConfigError):
+        pass
+    _drive_state["sab_dir"] = (folder, time.time())
+    return folder
+
+
+def daily_download_bytes() -> float:
+    """Average bytes SABnzbd finished per day over the last week (0 if unknown)."""
+    try:
+        days = sab_stats(7)["days"]
+    except (UpstreamError, ConfigError, KeyError):
+        return 0.0
+    return sum(d["bytes"] for d in days) / 7.0
+
+
+def drive_temp_limit(bus: str, setting: float = DRIVE_TEMP_ALERT) -> float:
+    return setting + (DRIVE_NVME_TEMP_EXTRA if bus == "NVMe" else 0)
+
+
+def drive_report(force: bool = False, with_rate: bool = True) -> dict:
+    """Everything the Drive Health page shows, newest free space included."""
+    import shutil
+    inv = drive_inventory(force)
+    lhm = lhm_drive_temps() if any(d.get("temp") in (None, "", 0) for d in inv["disks"]) else {}
+    labels = {str(v.get("letter", "")).upper(): str(v.get("label") or "") for v in inv["volumes"]}
+    system = _letter_of(os.environ.get("SystemDrive", "C:") + "\\") if os.name == "nt" else "/"
+    try:
+        cfg_media = [str(x) for x in json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("media_folders", []) or []]
+    except (OSError, ValueError, AttributeError):
+        cfg_media = []
+    media_letters = {_letter_of(p) for p in cfg_media} - {""}
+    sab_letter = _letter_of(sab_complete_dir())
+    rate = daily_download_bytes() if with_rate and sab_letter else 0.0
+
+    drives, temps = [], {}
+    for disk in inv["disks"]:
+        disk_id = str(disk.get("id", ""))
+        letters = sorted({str(p.get("letter", "")).upper() if os.name == "nt" else "/"
+                          for p in inv["parts"] if str(p.get("disk")) == disk_id} - {""})
+        total = free = 0
+        for letter in letters:
+            try:
+                usage = shutil.disk_usage(f"{letter}:\\" if os.name == "nt" else letter)
+                total += usage.total
+                free += usage.free
+            except OSError:
+                pass
+        media = _DRIVE_MEDIA.get(str(disk.get("media", "")).strip().lower(), "")
+        bus = _DRIVE_BUS.get(str(disk.get("bus", "")).strip().lower(), str(disk.get("bus") or ""))
+        if bus == "NVMe":
+            media = "SSD"
+        name = str(disk.get("name") or "Drive")
+        temp = to_float(disk.get("temp"), 0.0) or next(
+            (t for k, t in lhm.items() if k and (k in name.lower() or name.lower() in k)), 0.0)
+        hist_key = f"{disk_id}:{name}"
+        if temp > 0:
+            temps[hist_key] = temp
+        limit = drive_temp_limit(bus)
+        health = _DRIVE_HEALTH.get(str(disk.get("health", "")).strip().lower(), "Unknown")
+        uses = []
+        if system in letters:
+            uses.append("Windows and apps" if os.name == "nt" else "System")
+        if letters and media_letters & set(letters):
+            uses.append("Media library")
+        if sab_letter and sab_letter in letters:
+            uses.append("Finished downloads")
+        problems = []
+        if health in ("Warning", "Unhealthy"):
+            problems.append(("bad" if health == "Unhealthy" else "warn",
+                             f"Windows reports this drive as {health.lower()}. Back up its data."))
+        if temp and temp >= limit:
+            problems.append(("bad", f"Too hot ({temp:.0f}°C, limit {limit:.0f}°C). Check airflow around it."))
+        elif temp and temp >= limit - DRIVE_WARM_MARGIN:
+            problems.append(("warn", f"Running warm ({temp:.0f}°C). Check airflow around it."))
+        if total and free < DRIVE_LOW_GB * 1024 ** 3:
+            problems.append(("warn", f"Only {format_bytes(free)} free."))
+        status = "bad" if any(p[0] == "bad" for p in problems) else ("warn" if problems else
+                                                                      ("ok" if health == "Healthy" else "unknown"))
+        days_left = None
+        if rate > 0 and sab_letter in letters and free:
+            days_left = int(free / rate)
+        drives.append({
+            "key": hist_key, "letters": letters, "name": name,
+            "label": " / ".join(labels.get(x, "") for x in letters if labels.get(x)) or (uses[0] if uses else ""),
+            "media": media, "bus": bus, "size": to_float(disk.get("size")) or total,
+            "total": total, "free": free, "used_pct": round((total - free) * 100 / total) if total else None,
+            "health": health, "status": status, "problems": [p[1] for p in problems],
+            "temp": round(temp) if temp else None, "temp_limit": limit,
+            "hours": to_int(disk.get("hours")) or None,
+            "wear": to_int(disk.get("wear")) if media == "SSD" and disk.get("wear") not in (None, "") else None,
+            "rpm": to_int(disk.get("spindle")) if media == "HDD" and to_int(disk.get("spindle")) > 1 else None,
+            "uses": uses, "days_left": days_left, "daily_bytes": rate if days_left is not None else None,
+        })
+    if temps:
+        record_drive_temps(temps)
+    order = {"bad": 0, "warn": 1, "ok": 2, "unknown": 3}
+    drives.sort(key=lambda d: (order[d["status"]], d["letters"][0] if d["letters"] else "~"))
+    for d in drives:
+        d["history"] = drive_temp_history(d["key"])
+    with _drive_lock:
+        checked, error = _drive_state["at"], _drive_state["error"]
+    return {
+        "drives": drives, "checked": checked or None, "problem": error,  # not "error": the page treats that as a failed request
+        "temps_available": any(d["temp"] for d in drives),
+        "totals": {"free": sum(d["free"] for d in drives), "total": sum(d["total"] for d in drives),
+                   "ok": sum(d["status"] == "ok" for d in drives),
+                   "warn": sum(d["status"] in ("warn", "bad") for d in drives)},
+    }
+
+
+def drive_alerts(report: dict, settings: dict, sent: dict, now: float) -> list[tuple[str, str, int]]:
+    """Alerts due for this report: (title, message, priority). `sent` remembers when each was last sent."""
+    out = []
+    low = settings.get("drive_low_gb", DRIVE_LOW_GB) * 1024 ** 3
+    for d in report["drives"]:
+        name = (", ".join(f"{x}:" for x in d["letters"] if x != "/") + " " if d["letters"] else "") + d["name"]
+        checks = [
+            ("health", settings.get("notify_drive_health"), d["health"] in ("Warning", "Unhealthy"),
+             f"Drive problem: {name}", f"Windows reports {name} as {d['health'].lower()}. Back up its data soon.", 5),
+            ("hot", settings.get("notify_drive_hot"), bool(d["temp"]) and d["temp"] >= d["temp_limit"],
+             f"Drive too hot: {name}", f"{name} is at {d['temp']}°C (limit {d['temp_limit']:.0f}°C).", 4),
+            ("low", settings.get("notify_drive_low"), bool(d["total"]) and d["free"] < low,
+             f"Drive almost full: {name}", f"{name} has only {format_bytes(d['free'])} free.", 3),
+        ]
+        for kind, enabled, bad, title, message, prio in checks:
+            key = f"{kind}:{d['key']}"
+            if not bad:
+                sent.pop(key, None)  # fixed: alert again if it comes back
+                continue
+            if enabled and now - sent.get(key, 0) >= DRIVE_ALERT_REPEAT:
+                sent[key] = now
+                out.append((title, message, prio))
+    return out
 
 
 AUTOSTART_NAME = "NZB Mobile Server.vbs"
@@ -2170,7 +4091,7 @@ PAGE = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="theme-color" content="#060D10">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="theme-color" content="#060D10"><meta name="apple-mobile-web-app-title" content="NZB Center">
 <title>NZB Command Center</title>
 <link rel="manifest" href="/manifest.webmanifest"><link rel="icon" type="image/png" href="/icon.png"><link rel="apple-touch-icon" href="/icon.png">
 <style>
@@ -2275,6 +4196,25 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 .rart small{font:700 9px var(--mono);letter-spacing:.04em;color:var(--soft)}.rart img.art{position:absolute;inset:0}
 .rart.k-tv,.rart.k-app{color:var(--sky)}.rart.k-music{color:var(--purple)}.rart.k-book{color:var(--amber)}.rart.k-game{color:var(--red)}.rart.k-package{color:var(--muted)}
 .tiles.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.drow{display:block;width:100%;border:0;background:transparent;color:inherit;text-align:left;padding:12px 0;border-top:1px solid #10242C;cursor:pointer}.drow:first-of-type{border-top:0;padding-top:2px}
+.dl{display:flex;align-items:center;gap:10px}.dl .lt{font:700 15px var(--mono);width:30px;flex:none}.dl .nm{flex:1;min-width:0;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dl .nm small{font-weight:400;color:var(--soft)}
+.dsub{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--soft);padding-left:40px}.dsub b{color:var(--white);font-weight:600}
+.dbar{height:6px;background:var(--deep);border-radius:3px;overflow:hidden;margin:8px 0 6px 40px}.dbar span{display:block;height:100%;border-radius:3px;background:var(--teal)}
+.tag.bad{background:#2E1215;color:var(--red)}.tag.unk{background:var(--deep);color:var(--muted)}
+.dcard{background:var(--card);border-radius:14px;padding:14px;margin-bottom:12px}
+.dcard .top{display:flex;align-items:center;gap:12px}.dcard .lt{font:800 20px var(--mono);min-width:34px}.dcard .nm{flex:1;min-width:0}.dcard .nm b{display:block;font-size:16px}.dcard .nm span{font-size:12px;color:var(--soft)}
+.dstats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:10px}.dstats div{background:var(--deep);border-radius:9px;padding:8px 4px;text-align:center}.dstats b{display:block;font:700 14px var(--mono)}.dstats span{font-size:10px;color:var(--soft)}
+.dnote{font-size:12px;color:var(--soft);margin-top:10px}.dnote.warn{color:#E9D9A8;background:#211B0B;border-radius:8px;padding:8px 10px}.dnote.bad{color:#FBC7C7;background:#2A1013;border-radius:8px;padding:8px 10px}
+.banner{display:flex;gap:12px;align-items:flex-start;border-radius:14px;padding:14px;margin-bottom:12px}.banner.warn{background:#211B0B;border:1px solid #4A3B10}.banner.bad{background:#2A1013;border:1px solid #5B2328}.banner.ok{background:#0B2420;border:1px solid #14532D}
+.banner b{display:block;font-size:15px}.banner.warn b{color:var(--amber)}.banner.bad b{color:var(--red)}.banner.ok b{color:var(--green)}.banner span{font-size:12px;color:var(--soft)}
+.tgl{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid #10242C;min-height:48px}.tgl:first-child{border-top:0}.tgl input{width:22px;height:22px;accent-color:var(--teal);flex:none}.tgl small{display:block;color:var(--soft);font-size:12px}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--soft);margin-top:8px}.legend i{display:inline-block;width:9px;height:9px;border-radius:5px;margin-right:5px}
+.jgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.jq{background:var(--card);border:0;border-radius:14px;padding:12px;text-align:left;color:var(--white);display:flex;flex-direction:column;gap:5px;min-height:78px;cursor:pointer}
+.jq b{font-size:14px}.jq span{font-size:12px;color:var(--soft)}.jq.main{background:var(--teal);color:var(--ink)}.jq.main span{color:#0B3B36}.jq.on{outline:2px solid var(--teal)}
+.jq .ct{align-self:flex-start;font:700 11px var(--mono);background:var(--teal);color:var(--ink);padding:1px 7px;border-radius:9px}.jq .ct.warn{background:var(--amber)}
+.qual{font:600 11px var(--mono);padding:3px 7px;border-radius:6px;background:var(--deep);color:var(--text)}.qual.lo{background:#2E2410;color:var(--amber)}
+.jnow .meta{font:500 12px var(--mono);color:var(--soft);margin-top:3px}.tag.tx{background:#2E2410;color:var(--amber)}
 .pills{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}.pills button{border:1px solid var(--line);background:transparent;color:var(--text);border-radius:18px;padding:0 14px;min-height:38px;font-size:13px;font-weight:600}.pills button.on{background:var(--teal);color:var(--ink);border-color:var(--teal)}
 </style></head><body>
 <header><div class="brand"><img src="/icon.png" alt="">NZB Command Center</div><div id="statusbar" class="statusbar hidden"><span id="sabpill" class="spill"><i></i>SABnzbd</span></div></header>
@@ -2288,6 +4228,17 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <div class="tiles" id="homeusage"><div class="tile"><div class="k">Today</div><div class="v" id="husday">—</div></div><div class="tile"><div class="k">This week</div><div class="v" id="husweek">—</div></div><div class="tile"><div class="k">This month</div><div class="v" id="husmonth">—</div></div></div>
 <button class="shortcut" data-tab="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search your indexers…</button>
 <div id="homekodi"></div>
+<div id="homedrives"></div>
+</section>
+<section id="jellyfin" class="hidden">
+<div class="row" style="align-items:flex-end"><div><h1>Jellyfin</h1><p class="lede" id="jfstatus">Loading…</p></div><button class="btn ghost sm hidden" id="jfscan" style="flex:none;margin-bottom:14px">Scan libraries</button></div>
+<div id="jfnow"></div>
+<div id="jfbody"></div>
+</section>
+<section id="drives" class="hidden">
+<div class="row" style="justify-content:space-between;margin-top:6px"><button class="btn ghost sm" data-tab="home" style="flex:none">‹ Home</button><button class="btn ghost sm" id="drivecheck" style="flex:none">Check now</button></div>
+<h1>Drive Health</h1><p class="lede" id="drivestatus">Loading…</p>
+<div id="drivebody"></div>
 </section>
 <section id="search" class="hidden">
 <h1>Search</h1><p class="lede">Your indexers, from anywhere at home.</p>
@@ -2324,6 +4275,17 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 </section>
 <section id="kodi" class="hidden">
 <div class="row" style="align-items:flex-end"><div><h1>Kodi</h1><p class="lede" id="kodistatus">Loading…</p></div><button class="btn ghost sm" id="kodiscan" style="flex:none;margin-bottom:14px">Scan library</button></div>
+<div id="tvbox" class="hidden">
+<div class="row" id="tvbtns"><button class="btn" id="tvon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true" style="vertical-align:-3px;margin-right:6px"><path d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>TV on + Kodi</button><button class="btn ghost" id="tvkodi">Open Kodi</button></div>
+<p class="hint" id="tvmsg" style="margin:6px 4px 10px"></p>
+<details class="opts" id="tvsetup"><summary><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="5" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>TV setup<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></summary><div class="body">
+<p class="hint" style="margin:0 0 10px">On the Sony TV: <b>Settings › Network › Remote start › On</b>, then <b>Settings › Network › Home network › IP control › Authentication › “Normal and Pre-Shared Key”</b> and set a <b>Pre-Shared Key</b>.</p>
+<label class="label" for="tvhost">TV address</label><input id="tvhost" class="field" placeholder="192.168.1.40" autocomplete="off" autocapitalize="off" inputmode="url">
+<label class="label" for="tvpsk">Pre-Shared Key</label><input id="tvpsk" class="field" type="password" placeholder="The key you set on the TV" autocomplete="off" autocapitalize="off">
+<label class="label" for="tvmac">TV network (MAC) address <span style="color:var(--muted)">· optional, learned automatically</span></label><input id="tvmac" class="field" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off" autocapitalize="characters">
+<button class="btn full" id="tvsave">Save &amp; test</button>
+</div></details>
+</div>
 <div id="kodinow"></div>
 <details class="remotebox hidden" id="kodiremote"><summary><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="3"/><circle cx="12" cy="8" r="2"/><path d="M10 14h4M10 17h4"/></svg>Remote<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></summary><div class="body">
 <div class="rrow"><button data-kact="seek_back" aria-label="Back 15 seconds">−15s</button><button data-kact="playpause" aria-label="Play or pause">Play / Pause</button><button data-kact="seek_fwd" aria-label="Forward 30 seconds">+30s</button></div>
@@ -2357,6 +4319,7 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <button id="tabsearch" class="tab" data-tab="search"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search</button>
 <button id="tabqueue" class="tab" data-tab="queue"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>Queue<span id="queuecount" class="count hidden"></span></button>
 <button id="tabkodi" class="tab" data-tab="kodi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/></svg>Kodi</button>
+<button id="tabjellyfin" class="tab" data-tab="jellyfin"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9.5 17h-19z"/><path d="M12 10l4 7H8z"/></svg>Jellyfin</button>
 </nav>
 <div id="toast" class="toast hidden" role="status"></div>
 <div id="sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-label="Movie details"><div class="panel" id="sheetpanel"></div></div>
@@ -2381,7 +4344,7 @@ function toast(msg,isErr){const t=$('toast');t.textContent=msg;t.className='toas
 function skeleton(n,lines){let h='';for(let i=0;i<n;i++)h+='<div class="skel">'+'<i style="width:'+(85-i*7)+'%"></i><i style="width:55%"></i>'+(lines>2?'<i style="width:35%"></i>':'')+'</div>';return h}
 function empty(title,hint){return '<div class="empty">'+EMPTY_ICON+'<b>'+esc(title)+'</b>'+esc(hint)+'</div>'}
 
-const API_TIMEOUTS={'/api/search':90000,'/api/add':120000,'/api/add-batch':300000};
+const API_TIMEOUTS={'/api/jellyfin/missing':90000,'/api/jellyfin/upgrades':60000,'/api/jellyfin/connect':30000,'/api/drives':70000,'/api/drives/check':70000,'/api/search':90000,'/api/add':120000,'/api/add-batch':300000};
 async function api(path,body){
   const opt={method:body===undefined?'GET':'POST',headers:{'X-Mobile-Token':token}};
   if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body)}
@@ -2420,7 +4383,7 @@ function fillSearchCategories(keep){
 }
 function fillCategories(cats){sabCats=cats;const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Auto (match)</option><option value="*">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(keep==='*'||cats.includes(keep))sel.value=keep}
 
-function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':t;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi()}
+function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi','drives','jellyfin'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':(t==='drives'?'home':t);document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi();if(t==='drives')refreshDrives();if(t==='jellyfin')refreshJellyfin()}
 
 function savePrefs(){LS.set('nzb_mobile_prefs',JSON.stringify({sort:$('sort').value,minsize:$('minsize').value,maxsize:$('maxsize').value,mingrabs:$('mingrabs').value,indexer:$('indexer').value,prio:$('prio').value,category:$('category').value}));LS.set('nzb_mobile_cat',$('sabcat').value)}
 function loadPrefs(){try{const p=JSON.parse(LS.get('nzb_mobile_prefs','{}'));if(p.sort)$('sort').value=p.sort;if(p.prio!==undefined)$('prio').value=p.prio;if(p.indexer&&[...$('indexer').options].some(o=>o.value===p.indexer))$('indexer').value=p.indexer;['minsize','maxsize','mingrabs'].forEach(k=>{if(p[k]!==undefined)$(k).value=p[k]})}catch{}}
@@ -2635,7 +4598,7 @@ async function refreshHome(){
     $('hfree').innerHTML=d.disk_free_gb!=null&&d.disk_free_gb>=0?esc(Number(d.disk_free_gb).toFixed(0))+' <small>GB</small>':'—';
     const k=d.kodi||{};
     $('homekodi').innerHTML=!k.configured?'':(k.online?nowCard(k.playing,true):'<button class="card kidle" data-tab="kodi">'+ICON.play+'<span>Kodi is offline</span></button>');hydrateArt($('homekodi'));
-    loadHomeUsage();
+    loadHomeUsage();loadHomeDrives();
   }catch(e){$('homestatus').className='lede status error';$('homestatus').textContent=e.message}
   finally{homeBusy=false}
 }
@@ -2650,7 +4613,7 @@ function pumpArt(){
   while(artActive<4&&artQueue.length){
     const j=artQueue.shift();artActive++;
     // "r:<id>" = a search result's poster (the server picks the source); anything else = Kodi artwork.
-    const src=j.ref.startsWith('r:')?'/api/search/art?id='+encodeURIComponent(j.ref.slice(2)):'/api/kodi/art?u='+encodeURIComponent(j.ref);
+    const src=j.ref.startsWith('r:')?'/api/search/art?id='+encodeURIComponent(j.ref.slice(2)):(j.ref.startsWith('j:')?'/api/jellyfin/art?id='+encodeURIComponent(j.ref.slice(2)):'/api/kodi/art?u='+encodeURIComponent(j.ref));
     fetch(src,{headers:{'X-Mobile-Token':token}})
       .then(r=>{if(r.status===404)return null;if(!r.ok)throw new Error('HTTP '+r.status);return r.blob()})
       .then(b=>{if(!b){j.res(null);return}const u=URL.createObjectURL(b);artReady.set(j.ref,u);j.res(u)})  // null = no poster: keep the placeholder, don't ask again
@@ -2734,8 +4697,57 @@ async function renderKodiList(resetPage){
   list.innerHTML=a.slice(0,kodiShown).map(movieRow).join('')||empty(q?'No matches':'Nothing here',q?'Try part of the title.':'No movies fit this view.');hydrateArt(list);
   if(a.length>kodiShown){more.textContent='Show more ('+(a.length-kodiShown)+' left)';more.classList.remove('hidden')}
 }
+
+// ---------- Sony TV: power on + open Kodi ----------
+let tvInfo=null,tvPolling=false;
+async function loadTv(){try{tvInfo=await api('/api/tv')}catch{tvInfo=null}renderTv()}
+function tvSay(t,bad){const m=$('tvmsg');m.textContent=t||'';m.style.color=bad?'var(--red, #ff6b6b)':''}
+function renderTv(){
+  const box=$('tvbox');if(!tvInfo){box.classList.add('hidden');return}
+  box.classList.remove('hidden');
+  $('tvbtns').classList.toggle('hidden',!tvInfo.configured);
+  const ts=$('tvsetup');if(!tvInfo.configured&&!ts.dataset.seen){ts.open=true;ts.dataset.seen='1';ts.dataset.auto='1'}else if(tvInfo.configured&&ts.dataset.auto){ts.open=false;delete ts.dataset.auto}
+  const h=$('tvhost');if(document.activeElement!==h)h.value=tvInfo.host||'';
+  const mc=$('tvmac');if(document.activeElement!==mc)mc.value=tvInfo.mac||'';
+  h.placeholder=tvInfo.auto_host?'Same as Kodi ('+tvInfo.auto_host+')':'192.168.1.40';
+  $('tvpsk').placeholder=tvInfo.psk_set?'•••••• saved (leave blank to keep)':'The key you set on the TV';
+  if(tvPolling)return;
+  if(!tvInfo.configured){tvSay('Set up TV control below to turn the TV on from here.');return}
+  if(tvInfo.error){tvSay(tvInfo.error,true);return}
+  tvSay({on:'TV is on.',standby:'TV is in standby.',off:'TV is off or unreachable.'}[tvInfo.power]||'')
+}
+function tvBusy(b){$('tvon').disabled=b;$('tvkodi').disabled=b}
+async function tvOn(){
+  tvBusy(true);tvPolling=true;tvSay('Turning the TV on…');
+  try{await api('/api/tv/on',{kodi:true})}catch(e){tvPolling=false;tvBusy(false);tvSay(e.message,true);return}
+  const t0=Date.now();
+  while(Date.now()-t0<150000){
+    await new Promise(r=>setTimeout(r,2000));
+    let j;try{j=(await api('/api/tv/job')).job}catch{continue}
+    tvSay(j.message,j.state==='error');
+    if(j.state==='done'){toast(j.message);break}
+    if(j.state==='error'){toast(j.message,true);break}
+  }
+  tvPolling=false;tvBusy(false);
+  if(activeTab==='kodi')refreshKodi()
+}
+async function tvKodi(){
+  tvBusy(true);tvSay('Opening Kodi…');
+  try{await api('/api/tv/kodi',{});toast('Opening Kodi on the TV…');setTimeout(()=>{if(activeTab==='kodi')refreshKodi()},4000)}
+  catch(e){tvSay(e.message,true);toast(e.message,true)}
+  finally{tvBusy(false)}
+}
+async function tvSave(){
+  const b=$('tvsave');b.disabled=true;
+  try{
+    tvInfo=await api('/api/tv/settings',{host:$('tvhost').value.trim(),psk:$('tvpsk').value.trim(),mac:$('tvmac').value.trim()});
+    $('tvpsk').value='';renderTv();
+    if(tvInfo.configured&&!tvInfo.error){toast('TV connected');$('tvsetup').open=false}
+    else if(tvInfo.error)toast(tvInfo.error,true);
+  }catch(e){toast(e.message,true)}finally{b.disabled=false}
+}
 async function refreshKodi(){
-  const st=$('kodistatus');
+  const st=$('kodistatus');loadTv();
   try{
     const d=await api('/api/kodi');
     const off=()=>{$('kodinow').innerHTML='';['kodilib','kodiTV','kodiseg','kodiremote'].forEach(id=>$(id).classList.add('hidden'));kodiOnline=false};
@@ -2868,6 +4880,203 @@ async function loadHomeUsage(){
   if(Date.now()-usageAt<60000)return;usageAt=Date.now();
   try{const t=(await api('/api/stats')).totals||{};$('husday').textContent=fmtBytes(t.day);$('husweek').textContent=fmtBytes(t.week);$('husmonth').textContent=fmtBytes(t.month)}catch{}
 }
+// ---------- Drive Health ----------
+let drivesAt=0,drivesData=null,drivesBusy=false;
+const DCOL=['#A78BFA','#38BDF8','#F59E0B','#F472B6','#34D399','#FB7185'];
+function dLetters(d){return d.letters.filter(x=>x!=='/').map(x=>x+':').join(' ')}
+function dTag(d){const t={ok:['ok','HEALTHY'],warn:['warn',d.temp&&d.temp>=d.temp_limit-4?'RUNNING WARM':'NEEDS A LOOK'],bad:['bad',d.health==='Unhealthy'||d.health==='Warning'?'PROBLEM':'TOO HOT'],unknown:['unk','UNKNOWN']}[d.status]||['unk','UNKNOWN'];return '<span class="tag '+t[0]+'" style="flex:none">'+t[1]+'</span>'}
+function dKind(d){return [d.media,d.bus].filter(Boolean).join(' · ')+(d.size?(d.media||d.bus?' · ':'')+fmtBytes(d.size):'')}
+function dBarColor(d){return d.used_pct>=90?'var(--red)':(d.used_pct>=75?'#F59E0B':'var(--teal)')}
+function dYears(h){if(!h)return '—';const y=h/8766;return y>=1?y.toFixed(1)+' yr':(h>=48?Math.round(h/24)+' d':h+' h')}
+function dTitle(d){return esc(d.label||d.name)}
+async function loadHomeDrives(force){
+  if(!force&&Date.now()-drivesAt<120000){if(drivesData)renderHomeDrives(drivesData);return}
+  drivesAt=Date.now();
+  try{drivesData=await api('/api/drives');renderHomeDrives(drivesData)}catch{}
+}
+function renderHomeDrives(r){
+  const box=$('homedrives');if(!r||!r.drives||!r.drives.length){box.innerHTML='';return}
+  const n=r.totals.warn;
+  box.innerHTML='<div class="row" style="justify-content:space-between;margin:18px 4px 8px"><div class="section" style="margin:0;flex:none">DRIVES</div>'+(n?'<span class="tag warn" style="flex:none">'+n+' NEED'+(n===1?'S':'')+' A LOOK</span>':'<span class="tag ok" style="flex:none">ALL HEALTHY</span>')+'</div><div class="card">'+
+    r.drives.map(d=>'<button class="drow" data-tab="drives"><div class="dl"><span class="lt">'+esc(dLetters(d)||'—')+'</span><span class="nm">'+dTitle(d)+' <small>· '+esc(dKind(d))+'</small></span>'+dTag(d)+'</div>'+
+      (d.total?'<div class="dbar"><span style="width:'+clampPct(d.used_pct)+'%;background:'+dBarColor(d)+'"></span></div>':'')+
+      '<div class="dsub"><span><b>'+esc(fmtBytes(d.free))+' free</b>'+(d.days_left!=null?' · ~'+esc(d.days_left)+' days left':(d.wear!=null?' · SSD wear '+esc(d.wear)+'%':''))+'</span><span style="font-family:var(--mono)'+(d.temp&&d.temp>=d.temp_limit-4?';color:var(--amber)':'')+'">'+(d.temp?esc(d.temp)+'°C':'')+'</span></div></button>').join('')+'</div>';
+}
+function tempChart(drives){
+  const series=drives.map((d,i)=>({d,c:DCOL[i%DCOL.length],pts:(d.history||[])})).filter(s=>s.pts.length>1);
+  if(!series.length)return '';
+  const now=Date.now()/1000,start=now-86400;let lo=Infinity,hi=-Infinity;
+  series.forEach(s=>s.pts.forEach(p=>{lo=Math.min(lo,p[1]);hi=Math.max(hi,p[1])}));
+  const limit=Math.min(...series.map(s=>s.d.temp_limit));hi=Math.max(hi,limit)+2;lo=Math.max(0,lo-5);
+  const W=330,H=110,x=t=>((t-start)/86400*W).toFixed(1),y=v=>(H-(v-lo)/(hi-lo)*H).toFixed(1);
+  const lines=series.map(s=>'<polyline fill="none" stroke="'+s.c+'" stroke-width="2" stroke-linejoin="round" points="'+s.pts.map(p=>x(p[0])+','+y(p[1])).join(' ')+'"/>').join('');
+  return '<div class="section">TEMPERATURES · 24 H</div><div class="card"><svg width="100%" height="110" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" role="img" aria-label="Drive temperatures over the last 24 hours"><line x1="0" x2="'+W+'" y1="'+y(limit)+'" y2="'+y(limit)+'" stroke="#6B5414" stroke-dasharray="4 4"/>'+lines+'</svg>'+
+    '<div class="legend">'+series.map(s=>'<span><i style="background:'+s.c+'"></i>'+esc((dLetters(s.d)?dLetters(s.d)+' ':'')+(s.d.label||s.d.name))+'</span>').join('')+'<span style="margin-left:auto;color:#D6C7A0">- - '+esc(Math.round(limit))+'°C alert</span></div></div>';
+}
+function driveCard(d){
+  const stats=[[d.temp?d.temp+'°C':'—','Temp'],[dYears(d.hours),'Powered on']];
+  if(d.wear!=null)stats.push([d.wear+'%','SSD wear']);else if(d.rpm)stats.push([d.rpm,'RPM']);else stats.push([d.used_pct!=null?d.used_pct+'%':'—','Used']);
+  stats.push(d.days_left!=null?['~'+d.days_left,'Days left']:[fmtBytes(d.total),'Capacity']);
+  const notes=d.problems.map(p=>'<div class="dnote '+(d.status==='bad'?'bad':'warn')+'">'+esc(p)+'</div>').join('');
+  const info=d.days_left!=null?'<div class="dnote warn">About <b>'+esc(d.days_left)+' days</b> of space left at your pace ('+esc(fmtBytes(d.daily_bytes))+'/day).</div>':'';
+  return '<div class="dcard"><div class="top"><span class="lt">'+esc(dLetters(d)||'—')+'</span><div class="nm"><b>'+dTitle(d)+'</b><span>'+esc(d.name)+(dKind(d)?' · '+esc(dKind(d)):'')+'</span></div>'+dTag(d)+'</div>'+
+    (d.total?'<div class="row" style="justify-content:space-between;margin-top:12px;font-size:13px"><b style="flex:none">'+esc(fmtBytes(d.free))+' free of '+esc(fmtBytes(d.total))+'</b><span style="flex:none;font:500 12px var(--mono);color:var(--soft)">'+esc(d.used_pct)+'% used</span></div><div class="bar" style="height:8px;margin:6px 0 0"><span style="width:'+clampPct(d.used_pct)+'%;background:'+dBarColor(d)+'"></span></div>':'')+
+    '<div class="dstats">'+stats.map(s=>'<div><b>'+esc(s[0])+'</b><span>'+esc(s[1])+'</span></div>').join('')+'</div>'+
+    notes+(notes?'':info)+(d.uses.length?'<div class="dnote">'+esc(d.uses.join(' · '))+(d.temp?' · alert at '+esc(Math.round(d.temp_limit))+'°C':'')+'</div>':'')+'</div>';
+}
+function renderDrives(r){
+  drivesData=r;const t=r.totals,ds=r.drives;
+  const ago=r.checked?Math.max(0,Math.round((Date.now()/1000-r.checked)/60)):null;
+  $('drivestatus').textContent=ds.length+' drive'+(ds.length===1?'':'s')+(ago!=null?' · checked '+(ago<1?'just now':ago+' min ago'):'');
+  if(!ds.length){$('drivebody').innerHTML=empty('No drives found',r.problem||'Windows did not report any drives.');return}
+  const worst=ds.find(d=>d.status==='bad')||ds.find(d=>d.status==='warn');
+  const banner=worst?'<div class="banner '+worst.status+'"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="color:'+(worst.status==='bad'?'var(--red)':'var(--amber)')+';flex:none" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg><div><b>'+t.warn+' drive'+(t.warn===1?' needs':'s need')+' a look</b><span>'+esc((dLetters(worst)?dLetters(worst)+' ':'')+(worst.label||worst.name)+': '+(worst.problems[0]||''))+'</span></div></div>'
+    :'<div class="banner ok"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex:none" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg><div><b>All drives healthy</b><span>Windows reports no problems.</span></div></div>';
+  const tiles='<div class="tiles"><div class="tile"><div class="k">Healthy</div><div class="v" style="color:var(--green)">'+t.ok+'</div></div><div class="tile"><div class="k">Need a look</div><div class="v" style="color:'+(t.warn?'var(--amber)':'var(--soft)')+'">'+t.warn+'</div></div><div class="tile"><div class="k">Free of '+esc(fmtBytes(t.total))+'</div><div class="v">'+esc(fmtBytes(t.free))+'</div></div></div>';
+  const tempHint=r.temps_available?'':'<p class="hint" style="margin:0 4px 12px">Temperatures and powered-on hours need NZB Mobile Server to run as administrator, or LibreHardwareMonitor running with its web server on (port 8085).</p>';
+  const a=r.alerts||{};
+  const alerts='<div class="section">ALERTS TO MY PHONE</div><div class="card" id="drivealerts">'+
+    '<label class="tgl"><span>Health changes<small>Windows reports a drive problem</small></span><input type="checkbox" data-dalert="notify_drive_health"'+(a.health?' checked':'')+'></label>'+
+    '<label class="tgl"><span>Too hot<small>Hard drives '+esc(r.temp_alert)+'°C · NVMe '+esc(r.nvme_temp_alert)+'°C</small></span><input type="checkbox" data-dalert="notify_drive_hot"'+(a.hot?' checked':'')+'></label>'+
+    '<label class="tgl"><span>Less than '+esc(a.low_gb||100)+' GB free</span><input type="checkbox" data-dalert="notify_drive_low"'+(a.low?' checked':'')+'></label>'+
+    (a.ready?'':'<p class="hint" style="margin:8px 0 0">Phone alerts aren\'t set up yet: they use ntfy, the same as download alerts.</p>')+'</div>';
+  $('drivebody').innerHTML=banner+tiles+tempHint+'<div class="section">ALL DRIVES</div>'+ds.map(driveCard).join('')+tempChart(ds)+alerts+(r.problem?'<p class="hint">'+esc(r.problem)+'</p>':'');
+  renderHomeDrives(r);
+}
+async function refreshDrives(force){
+  if(drivesBusy)return;drivesBusy=true;
+  if(!drivesData){$('drivebody').innerHTML=skeleton(3,3)}else renderDrives(drivesData);
+  const b=$('drivecheck');if(force){b.disabled=true;b.textContent='Checking…'}
+  try{renderDrives(await api(force?'/api/drives/check':'/api/drives',force?{}:undefined));drivesAt=Date.now();if(force)toast('Drives checked')}
+  catch(e){if(!drivesData)$('drivebody').innerHTML=empty('Couldn\'t read your drives',e.message);else toast(e.message,true)}
+  finally{drivesBusy=false;b.disabled=false;b.textContent='Check now'}
+}
+async function setDriveAlert(key,on){try{const body={};body[key]=on;renderDrives(await api('/api/drives/alerts',body));toast(on?'Alert turned on':'Alert turned off')}catch(e){toast(e.message,true)}}
+
+// ---------- Jellyfin ----------
+let jf=null,jfMode='',jfBusy=false,jfMissing=null,jfUp=null,jfResults=null,jfQuery='',jfConnectOpen=false;
+const JF_ICON='<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9.5 17h-19z"/><path d="M12 10l4 7H8z"/></svg>';
+function jfNowCard(x){
+  const pp=x.paused?ICON.play:ICON.pause;
+  return '<div class="hero jnow"><div class="nowrow"><div class="pthumb">'+artTag(x.poster)+'</div><div class="info"><div class="row" style="justify-content:space-between"><div class="kode" style="flex:1">'+(x.paused?'PAUSED':'NOW PLAYING')+'</div>'+(x.method==='Transcoding'?'<span class="tag tx" style="flex:none">TRANSCODING</span>':'')+'</div><div class="name">'+esc(x.title)+'</div>'+(x.sub?'<div class="sub">'+esc(x.sub)+'</div>':'')+
+    '<div class="meta">'+esc([x.user,x.device,x.method==='Transcoding'?'':x.method,x.quality].filter(Boolean).join(' · '))+'</div></div></div>'+
+    '<div class="bar"><span style="width:'+clampPct(x.pct)+'%"></span></div><div class="ctrls"><span class="tm">'+fmtTime(x.time)+' / '+fmtTime(x.total)+'</span>'+
+    '<button class="round" data-jact="stop" data-sid="'+esc(x.session)+'" aria-label="Stop"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>'+
+    '<button class="round main" data-jact="playpause" data-sid="'+esc(x.session)+'" aria-label="'+(x.paused?'Play':'Pause')+'">'+pp+'</button></div></div>';
+}
+function renderJfNow(list){const box=$('jfnow');box.innerHTML=(list||[]).map(jfNowCard).join('');hydrateArt(box)}
+async function refreshJfNow(){if(!jf||!jf.online)return;try{renderJfNow((await api('/api/jellyfin/now')).sessions)}catch{}}
+function jfConnectForm(prefill){
+  return '<div class="card"><div class="kode" style="margin-bottom:10px">CONNECT JELLYFIN</div>'+
+    '<div id="jffound"><button class="btn ghost sm full" id="jffind">Find Jellyfin on my network</button></div>'+
+    '<label class="label" for="jfurl" style="margin-top:12px">Server address</label><input id="jfurl" class="field" placeholder="http://192.168.68.60:8096" autocomplete="off" autocapitalize="off" autocorrect="off" inputmode="url" value="'+esc(prefill||'')+'">'+
+    '<label class="label" for="jfkey">API key</label><input id="jfkey" class="field" type="password" placeholder="From Jellyfin: Dashboard → API Keys → +" autocomplete="off" autocapitalize="off" autocorrect="off">'+
+    '<button class="btn full" id="jfsave">Test &amp; save</button><p class="hint" style="margin:10px 2px 0">In Jellyfin open Dashboard → API Keys, tap +, name it “NZB Command Center” and copy the key. You can also set it up in the desktop app (Media Server tab).</p></div>';
+}
+function jfQuick(){
+  const c=jf.counts||{};
+  const q=(mode,title,sub,ct,cls)=>'<button class="jq'+(jfMode===mode?' on':'')+'" data-jmode="'+mode+'">'+(ct!=null?'<span class="ct'+(cls?' '+cls:'')+'">'+esc(ct)+'</span>':'')+'<b>'+title+'</b><span>'+sub+'</span></button>';
+  return '<div class="jgrid">'+q('missing','Missing episodes','Gaps in your shows',jfMissing?jfMissing.reduce((n,x)=>n+x.missing.length,0):null,'')+q('upgrades','Low quality','Movies below 1080p',jfUp?jfUp.length:null,'warn')+'</div>';
+}
+function jfItemRow(x){
+  const tap=x.type==='Series'?' data-jshow="'+esc(x.id)+'"':' data-jmovie="'+esc(x.id)+'"';
+  const meta=x.type==='Series'?[x.year,x.episodes?x.episodes+' episodes':'','TV show'].filter(Boolean).join(' · '):[x.year,x.size?fmtBytes(x.size):'',x.watched?'watched':(x.resume?'resume at '+fmtTime(x.resume):'')].filter(Boolean).join(' · ');
+  return '<div class="qrow"><button class="pthumb"'+tap+' aria-label="Details for '+esc(x.title)+'">'+artTag(x.poster)+'</button><div class="info tap"'+tap+'><div class="t">'+esc(x.title)+'</div><div class="m">'+esc(meta)+'</div>'+(x.type==='Movie'?'<div class="rl"><span class="badge lib">✓ In Jellyfin</span>'+(x.quality?'<span class="qual'+(x.quality==='SD'||x.quality==='720p'?' lo':'')+'">'+esc(x.quality)+'</span>':'')+'</div>':'')+'</div>'+
+    (x.type==='Movie'?'<button class="btn ghost sm" style="flex:none" data-jbetter="'+esc(x.title+(x.year?' '+x.year:''))+'">'+(x.quality==='2160p'?'Search':'Better copy')+'</button>':'')+'</div>';
+}
+function jfMissingRow(x){
+  const eps=x.missing.map(n=>'E'+String(n).padStart(2,'0')),q=x.show+' S'+String(x.season).padStart(2,'0')+(x.missing.length===1?'E'+String(x.missing[0]).padStart(2,'0'):'');
+  return '<div class="miss"><span data-jshow="'+esc(x.show_id)+'" style="cursor:pointer"><b>'+esc(x.show)+'</b> · Season '+esc(x.season)+'<br>Missing '+esc(eps.slice(0,12).join(', ')+(eps.length>12?' …':''))+'</span><button class="btn sm" data-tvsearch="'+esc(q)+'">Search</button></div>';
+}
+async function jfList(){
+  const box=$('jflist');if(!box)return;
+  if(jfMode==='search'){
+    if(jfResults===null){box.innerHTML=skeleton(3,2);try{jfResults=(await api('/api/jellyfin/search?q='+encodeURIComponent(jfQuery))).items||[]}catch(e){box.innerHTML=empty('Search failed',e.message);return}}
+    box.innerHTML='<div class="section">'+jfResults.length+' IN YOUR LIBRARY</div>'+(jfResults.map(jfItemRow).join('')||empty('Not in Jellyfin','You don\'t have “'+jfQuery+'” yet.'))+
+      '<button class="btn ghost full" data-jbetter="'+esc(jfQuery)+'" data-jcat="" style="margin-top:4px">Search your indexers for “'+esc(jfQuery)+'”</button>';
+    hydrateArt(box);return;
+  }
+  if(jfMode==='missing'){
+    if(jfMissing===null){box.innerHTML='<div class="section">CHECKING YOUR SHOWS…</div>'+skeleton(4,2);try{jfMissing=(await api('/api/jellyfin/missing')).missing||[]}catch(e){box.innerHTML=empty('Couldn\'t check',e.message);return}renderJellyfin();return}
+    box.innerHTML='<div class="section">'+jfMissing.length+' SEASON'+(jfMissing.length===1?'':'S')+' WITH GAPS</div>'+(jfMissing.slice(0,80).map(jfMissingRow).join('')||empty('No gaps found','Every season has all its episodes up to the newest one you have.'));return;
+  }
+  if(jfMode==='upgrades'){
+    if(jfUp===null){box.innerHTML='<div class="section">CHECKING QUALITY…</div>'+skeleton(4,2);try{jfUp=(await api('/api/jellyfin/upgrades')).movies||[]}catch(e){box.innerHTML=empty('Couldn\'t check',e.message);return}renderJellyfin();return}
+    box.innerHTML='<div class="section">'+jfUp.length+' MOVIE'+(jfUp.length===1?'':'S')+' BELOW 1080P</div>'+(jfUp.slice(0,100).map(jfItemRow).join('')||empty('All good','Every movie is 1080p or better.'));hydrateArt(box);return;
+  }
+  const r=jf.recent||[];
+  box.innerHTML=r.length?'<div class="section">RECENTLY ADDED</div><div class="cw">'+r.map(x=>{const tap=x.type==='Episode'?' data-jshow="'+esc(x.show_id)+'"':' data-jmovie="'+esc(x.id)+'"';return '<button class="citem"'+tap+'><div class="ph">'+artTag(x.poster)+'</div><div class="t">'+esc(x.type==='Episode'?x.show:x.title)+'</div><div class="m">'+esc(x.type==='Episode'?'S'+String(x.season).padStart(2,'0')+'E'+String(x.episode).padStart(2,'0'):(x.year||''))+'</div></button>'}).join('')+'</div>':'';
+  hydrateArt(box);
+}
+function renderJellyfin(){
+  const st=$('jfstatus'),body=$('jfbody');$('jfscan').classList.toggle('hidden',!(jf&&jf.online));
+  if(!jf||!jf.configured){st.className='lede';st.textContent='Not connected yet.';$('jfnow').innerHTML='';body.innerHTML=jfConnectForm('');return}
+  if(!jf.online){st.className='lede status error';st.textContent=jf.problem||'Jellyfin is offline';$('jfnow').innerHTML='';
+    const badKey=/HTTP 40[13]/.test(jf.problem||'');
+    body.innerHTML='<div class="card kidle">'+JF_ICON+'<span>'+(badKey?'Jellyfin at '+esc(jf.url)+' refused the API key'+(jf.source==='desktop'?' saved in the desktop app':'')+'. Enter a current key below.':'Can\'t reach Jellyfin at '+esc(jf.url)+'. Is the server on?')+'</span></div>'+((jfConnectOpen||badKey)?jfConnectForm(jf.url):'<button class="btn ghost full" id="jfchange">Change connection</button>');return}
+  st.className='lede';const c=jf.counts;
+  st.textContent=[jf.server+(jf.version?' · v'+jf.version:''),jf.ms+' ms',c?c.movies+' movie'+(c.movies===1?'':'s')+' · '+c.shows+' show'+(c.shows===1?'':'s'):''].filter(Boolean).join(' · ');
+  renderJfNow(jf.sessions);
+  const nothing=(jf.sessions||[]).length?'':'<div class="card kidle">'+ICON.play+'<span>Nothing playing on Jellyfin right now.</span></div>';
+  body.innerHTML=nothing+'<label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="jfq" placeholder="Do I already have it?" enterkeyhint="search" autocomplete="off" aria-label="Search your Jellyfin library" value="'+esc(jfQuery)+'"></label>'+
+    jfQuick()+'<div id="jflist"></div>'+
+    '<details class="opts" style="margin-top:14px"><summary>Connection<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></summary><div class="body"><p class="hint" style="margin:0 0 10px">'+esc(jf.url)+' · set up '+(jf.source==='phone'?'from this phone':'in the desktop app')+'</p>'+
+    (jf.source==='phone'?'<button class="btn danger sm full" id="jfforget">Disconnect</button>':'')+(jfConnectOpen?jfConnectForm(''):'<button class="btn ghost sm full" id="jfchange" style="margin-top:8px">Connect a different server</button>')+'</div></details>';
+  jfList();
+}
+async function refreshJellyfin(){
+  if(jfBusy)return;jfBusy=true;
+  if(!jf){$('jfbody').innerHTML=skeleton(3,2)}
+  try{jf=await api('/api/jellyfin');renderJellyfin()}
+  catch(e){$('jfstatus').className='lede status error';$('jfstatus').textContent=e.message;if(!jf)$('jfbody').innerHTML=''}
+  finally{jfBusy=false}
+}
+async function jfAction(sid,action){try{await api('/api/jellyfin/control',{session:sid,action});setTimeout(refreshJfNow,500)}catch(e){toast(e.message,true)}}
+async function jfScan(){const b=$('jfscan');b.disabled=true;try{await api('/api/jellyfin/scan',{});jfMissing=null;jfUp=null;toast('Library scan started on Jellyfin')}catch(e){toast(e.message,true)}finally{b.disabled=false}}
+async function jfFind(){
+  const box=$('jffound');box.innerHTML='<p class="hint" style="margin:0">Looking on your network…</p>';
+  try{const d=await api('/api/jellyfin/discover');const sv=d.servers||[];
+    box.innerHTML=sv.length?'<div class="kode" style="margin-bottom:6px">FOUND ON YOUR NETWORK</div>'+sv.map(x=>'<button class="shortcut" data-jpick="'+esc(x.url)+'" style="color:var(--white)"><span style="flex:1"><b>'+esc(x.name)+'</b><br><small style="font-family:var(--mono);color:var(--soft)">'+esc(x.url)+'</small></span><span style="color:var(--teal);font-weight:700;font-size:13px">Use this</span></button>').join(''):'<p class="hint" style="margin:0">None found. Type the address below (the PC running Jellyfin, port 8096).</p>'}
+  catch(e){box.innerHTML='<p class="hint" style="margin:0">'+esc(e.message)+'</p>'}
+}
+async function jfSave(){
+  const b=$('jfsave');b.disabled=true;b.textContent='Testing…';
+  try{jf=await api('/api/jellyfin/connect',{url:$('jfurl').value.trim(),key:$('jfkey').value.trim()});jfConnectOpen=false;jfMissing=jfUp=jfResults=null;renderJellyfin();toast('Connected to Jellyfin')}
+  catch(e){toast(e.message,true);b.disabled=false;b.textContent='Test & save'}
+}
+async function jfForget(){if(!confirm('Disconnect the Jellyfin server set up on this phone?'))return;try{jf=await api('/api/jellyfin/forget',{});jfMissing=jfUp=jfResults=null;renderJellyfin()}catch(e){toast(e.message,true)}}
+async function openJfShow(id){
+  const panel=$('sheetpanel');
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button><div class="empty"><b>Loading…</b></div>';
+  $('sheet').classList.remove('hidden');document.body.style.overflow='hidden';
+  if(!sheetOpen){sheetOpen=true;try{history.pushState({sheet:1},'')}catch{}}
+  let d;try{d=await api('/api/jellyfin/show?id='+encodeURIComponent(id))}catch(e){panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button>'+empty('Couldn\'t load this show',e.message);return}
+  const n=d.next,openSeason=n?n.season:((d.seasons.find(s=>s.missing.length)||d.seasons[d.seasons.length-1]||{}).season);
+  const totalMiss=d.seasons.reduce((a,s)=>a+s.missing.length,0);
+  const seasons=d.seasons.map(s=>{
+    const w=s.episodes.filter(e=>e.watched).length,name=s.season===0?'Specials':'Season '+s.season;
+    const miss=s.missing.length?'<div class="miss"><span>Missing '+esc(s.missing.map(x=>'E'+String(x).padStart(2,'0')).join(', '))+'</span><button class="btn sm" data-tvsearch="'+esc(d.title+' S'+String(s.season).padStart(2,'0')+(s.missing.length===1?'E'+String(s.missing[0]).padStart(2,'0'):''))+'">Search</button></div>':'';
+    const rows=s.episodes.map(e=>'<div class="eprow'+(e.watched?' w':'')+'"><span class="n">E'+String(e.episode).padStart(2,'0')+'</span><div class="info"><div class="t">'+esc(e.title)+'</div><div class="m">'+esc([e.aired,runtimeText(e.runtime),e.watched?'watched':''].filter(Boolean).join(' · '))+'</div></div></div>').join('');
+    return '<details class="season"'+(s.season===openSeason?' open':'')+'><summary>'+esc(name)+'<span class="m">'+w+'/'+s.episodes.length+' watched'+(s.missing.length?' · '+s.missing.length+' missing':'')+'</span></summary>'+miss+rows+'</details>';
+  }).join('');
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button><div class="fan" style="aspect-ratio:3/1"></div>'+
+    '<div class="dhead"><button class="dposter" data-view="'+esc(d.poster)+'" aria-label="View poster full size">'+artTag(d.poster)+'</button><div class="dtitle"><h2>'+esc(d.title)+'</h2><div class="m">'+esc([d.year,d.episodes+' episodes',d.watched+' watched',totalMiss?totalMiss+' missing':''].filter(Boolean).join(' · '))+'</div></div></div>'+
+    ((d.genres||[]).length?'<div class="chips">'+d.genres.map(g=>'<span class="chip">'+esc(g)+'</span>').join('')+'</div>':'')+
+    '<div class="dbody">'+(d.plot?'<p class="plot">'+esc(d.plot)+'</p>':'')+(n?'<p class="hint">Next up: <b style="color:var(--white)">'+esc(epCode(n))+' · '+esc(n.title)+'</b></p>':'')+
+    (totalMiss>1?'<button class="btn full" data-tvsearch="'+esc(d.title)+'" style="margin-bottom:6px">Search for this show</button>':'')+'<div style="margin-top:8px">'+seasons+'</div></div>';
+  panel.scrollTop=0;hydrateArt(panel);
+}
+function openJfMovie(id){
+  const pool=[].concat(jf&&jf.recent||[],jfResults||[],jfUp||[]),x=pool.find(m=>m.id===id);if(!x)return;
+  const panel=$('sheetpanel');
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button><div class="fan" style="aspect-ratio:3/1"></div><div class="dhead"><button class="dposter" data-view="'+esc(x.poster)+'" aria-label="View poster full size">'+artTag(x.poster)+'</button><div class="dtitle"><h2>'+esc(x.title)+'</h2><div class="m">'+esc([x.year,runtimeText(x.runtime)].filter(Boolean).join(' · '))+'</div></div></div>'+
+    '<div class="dbody"><div class="rl" style="margin:14px 0"><span class="badge lib">✓ In Jellyfin</span>'+(x.quality?'<span class="qual'+(x.quality==='SD'||x.quality==='720p'?' lo':'')+'">'+esc(x.quality)+'</span>':'')+(x.size?'<span class="rc">'+esc(fmtBytes(x.size))+'</span>':'')+(x.watched?'<span class="rc">watched</span>':'')+'</div>'+
+    '<button class="btn full" data-jbetter="'+esc(x.title+(x.year?' '+x.year:''))+'">Find a better copy</button></div>';
+  $('sheet').classList.remove('hidden');document.body.style.overflow='hidden';
+  if(!sheetOpen){sheetOpen=true;try{history.pushState({sheet:1},'')}catch{}}
+  hydrateArt(panel);
+}
+
 async function kodiScan(){
   const b=$('kodiscan');b.disabled=true;
   try{await api('/api/kodi/scan',{});kodiMovies=null;toast('Library scan started on Kodi')}catch(e){toast(e.message,true)}finally{b.disabled=false}
@@ -2893,6 +5102,24 @@ async function watchFinished(){
 }
 function bind(){
   $('pairbtn').addEventListener('click',pair);
+  $('drivecheck').addEventListener('click',()=>refreshDrives(true));
+  $('jfscan').addEventListener('click',jfScan);
+  $('jellyfin').addEventListener('click',e=>{
+    const a=e.target.closest('[data-jact]');if(a)return jfAction(a.dataset.sid,a.dataset.jact);
+    const m=e.target.closest('[data-jmode]');if(m){jfMode=jfMode===m.dataset.jmode?'':m.dataset.jmode;return renderJellyfin()}
+    const pk=e.target.closest('[data-jpick]');if(pk){$('jfurl').value=pk.dataset.jpick;$('jfkey').focus();return}
+    if(e.target.closest('#jffind'))return jfFind();
+    if(e.target.closest('#jfsave'))return jfSave();
+    if(e.target.closest('#jfforget'))return jfForget();
+    if(e.target.closest('#jfchange')){jfConnectOpen=true;return renderJellyfin()}
+  });
+  $('jellyfin').addEventListener('keydown',e=>{if(e.target.id==='jfq'&&e.key==='Enter'){e.preventDefault();jfQuery=e.target.value.trim();jfMode=jfQuery?'search':'';jfResults=null;e.target.blur();renderJellyfin()}});
+  document.addEventListener('click',e=>{
+    const sh=e.target.closest('[data-jshow]');if(sh){if(e.target.closest('#sheet'))closeSheet();return openJfShow(sh.dataset.jshow)}
+    const mv=e.target.closest('[data-jmovie]');if(mv&&!e.target.closest('#sheet'))return openJfMovie(mv.dataset.jmovie);
+    const bt=e.target.closest('[data-jbetter]');if(bt){if(e.target.closest('#sheet'))closeSheet();goSearch(bt.dataset.jbetter,{category:bt.dataset.jcat!==undefined?bt.dataset.jcat:'2000'})}
+  });
+  $('drivebody').addEventListener('change',e=>{const c=e.target.closest('[data-dalert]');if(c)setDriveAlert(c.dataset.dalert,c.checked)});
   $('token').addEventListener('keydown',e=>{if(e.key==='Enter')pair()});
   document.addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(b)showTab(b.dataset.tab)});
   document.addEventListener('click',e=>{const b=e.target.closest('[data-kact]');if(b)kodiControl(b.dataset.kact,b.dataset.pid)});
@@ -2927,6 +5154,7 @@ function bind(){
   $('kodiview').addEventListener('change',()=>{LS.set('nzb_mobile_kodiview',$('kodiview').value);window.scrollTo(0,0);renderKodiList(true)});
   $('kodimore').addEventListener('click',()=>{kodiShown+=KODI_PAGE;renderKodiList()});
   $('kodiscan').addEventListener('click',kodiScan);
+  $('tvon').addEventListener('click',tvOn);$('tvkodi').addEventListener('click',tvKodi);$('tvsave').addEventListener('click',tvSave);
   $('searchbtn').addEventListener('click',search);
   $('query').addEventListener('keydown',e=>{if(e.key==='Enter')search()});
   ['sort','minsize','maxsize','mingrabs'].forEach(id=>$(id).addEventListener('input',()=>{savePrefs();renderResults()}));
@@ -2948,7 +5176,7 @@ function bind(){
   setInterval(watchFinished,15000);
   $('recent').addEventListener('click',e=>{const b=e.target.closest('[data-recent]');if(b)useRecent(b.dataset.recent)});
   renderRecent();
-  setInterval(()=>{if(document.hidden||$('app').classList.contains('hidden'))return;if(activeTab==='home')refreshHome();else if(activeTab==='kodi')refreshKodiNow()},5000);
+  setInterval(()=>{if(document.hidden||$('app').classList.contains('hidden'))return;if(activeTab==='home')refreshHome();else if(activeTab==='kodi')refreshKodiNow();else if(activeTab==='jellyfin')refreshJfNow()},5000);
 }
 bind();
 if(token)connect();
@@ -2973,11 +5201,41 @@ SECURITY_HEADERS = {
 
 
 # Lets Android "Add to Home screen" / "Install app" open the page full-screen like an app.
+KODI_ICONS = [{"src": "/kodi-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any"},
+              {"src": "/kodi-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]
 MANIFEST = json.dumps({
-    "name": "NZB Command Center", "short_name": "NZB Center", "start_url": "/", "scope": "/",
+    "id": "/", "name": "NZB Command Center", "short_name": "NZB Center", "start_url": "/", "scope": "/",
     "display": "standalone", "background_color": "#060D10", "theme_color": "#060D10",
     "icons": [{"src": "/icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any"}],
+    # Long-press the app icon on Android to jump straight to Kodi.
+    "shortcuts": [{"name": "Kodi", "url": "/kodi", "icons": KODI_ICONS}],
 }).encode("utf-8")
+
+# The Kodi icon is its own home-screen app: a separate id and start_url, so Android installs it next to
+# the main one. It shares the origin, so the pairing code saved by the main app works here too.
+KODI_MANIFEST = json.dumps({
+    "id": "/kodi", "name": "Kodi Remote", "short_name": "Kodi", "start_url": "/kodi", "scope": "/",
+    "display": "standalone", "background_color": "#060D10", "theme_color": "#060D10", "icons": KODI_ICONS,
+}).encode("utf-8")
+
+
+def _kodi_page(page: str) -> str:
+    """The same app, labelled and iconed for Kodi and opening on the Kodi tab."""
+    swaps = [
+        ('<title>NZB Command Center</title>', '<title>Kodi</title>'),
+        ('content="NZB Center">', 'content="Kodi">'),
+        ('href="/manifest.webmanifest"', 'href="/kodi.webmanifest"'),
+        ('<link rel="apple-touch-icon" href="/icon.png">', '<link rel="apple-touch-icon" href="/kodi-icon.png">'),
+        ("activeTab='home'", "activeTab='kodi'"),
+    ]
+    for old, new in swaps:
+        if page.count(old) != 1:
+            raise RuntimeError(f"Kodi page: expected one {old!r} in PAGE")
+        page = page.replace(old, new)
+    return page
+
+
+KODI_PAGE = _kodi_page(PAGE)
 
 
 class MobileHandler(BaseHTTPRequestHandler):
@@ -3080,6 +5338,16 @@ class MobileHandler(BaseHTTPRequestHandler):
         if path in ("/icon.png", "/favicon.ico", "/apple-touch-icon.png"):
             self._send(200, ICON_PNG, "image/png", {"Cache-Control": "public, max-age=86400"})
             return
+        if path in ("/kodi", "/kodi/"):
+            self._send(200, KODI_PAGE.replace("__VERSION__", VERSION).encode("utf-8"), "text/html; charset=utf-8")
+            return
+        if path == "/kodi.webmanifest":
+            self._send(200, KODI_MANIFEST, "application/manifest+json", {"Cache-Control": "public, max-age=86400"})
+            return
+        if path in ("/kodi-icon.png", "/kodi-icon-512.png"):
+            png = KODI_ICON_PNG if path == "/kodi-icon.png" else KODI_ICON_MASKABLE_PNG
+            self._send(200, png, "image/png", {"Cache-Control": "public, max-age=86400"})
+            return
         if not path.startswith("/api/"):
             self.send_json(404, {"error": "Not found."})
             return
@@ -3102,6 +5370,10 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, self._home())
         elif path == "/api/kodi":
             self.send_json(200, self._kodi_overview())
+        elif path == "/api/tv":
+            self.send_json(200, self._tv_view(with_power=True))
+        elif path == "/api/tv/job":
+            self.send_json(200, {"job": tv_job_view()})
         elif path == "/api/kodi/now":
             playing = kodi_now_playing() if kodi_configured() else None
             self.send_json(200, {"playing": playing, "volume": kodi_volume() if kodi_configured() else None})
@@ -3116,6 +5388,10 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"missing": kodi_missing_episodes()})
         elif path == "/api/stats":
             self.send_json(200, sab_stats())
+        elif path == "/api/drives":
+            self.send_json(200, self._drives_view())
+        elif path.startswith("/api/jellyfin"):
+            self._get_jellyfin(path)
         elif path == "/api/saved":
             self.send_json(200, self._saved_view())
         elif path == "/api/settings":
@@ -3160,6 +5436,27 @@ class MobileHandler(BaseHTTPRequestHandler):
                     "eta": x.get("timeleft", ""), "cat": x.get("cat", ""), "priority": str(x.get("priority") or ""),
                 } for x in slots],
             })
+        elif path == "/api/tv/recent":
+            self.send_json(200, tv_row())
+        elif path == "/api/tv/watched":
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            self.send_json(200, tv_watched_row(fresh=q.get("fresh", [""])[0] == "1"))
+        elif path == "/api/tv/finished":
+            self.send_json(200, tv_finished())
+        elif path == "/api/tv/photos":
+            self.send_json(200, tv_photos_list())
+        elif path == "/api/tv/photo":
+            raw = tv_photo(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
+            if not raw:
+                self.send_json(404, {"error": "No such photo."})
+                return
+            self._send(200, raw, _image_type(raw) or "image/jpeg", {"Cache-Control": "private, max-age=86400"})
+        elif path == "/api/tv/poster":
+            raw = tv_poster(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
+            if not raw:
+                self.send_json(404, {"error": "No poster for this movie."})
+                return
+            self._send(200, raw, _image_type(raw) or "image/jpeg", {"Cache-Control": "private, max-age=604800"})
         elif path == "/api/history":
             h = sab_request("history", {"limit": 25}).get("history", {})
             self.send_json(200, {"slots": [{
@@ -3214,6 +5511,12 @@ class MobileHandler(BaseHTTPRequestHandler):
             kodi_call("Player.Open", {"item": item, "options": {"resume": bool(body.get("resume"))}})
             log.info("kodi play %s resume=%s ip=%s", item, bool(body.get("resume")), self.ip)
             self.send_json(200, {"ok": True})
+        elif path == "/api/tv/play":
+            result = tv_play(str(body.get("id") or ""), from_start=bool(body.get("from_start")))
+            log.info("tv play %s ip=%s", result.get("played"), self.ip)
+            self.send_json(200, result)
+        elif path == "/api/tv/mark_watched":
+            self.send_json(200, tv_mark_watched(str(body.get("id") or "")))
         elif path == "/api/kodi/control":
             kodi_control(str(body.get("action") or ""), to_int(body.get("playerid"), -1), body.get("value"))
             self.send_json(200, {"ok": True})
@@ -3225,6 +5528,35 @@ class MobileHandler(BaseHTTPRequestHandler):
             if not send_notification("NZB Command Center", "Test alert from your phone app — alerts are working.", tags=("bell",)):
                 raise ValueError("Save an ntfy topic URL first.")
             self.send_json(200, {"ok": True})
+        elif path.startswith("/api/jellyfin/"):
+            self._post_jellyfin(path, body)
+        elif path == "/api/drives/check":
+            self.send_json(200, self._drives_view(force=True))
+        elif path == "/api/drives/alerts":
+            def apply(st: dict):
+                for key in ("notify_drive_health", "notify_drive_hot", "notify_drive_low"):
+                    if key in body:
+                        st[key] = bool(body[key])
+            update_settings(apply)
+            log.info("drive alert settings saved ip=%s", self.ip)
+            self.send_json(200, self._drives_view())
+        elif path == "/api/tv/on":
+            if not tv_configured():
+                raise ValueError("Set up TV control first.")
+            started = tv_start(launch_kodi=body.get("kodi", True) is not False)
+            log.info("tv on (kodi=%s) ip=%s", body.get("kodi", True) is not False, self.ip)
+            self.send_json(200, {"ok": True, "started": started, "job": tv_job_view()})
+        elif path == "/api/tv/kodi":
+            if not tv_configured():
+                raise ValueError("Set up TV control first.")
+            if tv_power_state() != "on":
+                raise ValueError("The TV is off. Use “TV on + Kodi” instead.")
+            tv_open_kodi()
+            threading.Thread(target=tv_learn_mac, args=(load_settings(),), daemon=True).start()
+            log.info("tv open kodi ip=%s", self.ip)
+            self.send_json(200, {"ok": True})
+        elif path == "/api/tv/settings":
+            self._post_tv_settings(body)
         elif path == "/api/kodi/scan":
             kodi_call("VideoLibrary.Scan", {"showdialogs": False})
             log.info("kodi scan ip=%s", self.ip)
@@ -3238,6 +5570,82 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"ok": True})
         else:
             self.send_json(404, {"error": "Not found."})
+
+    def _get_jellyfin(self, path: str) -> None:
+        qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        arg = lambda k: qs.get(k, [""])[0]
+        if path == "/api/jellyfin":
+            self.send_json(200, jf_overview())
+        elif path == "/api/jellyfin/now":
+            self.send_json(200, {"sessions": jf_sessions()})
+        elif path == "/api/jellyfin/search":
+            self.send_json(200, {"items": jf_search(arg("q"))})
+        elif path == "/api/jellyfin/show":
+            self.send_json(200, jf_show(arg("id")))
+        elif path == "/api/jellyfin/missing":
+            self.send_json(200, {"missing": jf_missing(force=arg("fresh") == "1")})
+        elif path == "/api/jellyfin/upgrades":
+            self.send_json(200, {"movies": jf_upgrades(force=arg("fresh") == "1")})
+        elif path == "/api/jellyfin/discover":
+            self.send_json(200, {"servers": jf_discover()})
+        elif path == "/api/jellyfin/art":
+            try:
+                raw, ctype = jf_art(arg("id"))
+            except UpstreamError:
+                self.send_json(404, {"error": "No picture."})
+                return
+            self._send(200, raw, ctype, {"Cache-Control": "private, max-age=86400"})
+        else:
+            self.send_json(404, {"error": "Not found."})
+
+    def _post_jellyfin(self, path: str, body: dict) -> None:
+        if path == "/api/jellyfin/control":
+            jf_control(str(body.get("session") or ""), str(body.get("action") or ""))
+            self.send_json(200, {"ok": True})
+        elif path == "/api/jellyfin/scan":
+            jf_request("/Library/Refresh", post=True, timeout=10)
+            jf_clear_cache()
+            log.info("jellyfin scan ip=%s", self.ip)
+            self.send_json(200, {"ok": True})
+        elif path == "/api/jellyfin/connect":
+            url = normalize_jellyfin_url(str(body.get("url") or "")[:300])
+            key = str(body.get("key") or "").strip()
+            if not url:
+                raise ValueError("Enter your Jellyfin server's address.")
+            if not jf_url_allowed(url):
+                raise ValueError("From the phone you can only connect a Jellyfin server on your home network or Tailscale. "
+                                 "Set an internet address in the desktop app instead.")
+            if not re.fullmatch(r"[A-Za-z0-9]{16,64}", key):
+                raise ValueError("That API key doesn't look right. Copy it from Jellyfin: Dashboard → API Keys.")
+            global _JF_SECRETS
+            _JF_SECRETS = frozenset([key])
+            info = jf_request("/System/Info", timeout=8, conf={"url": url, "key": key, "source": "phone"})
+
+            def change(st: dict) -> None:
+                st["jellyfin_url"] = url
+                st["jellyfin_token"] = _dpapi_protect(key)
+            update_settings(change)
+            jf_clear_cache()
+            log.info("jellyfin connected from phone (%s) ip=%s", info.get("ServerName"), self.ip)
+            self.send_json(200, jf_overview())
+        elif path == "/api/jellyfin/forget":
+            def clear(st: dict) -> None:
+                st["jellyfin_url"] = st["jellyfin_token"] = ""
+            update_settings(clear)
+            jf_clear_cache()
+            log.info("jellyfin phone connection removed ip=%s", self.ip)
+            self.send_json(200, jf_overview())
+        else:
+            self.send_json(404, {"error": "Not found."})
+
+    def _drives_view(self, force: bool = False) -> dict:
+        report = drive_report(force=force)
+        s = load_settings()
+        report["alerts"] = {"ready": bool(s["ntfy_url"]), "health": s["notify_drive_health"], "hot": s["notify_drive_hot"],
+                            "low": s["notify_drive_low"], "low_gb": s["drive_low_gb"]}
+        report["temp_alert"] = DRIVE_TEMP_ALERT
+        report["nvme_temp_alert"] = DRIVE_TEMP_ALERT + DRIVE_NVME_TEMP_EXTRA
+        return report
 
     def _home(self) -> dict:
         """One call for the Home tab: SABnzbd summary, today's totals and what Kodi is playing."""
@@ -3384,6 +5792,50 @@ class MobileHandler(BaseHTTPRequestHandler):
                 "notify_complete": s["notify_complete"], "notify_failed": s["notify_failed"], "notify_saved": s["notify_saved"],
                 "saved_interval_hours": s["saved_interval_hours"], "intervals": list(SAVED_INTERVALS),
                 "autostart": autostart_enabled(), "version": VERSION}
+
+    def _tv_view(self, with_power: bool = False) -> dict:
+        s = load_settings()
+        auto = ""
+        try:
+            auto = urllib.parse.urlsplit(get_config()["kodi"]["url"]).hostname or ""
+        except ConfigError:
+            pass
+        view = {"configured": tv_configured(s), "host": s.get("tv_host") or "", "auto_host": auto,
+                "psk_set": bool(s.get("tv_psk")), "job": tv_job_view()}
+        if with_power and view["configured"]:
+            try:
+                view["power"] = tv_power_state(s)
+            except UpstreamError as exc:
+                view["power"], view["error"] = "unknown", str(exc)
+            if view.get("power") == "on" and not s.get("tv_mac"):
+                threading.Thread(target=tv_learn_mac, args=(s,), daemon=True).start()
+        view["mac"] = s.get("tv_mac") or ""
+        return view
+
+    def _post_tv_settings(self, body: dict) -> None:
+        host = validate_tv_host(body.get("host", ""))
+        key = str(body.get("psk") or "").strip()
+        if key and (len(key) > 64 or any(ch.isspace() for ch in key)):
+            raise ValueError("That Pre-Shared Key doesn't look right.")
+        mac = str(body.get("mac") or "").strip().upper().replace("-", ":")
+        if mac and not MAC_RE.match(mac):
+            raise ValueError("The MAC address should look like AA:BB:CC:DD:EE:FF.")
+
+        def change(st: dict) -> None:
+            old_mac = str(st.get("tv_mac") or "").upper()
+            if host != st.get("tv_host"):
+                st["tv_mac"], st["tv_mac_manual"], st["tv_kodi_uri"] = "", False, ""   # a different TV: forget what was learned
+            st["tv_host"] = host
+            if "mac" in body and mac != old_mac:      # the field comes back pre-filled; only act on a real change
+                st["tv_mac"], st["tv_mac_manual"] = mac, bool(mac)
+            if key:
+                st["tv_psk"] = _dpapi_protect(key)
+            elif body.get("clear"):
+                st["tv_psk"] = ""
+        update_settings(change)
+        view = self._tv_view(with_power=True)
+        log.info("tv settings saved ip=%s", self.ip)
+        self.send_json(200, view)
 
     def _post_settings(self, body: dict) -> None:
         url = validate_ntfy_url(body.get("ntfy_url", ""))
@@ -3598,6 +6050,8 @@ def main(argv=None) -> None:
     print()
     print(" Pairing link - open this on the phone once and it connects itself:")
     print(f" http://{local_ip}:{args.port}/#k={token}")
+    print(" Kodi home-screen icon - open this on the phone, then Add to Home Screen:")
+    print(f" http://{local_ip}:{args.port}/kodi#k={token}")
     print()
     if ALLOW_ANY_CLIENT:
         print(" WARNING: --allow-any-client is on; anyone who can reach this port can try the code.")

@@ -1,5 +1,14 @@
 mobile nzb command center
 
+## Phone app home-screen icons
+
+Open the phone app's address in your phone's browser and add it to your home screen
+(iPhone: Safari > Share > **Add to Home Screen**; Android: Chrome > ⋮ > **Add to Home screen** / **Install app**):
+
+- `http://<your-pc>:<port>/` gives the **NZB Center** icon (downloads, search, queue).
+- `http://<your-pc>:<port>/kodi` gives a separate **Kodi** icon (a TV with a play button) that opens straight on the Kodi tab.
+  Pair once in either; the other uses the same pairing code. On Android you can also long-press the NZB Center icon and pick **Kodi**.
+
 ## System Command Center (Windows desktop)
 
 A live dashboard for your PC: Windows, CPU, memory, GPU, drives, network and processes.
@@ -26,3 +35,17 @@ PowerShell/CIM for hardware, disk health and security status. Windows doesn't ex
 run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) in the background and turn on its
 **Options > Remote Web Server > Run** (port 8085; the app also reads its WMI feed when that's available).
 Run as administrator to see drive temperatures and wear.
+
+## TV home row (phone server)
+
+`mobile_server.py` also serves the newest movies to a TV home screen, so a launcher can show them with their
+posters and start one in Kodi in one press, even when Kodi wasn't running:
+
+- `GET /api/tv/recent`: the newest 12 movies (Kodi's recently added, plus finished SABnzbd movie downloads Kodi
+  hasn't scanned yet), newest first, each with a poster URL. Kodi's part is remembered for when Kodi is off.
+- `GET /api/tv/poster?id=…`: the saved poster (kept in `tv_art/` next to the server).
+- `POST /api/tv/play` `{"id": "…"}`: waits up to 45 s for Kodi (the TV starts it first), then plays the movie.
+
+Like every `/api/` call they need the access code in the `X-Mobile-Token` header. The server learns how Kodi
+reaches this PC's folders (for example `D:\Movies` = `smb://HAL9000/Movies`) from downloads Kodi already has,
+so a new download can be played before Kodi has scanned it.

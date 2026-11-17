@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- NZB-CC Continue tile, banner shape (320 x 180), for launchers that show banners. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M24,0h272a24,24 0 0 1 24,24v132a24,24 0 0 1 -24,24h-272a24,24 0 0 1 -24,-24v-132a24,24 0 0 1 24,-24z" />
+    <path android:strokeColor="#FF1E2A63" android:strokeWidth="9" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M130,90a30,30 0 1 0 9,-21.4" />
+    <path android:strokeColor="#FF1E2A63" android:strokeWidth="9" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M130,54v18h18" />
+    <path android:fillColor="#FF1E2A63" android:pathData="M154,78l21,12l-21,12z" />
+</vector>

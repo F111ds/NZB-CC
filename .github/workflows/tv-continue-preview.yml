@@ -1,0 +1,42 @@
+# Builds the TV launcher Continue preview (a separate app, com.gathin.tvhome.preview, that installs beside the
+# launcher) and commits the APK to tv-launcher/NZB-CC-Continue-Preview.apk on the same branch.
+name: TV Continue preview APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['claude/cinema-preview']
+    paths:
+      - 'tv-launcher/launcher/**'
+      - '.github/workflows/tv-continue-preview.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      # ubuntu-latest comes with the Android SDK (ANDROID_HOME); accept its licences for platform 34.
+      - name: Android SDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+      - name: Build the preview APK
+        working-directory: tv-launcher/launcher
+        run: bash gradlew assembleRelease -PlauncherApplicationId=com.gathin.tvhome.preview --no-daemon --console=plain
+      - name: Keep the APK with the branch
+        run: |
+          cp tv-launcher/launcher/app/build/outputs/apk/release/app-release.apk tv-launcher/NZB-CC-Continue-Preview.apk
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add tv-launcher/NZB-CC-Continue-Preview.apk
+          git commit -m "TV Continue preview: built APK [skip ci]" || echo "no change"
+          git push
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NZB-CC-Continue-Preview
+          path: tv-launcher/NZB-CC-Continue-Preview.apk
