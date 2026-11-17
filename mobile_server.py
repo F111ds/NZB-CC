@@ -12,8 +12,9 @@ A phone version of NZB Command Center, served on your home network:
              and "TV on + Kodi" / "Open Kodi" buttons for a Sony TV (IP control)
   * Jellyfin - now playing (pause / stop), library scan, "do I already have it?" search with
              quality, missing episodes, movies below 1080p, show seasons; connect from the phone
-  * Drive Health (from Home) - every drive's health, temperature, free space and a 24 h
-             temperature graph, with phone alerts for problems, heat and low space
+  * Drives - every drive's health, temperature, free space, live read/write activity,
+             health counters (errors, wear, hours, cycles), volumes and identity, a 24 h
+             temperature graph, and phone alerts for problems, heat and low space
 It reads the SAME nzb_manager_config.json (and DPAPI-protected keys) as the desktop
 app, including its Kodi settings, and never modifies it. Phone-only
 settings (alerts, saved searches) live in mobile_settings.json. Add the page to your
@@ -70,7 +71,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.7.3"
+VERSION = "3.8.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -3591,17 +3592,35 @@ DRIVE_ALERT_REPEAT = 24 * 3600
 LHM_PORT = 8085
 
 DRIVES_PS = r"""
+function N($v) { if ($v -ne $null) { $v } else { $null } }
 $r = @{}
 try { $r.disks = @(Get-PhysicalDisk | ForEach-Object {
     $rc = $null; try { $rc = $_ | Get-StorageReliabilityCounter -ErrorAction Stop } catch {}
-    @{ id = "$($_.DeviceId)"; name = ("" + $_.FriendlyName).Trim(); media = "$($_.MediaType)"; bus = "$($_.BusType)";
-       size = [double]$_.Size; health = "$($_.HealthStatus)"; spindle = $_.SpindleSpeed;
-       temp = $(if ($rc) { $rc.Temperature } else { $null }); wear = $(if ($rc) { $rc.Wear } else { $null });
-       hours = $(if ($rc) { $rc.PowerOnHours } else { $null });
-       read_errors = $(if ($rc) { $rc.ReadErrorsUncorrected } else { $null }) } }) } catch {}
+    @{ id = "$($_.DeviceId)"; name = ("" + $_.FriendlyName).Trim(); model = ("" + $_.Model).Trim();
+       serial = ("" + $_.SerialNumber).Trim(); firmware = ("" + $_.FirmwareVersion).Trim();
+       media = "$($_.MediaType)"; bus = "$($_.BusType)"; size = [double]$_.Size; health = "$($_.HealthStatus)";
+       status = "$($_.OperationalStatus)"; spindle = $_.SpindleSpeed;
+       sector = $_.PhysicalSectorSize; lsector = $_.LogicalSectorSize;
+       temp = $(if ($rc) { N $rc.Temperature }); temp_max = $(if ($rc) { N $rc.TemperatureMax });
+       wear = $(if ($rc) { N $rc.Wear }); hours = $(if ($rc) { N $rc.PowerOnHours });
+       read_errors = $(if ($rc) { N $rc.ReadErrorsUncorrected }); read_fixed = $(if ($rc) { N $rc.ReadErrorsCorrected });
+       write_errors = $(if ($rc) { N $rc.WriteErrorsUncorrected }); write_fixed = $(if ($rc) { N $rc.WriteErrorsCorrected });
+       starts = $(if ($rc) { N $rc.StartStopCycleCount }); loads = $(if ($rc) { N $rc.LoadUnloadCycleCount });
+       read_lat = $(if ($rc) { N $rc.ReadLatencyMax }); write_lat = $(if ($rc) { N $rc.WriteLatencyMax });
+       smart = [bool]$rc } }) } catch {}
+try { $r.dinfo = @(Get-Disk | ForEach-Object { @{ id = "$($_.Number)"; style = "$($_.PartitionStyle)"; boot = [bool]$_.IsBoot;
+       system = [bool]$_.IsSystem; parts = $_.NumberOfPartitions; offline = [bool]$_.IsOffline } }) } catch {}
 try { $r.parts = @(Get-Partition | Where-Object { $_.DriveLetter } | ForEach-Object { @{ disk = "$($_.DiskNumber)"; letter = "$($_.DriveLetter)" } }) } catch {}
-try { $r.volumes = @(Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { @{ letter = "$($_.DriveLetter)"; label = $_.FileSystemLabel } }) } catch {}
+try { $r.volumes = @(Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { @{ letter = "$($_.DriveLetter)"; label = $_.FileSystemLabel;
+       fs = "$($_.FileSystem)"; health = "$($_.HealthStatus)" } }) } catch {}
 $r | ConvertTo-Json -Compress -Depth 4
+"""
+
+DRIVE_IO_PS = r"""
+$o = @(Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk | Where-Object { $_.Name -ne '_Total' } | ForEach-Object {
+    @{ name = "$($_.Name)"; read = [double]$_.DiskReadBytesPersec; write = [double]$_.DiskWriteBytesPersec;
+       busy = [double]$_.PercentDiskTime; queue = [double]$_.CurrentDiskQueueLength } })
+ConvertTo-Json -Compress -InputObject $o
 """
 
 _DRIVE_MEDIA = {"3": "HDD", "4": "SSD", "5": "SCM", "hdd": "HDD", "ssd": "SSD", "scm": "SCM"}
@@ -3663,7 +3682,7 @@ def _drive_inventory() -> dict:
     if os.name == "nt":
         data = run_powershell(DRIVES_PS)
         return {"disks": _as_list(data.get("disks")), "parts": _as_list(data.get("parts")),
-                "volumes": _as_list(data.get("volumes"))}
+                "volumes": _as_list(data.get("volumes")), "dinfo": _as_list(data.get("dinfo"))}
     return {"disks": [{"id": "0", "name": "System disk", "media": "", "bus": "", "size": 0, "health": "Unknown"}],
             "parts": [{"disk": "0", "letter": "/"}], "volumes": []}
 
@@ -3762,12 +3781,68 @@ def drive_temp_limit(bus: str, setting: float = DRIVE_TEMP_ALERT) -> float:
     return setting + (DRIVE_NVME_TEMP_EXTRA if bus == "NVMe" else 0)
 
 
+def _opt_int(v):
+    return None if v in (None, "") else to_int(v)
+
+
+def _drive_details(disk: dict, info: dict) -> dict:
+    """Identity, layout and health counters for the Drives tab's detail view (None = Windows didn't say)."""
+    serial = str(disk.get("serial") or "").strip()
+    return {
+        "id": str(disk.get("id", "")), "model": str(disk.get("model") or ""),
+        # Only the end of the serial number: enough to tell drives apart without broadcasting it.
+        "serial": ("…" + serial[-6:]) if len(serial) > 6 else serial,
+        "firmware": str(disk.get("firmware") or ""), "status": str(disk.get("status") or ""),
+        "sector": _opt_int(disk.get("sector")), "lsector": _opt_int(disk.get("lsector")),
+        "style": str(info.get("style") or ""), "boot": bool(info.get("boot")), "system": bool(info.get("system")),
+        "partitions": _opt_int(info.get("parts")), "offline": bool(info.get("offline")),
+        "smart": bool(disk.get("smart")),
+        "temp_max": _opt_int(disk.get("temp_max")),
+        "read_errors": _opt_int(disk.get("read_errors")), "read_fixed": _opt_int(disk.get("read_fixed")),
+        "write_errors": _opt_int(disk.get("write_errors")), "write_fixed": _opt_int(disk.get("write_fixed")),
+        "starts": _opt_int(disk.get("starts")), "loads": _opt_int(disk.get("loads")),
+        "read_lat": _opt_int(disk.get("read_lat")), "write_lat": _opt_int(disk.get("write_lat")),
+    }
+
+
+_io_state: dict = {"at": 0.0, "data": None}
+
+
+def drive_activity() -> dict:
+    """Live read/write speed and busy % per physical disk, keyed by disk number (Windows; cached 3 s)."""
+    if os.name != "nt":
+        return {}
+    with _drive_lock:
+        if _io_state["data"] is not None and time.time() - _io_state["at"] < 3:
+            return _io_state["data"]
+    import subprocess
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", DRIVE_IO_PS],
+                              capture_output=True, text=True, timeout=15, creationflags=flags)
+        rows = _as_list(json.loads(proc.stdout or "[]"))
+    except Exception as exc:
+        log.warning("Drive activity check failed: %s", exc)
+        rows = []
+    out = {}
+    for row in rows:
+        num = str(row.get("name") or "").split(" ", 1)[0]  # e.g. "0 C:" -> "0"
+        if num.isdigit():
+            out[num] = {"read": to_float(row.get("read")), "write": to_float(row.get("write")),
+                        "busy": min(100.0, to_float(row.get("busy"))), "queue": to_float(row.get("queue"))}
+    with _drive_lock:
+        _io_state.update(at=time.time(), data=out)
+    return out
+
+
 def drive_report(force: bool = False, with_rate: bool = True) -> dict:
     """Everything the Drive Health page shows, newest free space included."""
     import shutil
     inv = drive_inventory(force)
     lhm = lhm_drive_temps() if any(d.get("temp") in (None, "", 0) for d in inv["disks"]) else {}
     labels = {str(v.get("letter", "")).upper(): str(v.get("label") or "") for v in inv["volumes"]}
+    vols = {str(v.get("letter", "")).upper(): v for v in inv["volumes"]}
+    dinfo = {str(x.get("id", "")): x for x in inv.get("dinfo") or []}
     system = _letter_of(os.environ.get("SystemDrive", "C:") + "\\") if os.name == "nt" else "/"
     try:
         cfg_media = [str(x) for x in json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("media_folders", []) or []]
@@ -3783,11 +3858,17 @@ def drive_report(force: bool = False, with_rate: bool = True) -> dict:
         letters = sorted({str(p.get("letter", "")).upper() if os.name == "nt" else "/"
                           for p in inv["parts"] if str(p.get("disk")) == disk_id} - {""})
         total = free = 0
+        volumes = []
         for letter in letters:
             try:
                 usage = shutil.disk_usage(f"{letter}:\\" if os.name == "nt" else letter)
                 total += usage.total
                 free += usage.free
+                v = vols.get(letter, {})
+                volumes.append({"letter": letter, "label": str(v.get("label") or ""), "fs": str(v.get("fs") or ""),
+                                "health": _DRIVE_HEALTH.get(str(v.get("health", "")).strip().lower(), ""),
+                                "total": usage.total, "free": usage.free,
+                                "used_pct": round((usage.total - usage.free) * 100 / usage.total) if usage.total else None})
             except OSError:
                 pass
         media = _DRIVE_MEDIA.get(str(disk.get("media", "")).strip().lower(), "")
@@ -3835,6 +3916,7 @@ def drive_report(force: bool = False, with_rate: bool = True) -> dict:
             "wear": to_int(disk.get("wear")) if media == "SSD" and disk.get("wear") not in (None, "") else None,
             "rpm": to_int(disk.get("spindle")) if media == "HDD" and to_int(disk.get("spindle")) > 1 else None,
             "uses": uses, "days_left": days_left, "daily_bytes": rate if days_left is not None else None,
+            "volumes": volumes, "details": _drive_details(disk, dinfo.get(disk_id, {})),
         })
     if temps:
         record_drive_temps(temps)
@@ -4142,7 +4224,7 @@ details.opts .body{padding:0 14px 14px}
 .empty{text-align:center;color:var(--soft);padding:34px 14px;font-size:13px}.empty svg{color:var(--teal);opacity:.7;margin-bottom:8px}.empty b{display:block;color:var(--white);font-size:16px;margin-bottom:4px}
 .hidden{display:none!important}.hint{font-size:12px;color:var(--muted);line-height:1.5}
 nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;background:rgba(8,20,26,.96);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-top:1px solid #10242C;padding:6px 8px calc(6px + env(safe-area-inset-bottom))}
-.tab{flex:1;background:transparent;border:0;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 0;font-size:11px;font-weight:600;position:relative;min-height:52px}
+.tab{flex:1;min-width:0;background:transparent;border:0;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 0;font-size:10.5px;font-weight:600;position:relative;min-height:52px}
 .tab.active{color:var(--teal)}.tab .count{position:absolute;top:2px;left:calc(50% + 6px);background:var(--teal);color:var(--ink);font:700 10px var(--mono);padding:1px 6px;border-radius:9px}
 .batch{position:fixed;left:12px;right:12px;bottom:calc(74px + env(safe-area-inset-bottom));z-index:7;max-width:696px;margin:auto;display:flex;align-items:center;gap:10px;background:var(--hover);border:1px solid var(--line);border-radius:16px;padding:10px 10px 10px 16px;box-shadow:0 10px 30px rgba(0,0,0,.45)}
 .batch span{flex:1;font-weight:600;font-size:14px}
@@ -4209,6 +4291,10 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 .banner b{display:block;font-size:15px}.banner.warn b{color:var(--amber)}.banner.bad b{color:var(--red)}.banner.ok b{color:var(--green)}.banner span{font-size:12px;color:var(--soft)}
 .tgl{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid #10242C;min-height:48px}.tgl:first-child{border-top:0}.tgl input{width:22px;height:22px;accent-color:var(--teal);flex:none}.tgl small{display:block;color:var(--soft);font-size:12px}
 .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--soft);margin-top:8px}.legend i{display:inline-block;width:9px;height:9px;border-radius:5px;margin-right:5px}
+.dio{display:flex;gap:12px;font:500 12px var(--mono);color:var(--soft);margin-top:10px;flex-wrap:wrap}.dio b{color:var(--white);font-weight:600}.dio .busy{margin-left:auto}
+.dcard.tap{cursor:pointer;border:0;width:100%;text-align:left;color:inherit;display:block}.dcard .more{font-size:12px;color:var(--teal);margin-top:10px;font-weight:600}
+.kv{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:0;font-size:13px}.kv div{padding:9px 0;border-top:1px solid #10242C}.kv div:nth-child(-n+2){border-top:0}.kv div:nth-child(odd){color:var(--soft)}.kv div:nth-child(even){text-align:right;font-family:var(--mono);font-weight:600;color:var(--white)}.kv .bad{color:var(--red)!important}.kv .warn{color:var(--amber)!important}.kv .good{color:var(--green)!important}
+.vrow{padding:10px 0;border-top:1px solid #10242C}.vrow:first-child{border-top:0}.vrow .h{display:flex;justify-content:space-between;gap:8px;font-size:13px}.vrow .h span{color:var(--soft);font-family:var(--mono);font-size:12px}
 .jgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
 .jq{background:var(--card);border:0;border-radius:14px;padding:12px;text-align:left;color:var(--white);display:flex;flex-direction:column;gap:5px;min-height:78px;cursor:pointer}
 .jq b{font-size:14px}.jq span{font-size:12px;color:var(--soft)}.jq.main{background:var(--teal);color:var(--ink)}.jq.main span{color:#0B3B36}.jq.on{outline:2px solid var(--teal)}
@@ -4236,8 +4322,7 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <div id="jfbody"></div>
 </section>
 <section id="drives" class="hidden">
-<div class="row" style="justify-content:space-between;margin-top:6px"><button class="btn ghost sm" data-tab="home" style="flex:none">‹ Home</button><button class="btn ghost sm" id="drivecheck" style="flex:none">Check now</button></div>
-<h1>Drive Health</h1><p class="lede" id="drivestatus">Loading…</p>
+<div class="row" style="align-items:flex-end"><div><h1>Drives</h1><p class="lede" id="drivestatus">Loading…</p></div><button class="btn ghost sm" id="drivecheck" style="flex:none;margin-bottom:14px">Check now</button></div>
 <div id="drivebody"></div>
 </section>
 <section id="search" class="hidden">
@@ -4320,6 +4405,7 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <button id="tabqueue" class="tab" data-tab="queue"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>Queue<span id="queuecount" class="count hidden"></span></button>
 <button id="tabkodi" class="tab" data-tab="kodi"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/></svg>Kodi</button>
 <button id="tabjellyfin" class="tab" data-tab="jellyfin"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9.5 17h-19z"/><path d="M12 10l4 7H8z"/></svg>Jellyfin</button>
+<button id="tabdrives" class="tab" data-tab="drives"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h18"/><circle cx="17" cy="17" r=".8" fill="currentColor"/><path d="M7 17h4"/></svg>Drives</button>
 </nav>
 <div id="toast" class="toast hidden" role="status"></div>
 <div id="sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-label="Movie details"><div class="panel" id="sheetpanel"></div></div>
@@ -4383,7 +4469,7 @@ function fillSearchCategories(keep){
 }
 function fillCategories(cats){sabCats=cats;const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Auto (match)</option><option value="*">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(keep==='*'||cats.includes(keep))sel.value=keep}
 
-function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi','drives','jellyfin'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':(t==='drives'?'home':t);document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi();if(t==='drives')refreshDrives();if(t==='jellyfin')refreshJellyfin()}
+function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi','drives','jellyfin'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':t;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi();if(t==='drives'){refreshDrives();refreshDriveIO()}if(t==='jellyfin')refreshJellyfin()}
 
 function savePrefs(){LS.set('nzb_mobile_prefs',JSON.stringify({sort:$('sort').value,minsize:$('minsize').value,maxsize:$('maxsize').value,mingrabs:$('mingrabs').value,indexer:$('indexer').value,prio:$('prio').value,category:$('category').value}));LS.set('nzb_mobile_cat',$('sabcat').value)}
 function loadPrefs(){try{const p=JSON.parse(LS.get('nzb_mobile_prefs','{}'));if(p.sort)$('sort').value=p.sort;if(p.prio!==undefined)$('prio').value=p.prio;if(p.indexer&&[...$('indexer').options].some(o=>o.value===p.indexer))$('indexer').value=p.indexer;['minsize','maxsize','mingrabs'].forEach(k=>{if(p[k]!==undefined)$(k).value=p[k]})}catch{}}
@@ -4892,10 +4978,12 @@ function dTitle(d){return esc(d.label||d.name)}
 async function loadHomeDrives(force){
   if(!force&&Date.now()-drivesAt<120000){if(drivesData)renderHomeDrives(drivesData);return}
   drivesAt=Date.now();
-  try{drivesData=await api('/api/drives');renderHomeDrives(drivesData)}catch{}
+  try{drivesData=await api('/api/drives');renderHomeDrives(drivesData)}
+  catch(e){$('homedrives').innerHTML='<div class="section" style="margin:18px 4px 8px">DRIVES</div><button class="card kidle" data-tab="drives"><span>Couldn\'t check your drives: '+esc(e.message)+' · tap to try again</span></button>'}
 }
 function renderHomeDrives(r){
-  const box=$('homedrives');if(!r||!r.drives||!r.drives.length){box.innerHTML='';return}
+  const box=$('homedrives');
+  if(!r||!r.drives||!r.drives.length){box.innerHTML='<div class="section" style="margin:18px 4px 8px">DRIVES</div><button class="card kidle" data-tab="drives"><span>'+esc((r&&r.problem)||'No drives reported yet')+' · tap for Drive Health</span></button>';return}
   const n=r.totals.warn;
   box.innerHTML='<div class="row" style="justify-content:space-between;margin:18px 4px 8px"><div class="section" style="margin:0;flex:none">DRIVES</div>'+(n?'<span class="tag warn" style="flex:none">'+n+' NEED'+(n===1?'S':'')+' A LOOK</span>':'<span class="tag ok" style="flex:none">ALL HEALTHY</span>')+'</div><div class="card">'+
     r.drives.map(d=>'<button class="drow" data-tab="drives"><div class="dl"><span class="lt">'+esc(dLetters(d)||'—')+'</span><span class="nm">'+dTitle(d)+' <small>· '+esc(dKind(d))+'</small></span>'+dTag(d)+'</div>'+
@@ -4919,10 +5007,63 @@ function driveCard(d){
   stats.push(d.days_left!=null?['~'+d.days_left,'Days left']:[fmtBytes(d.total),'Capacity']);
   const notes=d.problems.map(p=>'<div class="dnote '+(d.status==='bad'?'bad':'warn')+'">'+esc(p)+'</div>').join('');
   const info=d.days_left!=null?'<div class="dnote warn">About <b>'+esc(d.days_left)+' days</b> of space left at your pace ('+esc(fmtBytes(d.daily_bytes))+'/day).</div>':'';
-  return '<div class="dcard"><div class="top"><span class="lt">'+esc(dLetters(d)||'—')+'</span><div class="nm"><b>'+dTitle(d)+'</b><span>'+esc(d.name)+(dKind(d)?' · '+esc(dKind(d)):'')+'</span></div>'+dTag(d)+'</div>'+
+  return '<button class="dcard tap" data-ddrive="'+esc(d.key)+'"><div class="top"><span class="lt">'+esc(dLetters(d)||'—')+'</span><div class="nm"><b>'+dTitle(d)+'</b><span>'+esc(d.name)+(dKind(d)?' · '+esc(dKind(d)):'')+'</span></div>'+dTag(d)+'</div>'+
     (d.total?'<div class="row" style="justify-content:space-between;margin-top:12px;font-size:13px"><b style="flex:none">'+esc(fmtBytes(d.free))+' free of '+esc(fmtBytes(d.total))+'</b><span style="flex:none;font:500 12px var(--mono);color:var(--soft)">'+esc(d.used_pct)+'% used</span></div><div class="bar" style="height:8px;margin:6px 0 0"><span style="width:'+clampPct(d.used_pct)+'%;background:'+dBarColor(d)+'"></span></div>':'')+
     '<div class="dstats">'+stats.map(s=>'<div><b>'+esc(s[0])+'</b><span>'+esc(s[1])+'</span></div>').join('')+'</div>'+
-    notes+(notes?'':info)+(d.uses.length?'<div class="dnote">'+esc(d.uses.join(' · '))+(d.temp?' · alert at '+esc(Math.round(d.temp_limit))+'°C':'')+'</div>':'')+'</div>';
+    notes+(notes?'':info)+(d.uses.length?'<div class="dnote">'+esc(d.uses.join(' · '))+(d.temp?' · alert at '+esc(Math.round(d.temp_limit))+'°C':'')+'</div>':'')+
+    '<div class="dio" data-io="'+esc(d.details&&d.details.id)+'">'+ioText(driveIO[d.details&&d.details.id])+'</div><div class="more">Details ›</div></button>';
+}
+let driveIO={},driveOpen=null;
+function ioText(x){if(!x)return '<span>Activity: —</span>';return '<span>Read <b>'+esc(fmtBytes(x.read))+'/s</b></span><span>Write <b>'+esc(fmtBytes(x.write))+'/s</b></span><span class="busy">Busy <b>'+esc(Math.round(x.busy))+'%</b></span>'}
+async function refreshDriveIO(){
+  try{driveIO=(await api('/api/drives/io')).io||{}}catch{return}
+  document.querySelectorAll('[data-io]').forEach(el=>{el.innerHTML=ioText(driveIO[el.dataset.io])});
+}
+function dNum(v,unit){return v==null?'—':Number(v).toLocaleString()+(unit||'')}
+function oneTempChart(d){
+  const pts=d.history||[];if(pts.length<2)return '<p class="hint" style="margin:0">The graph fills in over the first day (one reading every 10 minutes).</p>';
+  const vals=pts.map(p=>p[1]),lo0=Math.min(...vals),hi0=Math.max(...vals),avg=vals.reduce((a,b)=>a+b,0)/vals.length;
+  const now=Date.now()/1000,start=now-86400,hi=Math.max(hi0,d.temp_limit)+2,lo=Math.max(0,lo0-5),W=330,H=110;
+  const x=t=>((t-start)/86400*W).toFixed(1),y=v=>(H-(v-lo)/(hi-lo)*H).toFixed(1);
+  return '<svg width="100%" height="110" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" role="img" aria-label="Temperature over the last 24 hours"><line x1="0" x2="'+W+'" y1="'+y(d.temp_limit)+'" y2="'+y(d.temp_limit)+'" stroke="#6B5414" stroke-dasharray="4 4"/><polyline fill="none" stroke="var(--teal)" stroke-width="2" stroke-linejoin="round" points="'+pts.map(p=>x(p[0])+','+y(p[1])).join(' ')+'"/></svg>'+
+    '<div class="legend"><span>Low <b style="color:var(--white)">'+Math.round(lo0)+'°C</b></span><span>Average <b style="color:var(--white)">'+Math.round(avg)+'°C</b></span><span>High <b style="color:var(--white)">'+Math.round(hi0)+'°C</b></span><span style="margin-left:auto;color:#D6C7A0">- - '+Math.round(d.temp_limit)+'°C alert</span></div>';
+}
+function kv(rows){return '<div class="kv">'+rows.filter(r=>r).map(r=>'<div>'+esc(r[0])+'</div><div'+(r[2]?' class="'+r[2]+'"':'')+'>'+esc(r[1])+'</div>').join('')+'</div>'}
+function openDrive(key){
+  const d=(drivesData&&drivesData.drives||[]).find(x=>x.key===key);if(!d)return;driveOpen=key;
+  const x=d.details||{},io=driveIO[x.id];
+  const errs=(x.read_errors||0)+(x.write_errors||0);
+  const health=kv([
+    ['Health (Windows)',d.health,d.health==='Healthy'?'good':(d.health==='Unknown'?'':'bad')],
+    x.status?['Status',x.status]:null,
+    ['Temperature now',d.temp?d.temp+'°C':'—',d.temp&&d.temp>=d.temp_limit?'bad':(d.temp&&d.temp>=d.temp_limit-4?'warn':'')],
+    ['Highest recorded',x.temp_max?x.temp_max+'°C':'—'],
+    ['Alert at',Math.round(d.temp_limit)+'°C'],
+    ['Powered on',d.hours?dNum(d.hours,' h')+' ('+dYears(d.hours)+')':'—'],
+    d.media==='SSD'?['SSD wear',d.wear!=null?d.wear+'% used':'—',d.wear>=80?'bad':(d.wear>=50?'warn':'')]:null,
+    ['Uncorrected read errors',dNum(x.read_errors),x.read_errors?'bad':''],
+    ['Uncorrected write errors',dNum(x.write_errors),x.write_errors?'bad':''],
+    ['Corrected read / write',dNum(x.read_fixed)+' / '+dNum(x.write_fixed)],
+    ['Start / stop cycles',dNum(x.starts)],
+    d.media==='HDD'?['Head park cycles',dNum(x.loads)]:null,
+    ['Slowest read / write',(x.read_lat!=null?dNum(x.read_lat,' ms'):'—')+' / '+(x.write_lat!=null?dNum(x.write_lat,' ms'):'—')]]);
+  const ident=kv([['Model',x.model||d.name],x.serial?['Serial (end)',x.serial]:null,x.firmware?['Firmware',x.firmware]:null,['Type',[d.media,d.rpm?d.rpm+' rpm':''].filter(Boolean).join(' · ')||'—'],['Connection',d.bus||'—'],['Capacity',fmtBytes(d.size||d.total)],
+    x.style?['Partition style',x.style]:null,x.partitions!=null?['Partitions',String(x.partitions)]:null,(x.sector||x.lsector)?['Sector size',(x.lsector||'?')+' / '+(x.sector||'?')+' bytes']:null,
+    ['Boot / system disk',(x.boot?'boot':'')+(x.boot&&x.system?' + ':'')+(x.system?'system':'')||'no'],['Disk number',x.id||'—']]);
+  const vols=(d.volumes||[]).map(v=>'<div class="vrow"><div class="h"><b>'+esc((v.letter!=='/'?v.letter+': ':'')+(v.label||'Volume'))+'</b><span>'+esc([v.fs,v.health&&v.health!=='Healthy'?v.health:''].filter(Boolean).join(' · '))+'</span></div><div class="bar" style="height:6px;margin:7px 0 5px"><span style="width:'+clampPct(v.used_pct)+'%;background:'+dBarColor(v)+'"></span></div><div class="h"><span>'+esc(fmtBytes(v.free))+' free of '+esc(fmtBytes(v.total))+'</span><span>'+esc(v.used_pct)+'% used</span></div></div>').join('')||'<p class="hint" style="margin:0">No drive letters on this disk.</p>';
+  const panel=$('sheetpanel');
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button><div class="dbody" style="padding-top:20px">'+
+    '<div class="row" style="gap:12px;margin-right:48px"><span style="flex:none;font:800 22px var(--mono)">'+esc(dLetters(d)||'—')+'</span><div style="min-width:0"><h2 style="margin:0;font-size:19px">'+dTitle(d)+'</h2><div class="hint">'+esc(d.name)+'</div></div></div>'+
+    '<div style="margin-top:10px">'+dTag(d)+'</div>'+d.problems.map(p=>'<div class="dnote '+(d.status==='bad'?'bad':'warn')+'">'+esc(p)+'</div>').join('')+
+    (d.days_left!=null?'<div class="dnote warn">About <b>'+esc(d.days_left)+' days</b> of space left at your pace ('+esc(fmtBytes(d.daily_bytes))+'/day).</div>':'')+
+    '<div class="section">SPACE</div><div class="card">'+vols+'</div>'+
+    '<div class="section">ACTIVITY NOW</div><div class="card"><div class="dio" style="margin:0" data-io="'+esc(x.id)+'">'+ioText(io)+'</div></div>'+
+    '<div class="section">HEALTH</div><div class="card">'+health+(x.smart?'':'<p class="hint" style="margin:8px 0 0">Windows didn\'t share this drive\'s health counters. Running NZB Mobile Server as administrator usually fixes that.</p>')+'</div>'+
+    '<div class="section">TEMPERATURE · 24 H</div><div class="card">'+oneTempChart(d)+'</div>'+
+    '<div class="section">THIS DRIVE</div><div class="card">'+ident+(d.uses.length?'<p class="hint" style="margin:8px 0 0">Used for: '+esc(d.uses.join(', '))+'</p>':'')+'</div></div>';
+  $('sheet').classList.remove('hidden');document.body.style.overflow='hidden';
+  if(!sheetOpen){sheetOpen=true;try{history.pushState({sheet:1},'')}catch{}}
+  panel.scrollTop=0;
 }
 function renderDrives(r){
   drivesData=r;const t=r.totals,ds=r.drives;
@@ -5119,6 +5260,7 @@ function bind(){
     const mv=e.target.closest('[data-jmovie]');if(mv&&!e.target.closest('#sheet'))return openJfMovie(mv.dataset.jmovie);
     const bt=e.target.closest('[data-jbetter]');if(bt){if(e.target.closest('#sheet'))closeSheet();goSearch(bt.dataset.jbetter,{category:bt.dataset.jcat!==undefined?bt.dataset.jcat:'2000'})}
   });
+  $('drivebody').addEventListener('click',e=>{const c=e.target.closest('[data-ddrive]');if(c)openDrive(c.dataset.ddrive)});
   $('drivebody').addEventListener('change',e=>{const c=e.target.closest('[data-dalert]');if(c)setDriveAlert(c.dataset.dalert,c.checked)});
   $('token').addEventListener('keydown',e=>{if(e.key==='Enter')pair()});
   document.addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(b)showTab(b.dataset.tab)});
@@ -5176,7 +5318,7 @@ function bind(){
   setInterval(watchFinished,15000);
   $('recent').addEventListener('click',e=>{const b=e.target.closest('[data-recent]');if(b)useRecent(b.dataset.recent)});
   renderRecent();
-  setInterval(()=>{if(document.hidden||$('app').classList.contains('hidden'))return;if(activeTab==='home')refreshHome();else if(activeTab==='kodi')refreshKodiNow();else if(activeTab==='jellyfin')refreshJfNow()},5000);
+  setInterval(()=>{if(document.hidden||$('app').classList.contains('hidden'))return;if(activeTab==='home')refreshHome();else if(activeTab==='kodi')refreshKodiNow();else if(activeTab==='jellyfin')refreshJfNow();else if(activeTab==='drives')refreshDriveIO()},5000);
 }
 bind();
 if(token)connect();
@@ -5390,6 +5532,8 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, sab_stats())
         elif path == "/api/drives":
             self.send_json(200, self._drives_view())
+        elif path == "/api/drives/io":
+            self.send_json(200, {"io": drive_activity()})
         elif path.startswith("/api/jellyfin"):
             self._get_jellyfin(path)
         elif path == "/api/saved":

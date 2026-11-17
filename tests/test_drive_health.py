@@ -60,12 +60,15 @@ assert m.lhm_drive_temps(1) == {}                      # nothing listening -> no
 m._drive_inventory = lambda: {
     "disks": [
         {"id": "0", "name": "Samsung SSD 980 1TB", "media": "4", "bus": "17", "size": 1e12, "health": "0",
-         "temp": 67, "wear": 6, "hours": 9800},
+         "temp": 67, "wear": 6, "hours": 9800, "model": "Samsung SSD 980", "serial": "S64DNX0R123456Z",
+         "firmware": "3B4QFXO7", "temp_max": 71, "read_errors": 0, "write_errors": 0, "starts": 1200,
+         "read_lat": 12, "smart": True, "sector": 512},
         {"id": "1", "name": "WDC WD20EFRX", "media": "3", "bus": "11", "size": 2e12, "health": "1",
          "temp": None, "hours": 21412, "spindle": 5400},
     ],
     "parts": [{"disk": "0", "letter": "/"}],
-    "volumes": [],
+    "volumes": [{"letter": "/", "label": "System", "fs": "NTFS", "health": "Healthy"}],
+    "dinfo": [{"id": "0", "style": "GPT", "boot": True, "system": True, "parts": 4}],
 }
 m.lhm_drive_temps = lambda port=m.LHM_PORT: {"wdc wd20efrx": 56.0}
 m._drive_state.update(at=0.0, inv=None, sab_dir=("", 0.0))
@@ -81,6 +84,13 @@ assert hdd["status"] == "bad" and any("Too hot" in p for p in hdd["problems"]) a
 assert r["drives"][0] is hdd                                                     # worst first
 assert r["totals"]["warn"] == 2 and r["temps_available"]
 assert len(hdd["history"]) == 1 and hdd["history"][0][1] == 56.0
+x = ssd["details"]
+assert x["model"] == "Samsung SSD 980" and x["serial"] == "…23456Z" and x["firmware"] == "3B4QFXO7", x   # only the end of the serial
+assert x["style"] == "GPT" and x["boot"] and x["system"] and x["partitions"] == 4 and x["temp_max"] == 71
+assert x["read_errors"] == 0 and x["starts"] == 1200 and x["read_lat"] == 12 and x["smart"] and x["write_fixed"] is None
+assert ssd["volumes"][0]["label"] == "System" and ssd["volumes"][0]["fs"] == "NTFS" and ssd["volumes"][0]["total"] > 0
+assert hdd["details"]["smart"] is False and hdd["volumes"] == []
+assert m.drive_activity() == {}                                                   # not Windows: no live counters
 
 # ---------- temperature history: one point per 10 min, 24 h kept, saved to disk ----------
 key = hdd["key"]
@@ -128,6 +138,7 @@ assert d["temp_alert"] == 55 and d["nvme_temp_alert"] == 70
 st, d = api("/api/drives/alerts", {"notify_drive_hot": False})
 assert st == 200 and d["alerts"]["hot"] is False and d["alerts"]["health"] is True
 assert json.loads(m.SETTINGS_FILE.read_text())["notify_drive_hot"] is False
+assert api("/api/drives/io") == (200, {"io": {}})
 st, d = api("/api/drives/check", {})
 assert st == 200 and d["checked"]
 req = urllib.request.Request(base + "/api/drives")
@@ -145,7 +156,7 @@ assert len(r2["drives"]) == 2 and "Could not read drive health" in r2["problem"]
 
 # ---------- page wiring ----------
 page = m.PAGE
-for needle in ('id="drives"', 'id="homedrives"', "refreshDrives", "/api/drives/alerts", "data-dalert", "TEMPERATURES · 24 H"):
+for needle in ('id="tabdrives"', 'openDrive', '/api/drives/io', 'id="drives"', 'id="homedrives"', "refreshDrives", "/api/drives/alerts", "data-dalert", "TEMPERATURES · 24 H"):
     assert needle in page, needle
 
 app.shutdown(); sab.shutdown(); lhm.shutdown()
