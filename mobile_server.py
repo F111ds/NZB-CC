@@ -72,7 +72,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.9.2"
+VERSION = "3.9.3"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -3619,7 +3619,7 @@ function N($v) { if ($v -ne $null) { $v } else { $null } }
 $r = @{}
 try { $r.disks = @(Get-PhysicalDisk | ForEach-Object {
     $rc = $null; try { $rc = $_ | Get-StorageReliabilityCounter -ErrorAction Stop } catch {}
-    @{ id = "$($_.DeviceId)"; name = ("" + $_.FriendlyName).Trim(); model = ("" + $_.Model).Trim();
+    @{ id = "$($_.DeviceId)"; uid = "$($_.UniqueId)"; name = ("" + $_.FriendlyName).Trim(); model = ("" + $_.Model).Trim();
        serial = ("" + $_.SerialNumber).Trim(); firmware = ("" + $_.FirmwareVersion).Trim();
        media = "$($_.MediaType)"; bus = "$($_.BusType)"; size = [double]$_.Size; health = "$($_.HealthStatus)";
        status = "$($_.OperationalStatus)"; spindle = $_.SpindleSpeed;
@@ -3632,7 +3632,8 @@ try { $r.disks = @(Get-PhysicalDisk | ForEach-Object {
        read_lat = $(if ($rc) { N $rc.ReadLatencyMax }); write_lat = $(if ($rc) { N $rc.WriteLatencyMax });
        smart = [bool]$rc } }) } catch {}
 try { $r.dinfo = @(Get-Disk | ForEach-Object { @{ id = "$($_.Number)"; style = "$($_.PartitionStyle)"; boot = [bool]$_.IsBoot;
-       system = [bool]$_.IsSystem; parts = $_.NumberOfPartitions; offline = [bool]$_.IsOffline } }) } catch {}
+       system = [bool]$_.IsSystem; parts = $_.NumberOfPartitions; offline = [bool]$_.IsOffline;
+       serial = ("" + $_.SerialNumber).Trim(); uid = "$($_.UniqueId)"; name = ("" + $_.FriendlyName).Trim(); size = [double]$_.Size } }) } catch {}
 try { $r.parts = @(Get-Partition | Where-Object { $_.DriveLetter } | ForEach-Object { @{ disk = "$($_.DiskNumber)"; letter = "$($_.DriveLetter)" } }) } catch {}
 try { $r.volumes = @(Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { @{ letter = "$($_.DriveLetter)"; label = $_.FileSystemLabel;
        fs = "$($_.FileSystem)"; health = "$($_.HealthStatus)" } }) } catch {}
@@ -3886,6 +3887,41 @@ def drive_activity() -> dict:
         return out
 
 
+def _norm_serial(v) -> str:
+    return re.sub(r"[^0-9A-Za-z]", "", str(v or "")).upper()
+
+
+def _match_disk_numbers(disks: list, dinfo: list) -> dict:
+    """Physical disk -> Windows disk number (what partitions and drive letters refer to).
+
+    Get-PhysicalDisk's DeviceId is usually the disk number, but not always (after a drive is added or
+    swapped, with some NVMe/RAID drivers), and then that drive's letters went missing. Match by serial
+    number first, then by unique ID, then by name and size, and only then by DeviceId."""
+    out: dict = {}
+    free = list(dinfo)
+
+    def take(disk, pred):
+        hits = [x for x in free if pred(x)]
+        if len(hits) == 1:
+            out[id(disk)] = str(hits[0].get("id", ""))
+            free.remove(hits[0])
+            return True
+        return False
+
+    pending = list(disks)
+    for rule in (
+        lambda d: (lambda s: (lambda x: bool(s) and _norm_serial(x.get("serial")) == s))(_norm_serial(d.get("serial"))),
+        lambda d: (lambda u: (lambda x: bool(u) and str(x.get("uid") or "") == u))(str(d.get("uid") or "")),
+        lambda d: (lambda: (lambda x: bool(d.get("name")) and str(x.get("name") or "") == str(d.get("name"))
+                            and abs(to_float(x.get("size")) - to_float(d.get("size"))) < 1e9))(),
+        lambda d: (lambda i: (lambda x: str(x.get("id", "")) == i))(str(d.get("id", ""))),
+    ):
+        pending = [d for d in pending if not take(d, rule(d))]
+    for d in pending:
+        out[id(d)] = str(d.get("id", ""))
+    return out
+
+
 _LOGICAL_KIND = {2: "Removable", 3: "Local", 4: "Network", 6: "RAM disk"}
 
 
@@ -3971,11 +4007,13 @@ def drive_report(force: bool = False, with_rate: bool = True) -> dict:
     rate = daily_download_bytes() if with_rate and sab_letter else 0.0
     low_gb = load_settings().get("drive_low_gb", DRIVE_LOW_GB)
 
+    disk_numbers = _match_disk_numbers(inv["disks"], inv.get("dinfo") or [])
     drives, temps = [], {}
     for disk in inv["disks"]:
         disk_id = str(disk.get("id", ""))
+        num = disk_numbers.get(id(disk), disk_id)  # its "disk number", which partitions refer to
         letters = sorted({str(p.get("letter", "")).upper() if os.name == "nt" else "/"
-                          for p in inv["parts"] if str(p.get("disk")) == disk_id} - {""})
+                          for p in inv["parts"] if str(p.get("disk")) == num} - {""})
         total = free = 0
         volumes = []
         for letter in letters:
@@ -4035,7 +4073,7 @@ def drive_report(force: bool = False, with_rate: bool = True) -> dict:
             "wear": to_int(disk.get("wear")) if media == "SSD" and disk.get("wear") not in (None, "") else None,
             "rpm": to_int(disk.get("spindle")) if media == "HDD" and 1 < to_int(disk.get("spindle")) < 30000 else None,  # 4294967295 = unknown
             "uses": uses, "days_left": days_left, "daily_bytes": rate if days_left is not None else None,
-            "volumes": volumes, "details": _drive_details(disk, dinfo.get(disk_id, {})),
+            "volumes": volumes, "details": _drive_details(disk, dinfo.get(num, {})),
         })
     covered = {x for d in drives for x in d["letters"]}
     for extra in _other_drive_letters(inv, covered, vols, low_gb, system, media_letters, sab_letter):

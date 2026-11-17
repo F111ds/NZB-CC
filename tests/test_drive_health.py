@@ -109,6 +109,32 @@ r0 = m._io_rates({"t": 0, "read": 0, "write": 0, "busy": 0, "f": 1e7}, {"t": 2e7
 assert r0 == {"read": 2e6, "write": 1e6, "busy": 25.0}, r0                        # 2 s apart: 2 MB/s, 1 MB/s, 25 % busy
 assert m._io_rates({"t": 5, "read": 0, "write": 0, "busy": 0}, {"t": 5, "read": 1, "write": 1, "busy": 1}) == {}
 
+# ---------- disks whose DeviceId isn't their disk number (the "G: SSD missing" bug) ----------
+ds = [{"id": "0", "serial": "S64D NX0R 12_34", "name": "Samsung", "size": 1e12},
+      {"id": "1", "serial": "WD-ABC", "name": "WD", "size": 2e12},
+      {"id": "3", "serial": "", "name": "Crucial", "size": 5e11}]
+di = [{"id": "0", "serial": "S64DNX0R1234"}, {"id": "2", "serial": "WD-ABC"},
+      {"id": "1", "serial": "", "name": "Crucial", "size": 5e11 + 1e6}]
+nums = m._match_disk_numbers(ds, di)
+assert [nums[id(d)] for d in ds] == ["0", "2", "1"], nums      # by serial (spaces ignored), by serial, by name+size
+assert m._match_disk_numbers(ds[:1], [])[id(ds[0])] == "0"      # nothing to match: DeviceId
+saved_inv = m._drive_inventory
+m._drive_inventory = lambda: {
+    "disks": [{"id": "5", "name": "Crucial MX500", "serial": "2203E5F1", "media": "4", "bus": "11", "size": 5e11,
+               "health": "0", "temp": 35}],
+    "parts": [{"disk": "2", "letter": "/"}],                   # Windows calls it disk 2, not 5
+    "volumes": [], "logical": [{"letter": "/", "type": 3}],
+    "dinfo": [{"id": "2", "serial": "2203E5F1", "style": "GPT", "parts": 1}]}
+m._drive_state.update(at=0.0, inv=None)
+rg = m.drive_report(force=True)
+assert len(rg["drives"]) == 1 and rg["drives"][0]["letters"] == ["/"] and rg["drives"][0]["media"] == "SSD", rg["drives"]
+assert rg["drives"][0]["details"]["style"] == "GPT" and rg["drives"][0]["temp"] == 35      # a real disk, with health
+m._drive_inventory = saved_inv
+m._drive_state.update(at=0.0, inv=None)
+r = m.drive_report(force=True)
+by = {d["name"]: d for d in r["drives"]}
+ssd, hdd = by["Samsung SSD 980 1TB"], by["WDC WD20EFRX"]
+
 # ---------- temperature history: one point per 10 min, 24 h kept, saved to disk ----------
 key = hdd["key"]
 now = time.time()
