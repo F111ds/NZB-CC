@@ -1,5 +1,14 @@
 mobile nzb command center
 
+## Phone app home-screen icons
+
+Open the phone app's address in your phone's browser and add it to your home screen
+(iPhone: Safari > Share > **Add to Home Screen**; Android: Chrome > ⋮ > **Add to Home screen** / **Install app**):
+
+- `http://<your-pc>:<port>/` gives the **NZB Center** icon (downloads, search, queue).
+- `http://<your-pc>:<port>/kodi` gives a separate **Kodi** icon (a TV with a play button) that opens straight on the Kodi tab.
+  Pair once in either; the other uses the same pairing code. On Android you can also long-press the NZB Center icon and pick **Kodi**.
+
 ## System Command Center (Windows desktop)
 
 A live dashboard for your PC: Windows, CPU, memory, GPU, drives, network and processes.
