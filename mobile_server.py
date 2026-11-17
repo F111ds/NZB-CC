@@ -3,7 +3,9 @@
 NZB Command Center - Phone App (v3)
 
 A phone version of NZB Command Center, served on your home network:
-  * Home   - current download, pause/resume, today's done/failed, free space,
+  * Home   - current download (with "ready ~9:40 PM"), what's playing on Kodi and Jellyfin,
+             "Just arrived" movies with Play on TV, phone alerts (bell), pull down to refresh,
+             current download, pause/resume, today's done/failed, free space,
              data downloaded today / this week / this month, Kodi now playing
   * Search - your Newznab indexers, with a category drop-down per indexer; send to SABnzbd
   * Queue  - SABnzbd queue and history (pause, delete, retry, speed limit)
@@ -73,7 +75,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.9.6"
+VERSION = "3.10.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -3272,6 +3274,53 @@ def _tv_wait_for_kodi(wait: float) -> None:
             time.sleep(1.5)
 
 
+HOME_ARRIVED = 10
+_home_jf_down_until = 0.0   # Home polls every 5 s: after Jellyfin fails, skip it for a while
+
+
+def home_jellyfin_sessions() -> list[dict]:
+    """What's playing on Jellyfin, for Home - without Kodi's own stream (Kodi plays through the
+    Jellyfin add-on), which the Kodi card already shows. [] when Jellyfin isn't set up or answering."""
+    global _home_jf_down_until
+    if time.monotonic() < _home_jf_down_until:
+        return []
+    try:
+        if not jellyfin_configured():
+            return []
+        return [x for x in jf_sessions() if "kodi" not in (x.get("client", "") + " " + x.get("device", "")).lower()]
+    except (UpstreamError, ConfigError):
+        _home_jf_down_until = time.monotonic() + 30
+        return []
+
+
+def home_arrived() -> list[dict]:
+    """The newest movies from the TV launcher's row (finished downloads and Kodi's recently added)."""
+    try:
+        items = tv_row()["items"]
+    except Exception:
+        return []
+    items = sorted(items, key=lambda x: str(x.get("added") or ""), reverse=True)[:HOME_ARRIVED]
+    return [{k: x.get(k) for k in ("id", "title", "year", "quality", "added", "watched", "new", "in_kodi")}
+            | {"poster": "t:" + str(x["id"]) if x.get("poster") else ""} for x in items]
+
+
+def home_play(item_id: str) -> dict:
+    """"Play on TV" from Home: plays it in Kodi, turning the TV on and opening Kodi first if needed."""
+    if not TV_ID_RE.fullmatch(item_id or ""):
+        raise ValueError("Invalid item.")
+    try:
+        kodi_call("JSONRPC.Ping", timeout=3)
+        started_tv = False
+    except UpstreamError:
+        if not tv_configured():
+            raise UpstreamError("Kodi isn't answering. Turn the TV on and open Kodi, then try again.") from None
+        tv_start(launch_kodi=True)       # TV on + Kodi; tv_play then waits for Kodi to answer
+        started_tv = True
+    result = tv_play(item_id, wait=90 if started_tv else TV_PLAY_WAIT_SECS)   # waking the TV takes a while
+    result["started_tv"] = started_tv
+    return result
+
+
 def tv_play(item_id: str, wait: float = TV_PLAY_WAIT_SECS, from_start: bool = False) -> dict:
     """Plays a row item in Kodi. The TV starts Kodi first, so this waits for Kodi to answer."""
     if not TV_ID_RE.fullmatch(item_id or ""):
@@ -3660,7 +3709,9 @@ class BackgroundWorker:
                 tv_watched_refresh()
             except Exception:
                 log.exception("Refreshing the TV's recently watched row failed")
-        due = due_saved_search(settings, now)
+        # Saved searches report only through phone alerts: without alerts set up they'd use indexer
+        # API calls for nothing, so they only run when alerts are on.
+        due = due_saved_search(settings, now) if settings["ntfy_url"] else None
         if due:  # one per tick spreads indexer API use out
             try:
                 run_saved_search(due["id"], notify=True)
@@ -4616,6 +4667,19 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 .dcard.tap{cursor:pointer;border:0;width:100%;text-align:left;color:inherit;display:block}.dcard .more{font-size:12px;color:var(--teal);margin-top:10px;font-weight:600}
 .kv{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:0;font-size:13px}.kv div{padding:9px 0;border-top:1px solid #10242C}.kv div:nth-child(-n+2){border-top:0}.kv div:nth-child(odd){color:var(--soft)}.kv div:nth-child(even){text-align:right;font-family:var(--mono);font-weight:600;color:var(--white)}.kv .bad{color:var(--red)!important}.kv .warn{color:var(--amber)!important}.kv .good{color:var(--green)!important}
 .vrow{padding:10px 0;border-top:1px solid #10242C}.vrow:first-child{border-top:0}.vrow .h{display:flex;justify-content:space-between;gap:8px;font-size:13px}.vrow .h span{color:var(--soft);font-family:var(--mono);font-size:12px}
+.bar.big{height:14px;border-radius:7px}.bar.big span{border-radius:7px}
+.ready{display:inline-block;font:700 13px var(--mono);color:var(--teal);margin-top:6px}
+.hdrbtn{position:absolute;right:14px;top:calc(12px + env(safe-area-inset-top));width:44px;height:44px;border-radius:12px;border:0;background:transparent;color:var(--soft);display:flex;align-items:center;justify-content:center}
+.hdrbtn.on{color:var(--teal)}
+.arr{flex:none;width:136px;scroll-snap-align:start;background:var(--card);border-radius:12px;padding:8px}
+.arr .ph{width:100%;aspect-ratio:2/3;border-radius:8px;overflow:hidden;background:var(--hover);margin-bottom:8px;position:relative}
+.arr .ph .newtag{position:absolute;top:6px;left:6px;font:800 10px var(--mono);background:var(--teal);color:var(--ink);padding:2px 6px;border-radius:5px}
+.arr .t{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.arr .m{font:500 11px var(--mono);color:var(--soft);margin:3px 0 8px}
+.arr .btn{width:100%;min-height:38px;padding:6px;font-size:12px}
+.ptr{position:fixed;left:50%;top:calc(6px + env(safe-area-inset-top));z-index:8;transform:translate(-50%,-60px);background:var(--hover);border:1px solid var(--line);color:var(--text);border-radius:18px;padding:7px 14px;font-size:13px;font-weight:600;transition:transform .15s;pointer-events:none}
+.ptr.show{transform:translate(-50%,var(--ptr,0px))}
+.emptydl{display:flex;align-items:center;gap:14px}.emptydl svg{color:var(--teal);flex:none;opacity:.8}
+.alfield{margin-bottom:12px}.altop{display:flex;gap:8px}.altop .field{margin:0}
 .jgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
 .jq{background:var(--card);border:0;border-radius:14px;padding:12px;text-align:left;color:var(--white);display:flex;flex-direction:column;gap:5px;min-height:78px;cursor:pointer}
 .jq b{font-size:14px}.jq span{font-size:12px;color:var(--soft)}.jq.main{background:var(--teal);color:var(--ink)}.jq.main span{color:#0B3B36}.jq.on{outline:2px solid var(--teal)}
@@ -4624,7 +4688,7 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 .jnow .meta{font:500 12px var(--mono);color:var(--soft);margin-top:3px}.tag.tx{background:#2E2410;color:var(--amber)}
 .pills{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}.pills button{border:1px solid var(--line);background:transparent;color:var(--text);border-radius:18px;padding:0 14px;min-height:38px;font-size:13px;font-weight:600}.pills button.on{background:var(--teal);color:var(--ink);border-color:var(--teal)}
 </style></head><body>
-<header><div class="brand"><img src="/icon.png" alt="">NZB Command Center</div><div id="statusbar" class="statusbar hidden"><span id="sabpill" class="spill"><i></i>SABnzbd</span></div></header>
+<header><div class="brand"><img src="/icon.png" alt="">NZB Command Center</div><button id="alertsbtn" class="hdrbtn hidden" aria-label="Phone alerts"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></button><div id="statusbar" class="statusbar hidden"><span id="sabpill" class="spill"><i></i>SABnzbd</span></div></header>
 <main>
 <div id="pair" class="pair card"><h1>Connect</h1><p class="lede" style="margin-left:0">Mobile control for your PC · v__VERSION__</p><label class="label" for="token">Access code</label><input id="token" class="field" type="password" placeholder="Code shown on your PC" autocomplete="off" autocapitalize="off" autocorrect="off"><button class="btn full" id="pairbtn">Connect</button><div id="pairmsg" class="hint" style="margin-top:10px">The code is in the window running NZB Mobile Server. Opening its pairing link on this phone connects automatically.</div></div>
 <div id="app" class="hidden">
@@ -4635,7 +4699,10 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <div class="tiles" id="homeusage"><div class="tile"><div class="k">Today</div><div class="v" id="husday">—</div></div><div class="tile"><div class="k">This week</div><div class="v" id="husweek">—</div></div><div class="tile"><div class="k">This month</div><div class="v" id="husmonth">—</div></div></div>
 <button class="shortcut" data-tab="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search your indexers…</button>
 <div id="homekodi"></div>
+<div id="homejf"></div>
+<div id="homearrived"></div>
 <div id="homedrives"></div>
+<p class="hint" id="homever" style="text-align:center;margin:22px 0 4px"></p>
 </section>
 <section id="jellyfin" class="hidden">
 <div class="row" style="align-items:flex-end"><div><h1>Jellyfin</h1><p class="lede" id="jfstatus">Loading…</p></div><button class="btn ghost sm hidden" id="jfscan" style="flex:none;margin-bottom:14px">Scan libraries</button></div>
@@ -4755,7 +4822,7 @@ function toast(msg,isErr){const t=$('toast');t.textContent=msg;t.className='toas
 function skeleton(n,lines){let h='';for(let i=0;i<n;i++)h+='<div class="skel">'+'<i style="width:'+(85-i*7)+'%"></i><i style="width:55%"></i>'+(lines>2?'<i style="width:35%"></i>':'')+'</div>';return h}
 function empty(title,hint){return '<div class="empty">'+EMPTY_ICON+'<b>'+esc(title)+'</b>'+esc(hint)+'</div>'}
 
-const API_TIMEOUTS={'/api/jellyfin/missing':90000,'/api/jellyfin/upgrades':60000,'/api/jellyfin/connect':30000,'/api/drives':70000,'/api/drives/check':70000,'/api/search':90000,'/api/add':120000,'/api/add-batch':300000};
+const API_TIMEOUTS={'/api/home/play':150000,'/api/jellyfin/missing':90000,'/api/jellyfin/upgrades':60000,'/api/jellyfin/connect':30000,'/api/drives':70000,'/api/drives/check':70000,'/api/search':90000,'/api/add':120000,'/api/add-batch':300000};
 async function api(path,body){
   const opt={method:body===undefined?'GET':'POST',headers:{'X-Mobile-Token':token}};
   if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body)}
@@ -4768,13 +4835,13 @@ async function api(path,body){
   if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
   return d;
 }
-function showPair(msg){$('app').classList.add('hidden');$('tabbar').classList.add('hidden');$('batchbar').classList.add('hidden');$('pair').classList.remove('hidden');$('token').value='';if(msg)$('pairmsg').textContent=msg}
+function showPair(msg){$('alertsbtn').classList.add('hidden');$('app').classList.add('hidden');$('tabbar').classList.add('hidden');$('batchbar').classList.add('hidden');$('pair').classList.remove('hidden');$('token').value='';if(msg)$('pairmsg').textContent=msg}
 function pair(){const v=$('token').value.trim();if(!v)return;token=v;LS.set('nzb_mobile_token',token);connect()}
 
 async function connect(){
   try{
     const d=await api('/api/status');
-    $('pair').classList.add('hidden');$('app').classList.remove('hidden');$('tabbar').classList.remove('hidden');
+    $('pair').classList.add('hidden');$('app').classList.remove('hidden');$('tabbar').classList.remove('hidden');$('alertsbtn').classList.remove('hidden');
     const sel=$('indexer');sel.innerHTML='<option value="*">All indexers</option>'+d.indexers.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join('');
     catGroups=d.categories||{};
     loadPrefs();fillSearchCategories(JSON.parse(LS.get('nzb_mobile_prefs','{}')||'{}').category);
@@ -4915,11 +4982,11 @@ async function addSelected(){
 function stateTag(status){const s=String(status||'').toLowerCase();const cls=s==='downloading'?'ok':(s==='paused'?'warn':'busy');return '<span class="tag '+cls+'">'+esc(String(status||'Queued').toUpperCase())+'</span>'}
 function heroCard(x){
   const p=clampPct(x.percentage),paused=String(x.status).toLowerCase()==='paused';
-  return '<div class="hero queueitem" data-id="'+esc(x.id)+'">'+stateTag(x.status)+'<div class="name">'+esc(x.name)+'</div><div class="sub">'+esc(x.sizeleft)+' of '+esc(x.size)+' left · ETA '+esc(x.eta||'—')+(x.cat&&x.cat!=='*'?' · '+esc(x.cat):'')+'</div><div class="bar"><span style="width:'+p+'%"></span></div><div class="row"><span style="flex:1;font:600 14px var(--mono);color:var(--teal)">'+p.toFixed(0)+'%</span><button class="icon-btn" data-act="more" aria-label="Category and priority">'+ICON.more+'</button><button class="btn ghost sm" style="flex:none" data-act="'+(paused?'resume':'pause')+'">'+(paused?'Resume':'Pause')+'</button><button class="btn danger sm" style="flex:none" data-act="delete">Delete</button></div></div>';
+  return '<div class="hero queueitem" data-id="'+esc(x.id)+'">'+stateTag(x.status)+'<div class="name">'+esc(x.name)+'</div><div class="sub">'+esc(x.sizeleft)+' of '+esc(x.size)+' left · ETA '+esc(x.eta||'—')+(x.cat&&x.cat!=='*'?' · '+esc(x.cat):'')+'</div><div class="bar big"><span style="width:'+p+'%"></span></div>'+(!paused&&readyAt(x.eta)?'<div class="ready" style="margin:0 0 8px">'+esc(readyAt(x.eta))+'</div>':'')+'<div class="row"><span style="flex:1;font:600 14px var(--mono);color:var(--teal)">'+p.toFixed(0)+'%</span><button class="icon-btn" data-act="more" aria-label="Category and priority">'+ICON.more+'</button><button class="btn ghost sm" style="flex:none" data-act="'+(paused?'resume':'pause')+'">'+(paused?'Resume':'Pause')+'</button><button class="btn danger sm" style="flex:none" data-act="delete">Delete</button></div></div>';
 }
 function queueRow(x){
   const p=clampPct(x.percentage),paused=String(x.status).toLowerCase()==='paused';
-  return '<div class="qrow queueitem" data-id="'+esc(x.id)+'"><div class="info"><div class="t">'+esc(x.name)+'</div><div class="m">'+esc(String(x.status||'').toUpperCase())+' · '+esc(x.size)+(x.eta?' · '+esc(x.eta):'')+(x.cat&&x.cat!=='*'?' · '+esc(x.cat):'')+'</div><div class="bar thin"><span style="width:'+p+'%"></span></div></div><button class="icon-btn" data-act="more" aria-label="More options: move to top, category, priority">'+ICON.more+'</button><button class="icon-btn" data-act="'+(paused?'resume':'pause')+'" aria-label="'+(paused?'Resume':'Pause')+'">'+(paused?ICON.play:ICON.pause)+'</button><button class="icon-btn red" data-act="delete" aria-label="Delete">'+ICON.trash+'</button></div>';
+  return '<div class="qrow queueitem" data-id="'+esc(x.id)+'"><div class="info"><div class="t">'+esc(x.name)+'</div><div class="m">'+esc(String(x.status||'').toUpperCase())+' · '+esc(x.size)+(x.eta?' · '+esc(x.eta):'')+(!paused&&readyAt(x.eta)?' · '+esc(readyAt(x.eta)):'')+(x.cat&&x.cat!=='*'?' · '+esc(x.cat):'')+'</div><div class="bar thin"><span style="width:'+p+'%"></span></div></div><button class="icon-btn" data-act="more" aria-label="More options: move to top, category, priority">'+ICON.more+'</button><button class="icon-btn" data-act="'+(paused?'resume':'pause')+'" aria-label="'+(paused?'Resume':'Pause')+'">'+(paused?ICON.play:ICON.pause)+'</button><button class="icon-btn red" data-act="delete" aria-label="Delete">'+ICON.trash+'</button></div>';
 }
 async function refreshQueue(silent){
   if(queueBusy)return;queueBusy=true;const st=$('queuestatus');
@@ -4987,15 +5054,40 @@ function nowCard(p,compact){
     (compact?'':'<button class="round" data-kact="stop" data-pid="'+esc(p.playerid)+'" aria-label="Stop"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>')+
     '<button class="round main" data-kact="playpause" data-pid="'+esc(p.playerid)+'" aria-label="'+(p.paused?'Play':'Pause')+'">'+pp+'</button></div></div>';
 }
+// "0:02:44" (SABnzbd's time left) -> "ready ~9:41 PM" (tomorrow/day added when it's not today)
+function etaSecs(eta){const p=String(eta||'').trim().split(':').map(Number);if(!p.length||p.some(isNaN))return 0;return p.reduce((a,b)=>a*60+b,0)}
+function readyAt(eta){
+  const s=etaSecs(eta);if(!s)return '';
+  const t=new Date(Date.now()+s*1000),now=new Date(),hm=t.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+  const day=t.toDateString()===now.toDateString()?'':(new Date(now.getTime()+86400000).toDateString()===t.toDateString()?' tomorrow':' '+t.toLocaleDateString([],{weekday:'short'}));
+  return 'ready ~'+hm+day;
+}
 function homeDownload(d){
   const c=d.current;
   const btn=d.paused?'<button class="btn sm" data-hact="resume">Resume all</button>':'<button class="btn ghost sm" data-hact="pause">Pause all</button>';
   const qbtn='<button class="btn ghost sm" data-tab="queue">Queue'+(d.total?' ('+esc(d.total)+')':'')+'</button>';
-  if(!c)return '<div class="hero"><div class="kode">DOWNLOADS</div><div class="name">Nothing downloading</div><div class="sub">Search for something and send it to SABnzbd.</div><div class="row" style="margin-top:12px">'+(d.paused?btn:'')+qbtn+'</div></div>';
+  if(!c)return '<div class="hero"><div class="emptydl"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg><div><div class="kode">DOWNLOADS</div><div class="name" style="margin-top:4px">All caught up</div><div class="sub">Nothing downloading right now.</div></div></div><div class="row" style="margin-top:14px"><button class="btn sm" data-tab="search">Find something</button>'+(d.paused?btn:'')+qbtn+'</div></div>';
   const low=String(d.state||'').toLowerCase(),tag=low==='paused'?'warn':(low==='downloading'?'ok':'busy');
   return '<div class="hero"><div class="row" style="justify-content:space-between"><span class="tag '+tag+'" style="flex:none">'+esc(String(d.state||'').toUpperCase())+'</span><span style="flex:none;font:700 18px var(--mono);color:var(--teal)">'+esc(d.speed||'')+'</span></div>'+
-    '<div class="name">'+esc(c.name)+'</div><div class="bar"><span style="width:'+clampPct(c.pct)+'%"></span></div>'+
-    '<div class="sub">'+esc(Math.round(c.pct||0))+'% · '+esc(c.sizeleft||'?')+' left of '+esc(c.size||'?')+(c.eta?' · '+esc(c.eta):'')+'</div><div class="row" style="margin-top:12px">'+btn+qbtn+'</div></div>';
+    '<div class="name">'+esc(c.name)+'</div><div class="bar big"><span style="width:'+clampPct(c.pct)+'%"></span></div>'+
+    '<div class="sub">'+esc(Math.round(c.pct||0))+'% · '+esc(c.sizeleft||'?')+' left of '+esc(c.size||'?')+(c.eta?' · '+esc(c.eta):'')+'</div>'+
+    (low!=='paused'&&readyAt(c.eta)?'<div class="ready">'+esc(readyAt(c.eta))+'</div>':'')+'<div class="row" style="margin-top:12px">'+btn+qbtn+'</div></div>';
+}
+let arrivedKey='';
+function renderArrived(items,tvReady){
+  const box=$('homearrived'),key=JSON.stringify(items.map(x=>[x.id,x.watched]));
+  if(key===arrivedKey)return;arrivedKey=key;   // Home refreshes every 5 s: don't redraw (and refetch posters) for nothing
+  if(!items.length){box.innerHTML='';return}
+  box.innerHTML='<div class="section">JUST ARRIVED</div><div class="cw">'+items.map(x=>'<div class="arr"><div class="ph">'+artTag(x.poster)+(x.new&&!x.watched?'<span class="newtag">NEW</span>':'')+'</div><div class="t">'+esc(x.title)+'</div><div class="m">'+esc([x.year,x.quality].filter(Boolean).join(' · ')||'\u00a0')+'</div><button class="btn sm" data-hplay="'+esc(x.id)+'">'+ICON.play+' Play on TV</button></div>').join('')+'</div>'+
+    (tvReady?'':'<p class="hint" style="margin:2px 4px 0">Kodi has to be open on the TV. Set up “TV on” on the Kodi tab and Play on TV turns the TV on for you.</p>');
+  hydrateArt(box);
+}
+async function homePlay(b){
+  b.disabled=true;const old=b.innerHTML;b.textContent='Starting…';
+  toast('Starting it on the TV… (turning the TV on first if needed, this can take a minute)');
+  try{const r=await api('/api/home/play',{id:b.dataset.hplay});toast(r.started_tv?'The TV is on and the movie is starting.':'Playing on the TV.');setTimeout(refreshHome,2500)}
+  catch(e){toast(e.message,true)}
+  finally{b.disabled=false;b.innerHTML=old}
 }
 async function refreshHome(){
   if(homeBusy)return;homeBusy=true;
@@ -5009,6 +5101,10 @@ async function refreshHome(){
     $('hfree').innerHTML=d.disk_free_gb!=null&&d.disk_free_gb>=0?esc(Number(d.disk_free_gb).toFixed(0))+' <small>GB</small>':'—';
     const k=d.kodi||{};
     $('homekodi').innerHTML=!k.configured?'':(k.online?nowCard(k.playing,true):'<button class="card kidle" data-tab="kodi">'+ICON.play+'<span>Kodi is offline</span></button>');hydrateArt($('homekodi'));
+    const js=d.jellyfin||[];
+    $('homejf').innerHTML=js.length?'<div class="section">JELLYFIN · '+js.length+' WATCHING</div>'+js.map(jfNowCard).join(''):'';hydrateArt($('homejf'));
+    renderArrived(d.arrived||[],d.tv_ready);
+    if(d.version)$('homever').textContent='NZB Command Center phone app · v'+d.version;
     loadHomeUsage();loadHomeDrives();
   }catch(e){$('homestatus').className='lede status error';$('homestatus').textContent=e.message}
   finally{homeBusy=false}
@@ -5024,7 +5120,7 @@ function pumpArt(){
   while(artActive<4&&artQueue.length){
     const j=artQueue.shift();artActive++;
     // "r:<id>" = a search result's poster (the server picks the source); anything else = Kodi artwork.
-    const src=j.ref.startsWith('r:')?'/api/search/art?id='+encodeURIComponent(j.ref.slice(2)):(j.ref.startsWith('j:')?'/api/jellyfin/art?id='+encodeURIComponent(j.ref.slice(2)):'/api/kodi/art?u='+encodeURIComponent(j.ref));
+    const src=j.ref.startsWith('t:')?'/api/tv/poster?id='+encodeURIComponent(j.ref.slice(2)):j.ref.startsWith('r:')?'/api/search/art?id='+encodeURIComponent(j.ref.slice(2)):(j.ref.startsWith('j:')?'/api/jellyfin/art?id='+encodeURIComponent(j.ref.slice(2)):'/api/kodi/art?u='+encodeURIComponent(j.ref));
     fetch(src,{headers:{'X-Mobile-Token':token}})
       .then(r=>{if(r.status===404)return null;if(!r.ok)throw new Error('HTTP '+r.status);return r.blob()})
       .then(b=>{if(!b){j.res(null);return}const u=URL.createObjectURL(b);artReady.set(j.ref,u);trimArt();j.res(u)})  // null = no poster: keep the placeholder, don't ask again
@@ -5569,6 +5665,57 @@ async function kodiType(done){
   finally{b1.disabled=b2.disabled=false}
 }
 
+// ---------- Phone alerts (ntfy) ----------
+function ntfyTopic(){const a='abcdefghjkmnpqrstuvwxyz23456789';let t='nzbcc-';const r=new Uint8Array(12);(window.crypto||{}).getRandomValues?crypto.getRandomValues(r):r.forEach((_,i)=>r[i]=Math.random()*256);r.forEach(x=>t+=a[x%a.length]);return 'https://ntfy.sh/'+t}
+async function openAlerts(){
+  const panel=$('sheetpanel');
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button><div class="empty"><b>Loading…</b></div>';
+  $('sheet').classList.remove('hidden');document.body.style.overflow='hidden';
+  if(!sheetOpen){sheetOpen=true;try{history.pushState({sheet:1},'')}catch{}}
+  let st,dr;try{[st,dr]=await Promise.all([api('/api/settings'),api('/api/drives').catch(()=>null)])}catch(e){panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button>'+empty('Couldn\'t load the alert settings',e.message);return}
+  const da=(dr&&dr.alerts)||{},on=!!st.ntfy_url;
+  const tg=(id,label,sub,checked)=>'<label class="tgl"><span>'+label+(sub?'<small>'+sub+'</small>':'')+'</span><input type="checkbox" id="'+id+'"'+(checked?' checked':'')+'></label>';
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button><div class="dbody" style="padding-top:20px">'+
+    '<h2 style="margin:0 44px 6px 0;font-size:20px">Phone alerts</h2><p class="hint" style="margin:0 0 14px">'+(on?'Alerts are <b style="color:var(--green)">on</b>.':'Get a notification on this iPhone when a download finishes or a drive needs a look. Free, using the <b>ntfy</b> app.')+'</p>'+
+    (on?'':'<div class="card"><div class="kode" style="margin-bottom:8px">SET UP (ONE TIME)</div><ol class="hint" style="margin:0;padding-left:18px;line-height:1.7"><li>Install <b>ntfy</b> from the App Store.</li><li>Tap <b>Use a new private topic</b> below, then <b>Copy</b>.</li><li>In ntfy tap <b>+</b>, paste the topic name, <b>Subscribe</b>, and allow notifications.</li><li>Tap <b>Save</b>, then <b>Send a test</b>.</li></ol></div>')+
+    '<div class="alfield"><label class="label" for="alurl">ntfy topic address</label><div class="altop"><input id="alurl" class="field" placeholder="https://ntfy.sh/your-private-topic" autocomplete="off" autocapitalize="off" autocorrect="off" inputmode="url" value="'+esc(st.ntfy_url||'')+'"><button class="btn ghost sm" id="alcopy" style="flex:none">Copy</button></div>'+
+    '<button class="btn ghost sm full" id="alnew" style="margin-top:8px">Use a new private topic</button><p class="hint" style="margin:6px 2px 0">Anyone who knows the topic name can read your alerts, so keep it long and random.</p></div>'+
+    '<details class="opts"><summary>Access token (only for a private ntfy server)<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></summary><div class="body"><input id="altoken" class="field" type="password" placeholder="'+(st.ntfy_token_set?'Saved (leave empty to keep it)':'Not needed for ntfy.sh')+'" autocomplete="off"></div></details>'+
+    '<div class="section">TELL ME WHEN</div><div class="card">'+
+    tg('alcomplete','A download finishes','',st.notify_complete)+tg('alfailed','A download fails','',st.notify_failed)+
+    tg('aldhealth','A drive has a problem','Windows reports it unhealthy',da.health!==false)+tg('aldhot','A drive is too hot','',da.hot!==false)+tg('aldlow','A drive is almost full','Less than '+esc(da.low_gb||75)+' GB free',da.low!==false)+'</div>'+
+    '<div class="row" style="margin-top:14px"><button class="btn" id="alsave">Save</button><button class="btn ghost" id="altest">Send a test</button></div>'+
+    (on?'<button class="btn danger sm full" id="aloff" style="margin-top:12px">Turn alerts off</button>':'')+'</div>';
+  panel.scrollTop=0;
+  const urlEl=$('alurl');
+  $('alnew').onclick=()=>{urlEl.value=ntfyTopic();toast('New private topic ready. Tap Copy, then subscribe to it in ntfy.')};
+  $('alcopy').onclick=async()=>{const v=urlEl.value.trim();if(!v){toast('Make a topic first',true);return}const name=v.split('/').pop();try{await navigator.clipboard.writeText(name);toast('Copied “'+name+'”. In ntfy tap +, paste, Subscribe.')}catch{urlEl.select();toast('Select the text and copy it: '+name)}};
+  const save=async off=>{
+    const body={ntfy_url:off?'':urlEl.value.trim(),saved_interval_hours:st.saved_interval_hours||6,notify_complete:$('alcomplete').checked,notify_failed:$('alfailed').checked};
+    const t=$('altoken').value.trim();if(t)body.ntfy_token=t;if(off)body.clear_token=true;
+    await api('/api/settings',body);
+    await api('/api/drives/alerts',{notify_drive_health:$('aldhealth').checked,notify_drive_hot:$('aldhot').checked,notify_drive_low:$('aldlow').checked}).catch(()=>{});
+  };
+  $('alsave').onclick=async()=>{try{await save(false);toast(urlEl.value.trim()?'Alerts saved. Tap “Send a test” to check.':'Saved (alerts are off without a topic).');openAlerts()}catch(e){toast(e.message,true)}};
+  $('altest').onclick=async()=>{try{await save(false);await api('/api/settings/test',{});toast('Test sent. It should pop up on this iPhone in a few seconds.')}catch(e){toast(e.message,true)}};
+  if($('aloff'))$('aloff').onclick=async()=>{if(!confirm('Turn phone alerts off?'))return;try{await save(true);toast('Alerts turned off');openAlerts()}catch(e){toast(e.message,true)}};
+}
+
+// ---------- Pull down to refresh ----------
+function refreshActive(){
+  const f={home:()=>{drivesAt=0;usageAt=0;arrivedKey='';refreshHome()},queue:()=>refreshQueue(),history:()=>refreshHistory(),kodi:()=>refreshKodi(),
+    jellyfin:()=>{jfMissing=jfUp=jfResults=null;refreshJellyfin()},drives:()=>refreshDrives(true)}[activeTab];
+  if(f){f();return true}return false;
+}
+function setupPullToRefresh(){
+  const ind=document.createElement('div');ind.className='ptr';ind.setAttribute('aria-hidden','true');ind.textContent='Pull to refresh';document.body.appendChild(ind);
+  let y0=null,ready=false;
+  window.addEventListener('touchstart',e=>{y0=(window.scrollY<=0&&!sheetOpen&&!$('app').classList.contains('hidden')&&e.touches.length===1)?e.touches[0].clientY:null;ready=false},{passive:true});
+  window.addEventListener('touchmove',e=>{if(y0==null)return;const dy=e.touches[0].clientY-y0;if(dy<=12){ind.classList.remove('show');return}
+    ready=dy>90;ind.textContent=ready?'Release to refresh':'Pull to refresh';ind.style.setProperty('--ptr',Math.min(dy/2,56)+'px');ind.classList.add('show')},{passive:true});
+  window.addEventListener('touchend',()=>{if(y0==null)return;y0=null;ind.classList.remove('show');if(ready){ready=false;if(refreshActive())toast('Refreshing…')}},{passive:true});
+}
+
 async function kodiScan(){
   const b=$('kodiscan');b.disabled=true;
   try{const r=await api('/api/kodi/scan',{});kodiMovies=null;
@@ -5599,6 +5746,10 @@ async function watchFinished(){
 function bind(){
   $('pairbtn').addEventListener('click',pair);
   $('drivecheck').addEventListener('click',()=>refreshDrives(true));
+  $('homejf').addEventListener('click',e=>{const a=e.target.closest('[data-jact]');if(a)jfAction(a.dataset.sid,a.dataset.jact).then(()=>setTimeout(refreshHome,600))});
+  $('homearrived').addEventListener('click',e=>{const b=e.target.closest('[data-hplay]');if(b)homePlay(b)});
+  $('alertsbtn').addEventListener('click',openAlerts);
+  setupPullToRefresh();
   $('kodysend').addEventListener('click',()=>kodiType(true));
   $('kodysendonly').addEventListener('click',()=>kodiType(false));
   $('kodytext').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();kodiType(true)}});
@@ -6017,6 +6168,10 @@ class MobileHandler(BaseHTTPRequestHandler):
             result = tv_play(str(body.get("id") or ""), from_start=bool(body.get("from_start")))
             log.info("tv play %s ip=%s", result.get("played"), self.ip)
             self.send_json(200, result)
+        elif path == "/api/home/play":
+            result = home_play(str(body.get("id") or ""))
+            log.info("home play %s (tv started: %s) ip=%s", result.get("played"), result.get("started_tv"), self.ip)
+            self.send_json(200, result)
         elif path == "/api/tv/mark_watched":
             self.send_json(200, tv_mark_watched(str(body.get("id") or "")))
         elif path == "/api/kodi/control":
@@ -6156,14 +6311,20 @@ class MobileHandler(BaseHTTPRequestHandler):
         out: dict = {"sab_ok": True}
         # Kodi is asked in parallel with SABnzbd, so a slow or switched-off Kodi doesn't add
         # its timeout on top of SABnzbd's.
-        with ThreadPoolExecutor(max_workers=1) as pool:
+        with ThreadPoolExecutor(max_workers=3) as pool:
             kodi_future = pool.submit(self._kodi_brief)
+            jf_future = pool.submit(home_jellyfin_sessions)
+            arrived_future = pool.submit(home_arrived)
             self._home_sab(out)
             try:
                 out["kodi"] = kodi_future.result()
             except ConfigError:
                 out["kodi"] = {"configured": False}
+            out["jellyfin"] = jf_future.result()
+            out["arrived"] = arrived_future.result()
         out["saved_new"] = sum(len(x.get("new") or []) for x in load_settings()["saved_searches"])
+        out["tv_ready"] = tv_configured()
+        out["version"] = VERSION
         return out
 
     def _home_sab(self, out: dict) -> None:
