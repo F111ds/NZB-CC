@@ -48,6 +48,7 @@ import ctypes
 import ctypes.wintypes
 import gzip
 import hashlib
+import http.client
 import io
 import ipaddress
 import json
@@ -72,7 +73,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.9.5"
+VERSION = "3.9.6"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -582,9 +583,20 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
             raise UpstreamError("Refused a redirect to an unsupported URL.")
         if old.scheme == "https" and new.scheme != "https":
             raise UpstreamError("Refused a redirect from HTTPS to plain HTTP.")
-        if new.hostname.lower() != (old.hostname or "").lower() and not host_is_public(new.hostname):
+        same_host = new.hostname.lower() == (old.hostname or "").lower()
+        if not same_host and not host_is_public(new.hostname):
             raise UpstreamError("Refused a redirect to a private/local address.")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None and not same_host:
+            # urllib copies every header to the new host. Credentials (Kodi's Basic auth, Jellyfin's
+            # key, the TV's PSK, the ntfy token...) must only ever go to the host they were meant for.
+            for name in list(redirected.headers) + list(redirected.unredirected_hdrs):
+                low = name.lower()
+                if low in ("authorization", "cookie", "proxy-authorization") or any(
+                        w in low for w in ("token", "key", "auth", "psk", "secret", "password")):
+                    redirected.headers.pop(name, None)
+                    redirected.unredirected_hdrs.pop(name, None)
+        return redirected
 
 
 _OPENER = urllib.request.build_opener(_SafeRedirectHandler())
@@ -614,6 +626,11 @@ def http_fetch(url: str, *, timeout: float, max_bytes: int, data: bytes | None =
         raise UpstreamError(f"Connection failed: {redact(exc.reason)}") from None
     except OSError as exc:  # timeouts, resets
         raise UpstreamError(f"Network error: {redact(exc)}") from None
+    except (http.client.HTTPException, ValueError) as exc:
+        # InvalidURL (its message contains the full URL, API key included), BadStatusLine (not an
+        # HTTP server on that port), IncompleteRead... Never let these escape unconverted: callers
+        # only expect UpstreamError, and the raw text would put the key in the log.
+        raise UpstreamError(f"Bad response or address ({type(exc).__name__}): {redact(exc)[:160]}") from None
     if len(body) > max_bytes:
         raise UpstreamError(f"Response exceeds the {max_bytes // (1024 * 1024)} MB safety limit.")
     return body
@@ -1473,12 +1490,17 @@ def kodi_continue_watching(limit: int = 6) -> list[dict]:
     """Shows you've started and not finished, most recently watched first, each with its next episode."""
     res = _kdict(kodi_call("VideoLibrary.GetTVShows", {"properties": KODI_SHOW_PROPS,
                            "sort": {"method": "lastplayed", "order": "descending"}, "limits": {"start": 0, "end": 25}}))
+    shows = [sh for sh in (_kodi_show(_kdict(raw)) for raw in res.get("tvshows") or [])
+             if sh["lastplayed"] and sh["watched"] < sh["episodes"]]
+    if not shows:
+        return []
+    # Ask Kodi for each show's episodes in parallel (one after another this took up to 25 round
+    # trips before the Kodi tab could open), then keep the most recently watched order.
+    with ThreadPoolExecutor(max_workers=min(6, len(shows))) as pool:
+        episodes = list(pool.map(lambda sh: kodi_show_episodes(sh["id"]), shows))
     out = []
-    for raw in res.get("tvshows") or []:
-        show = _kodi_show(_kdict(raw))
-        if not show["lastplayed"] or show["watched"] >= show["episodes"]:
-            continue
-        nxt = next_episode(kodi_show_episodes(show["id"]))
+    for show, eps in zip(shows, episodes):
+        nxt = next_episode(eps)
         if nxt:
             out.append({"show": show, "episode": nxt})
         if len(out) >= limit:
@@ -2243,7 +2265,10 @@ def host_is_public(host: str) -> bool:
 
 def build_download_url(indexer: dict, nzb_url: str) -> str:
     base = urllib.parse.urlsplit(indexer["url"])
-    download_url = urllib.parse.urljoin(indexer["url"].rstrip("/") + "/", nzb_url)
+    download_url = urllib.parse.urljoin(indexer["url"].rstrip("/") + "/", str(nzb_url or "").strip())
+    # Percent-encode spaces and other characters urllib refuses (an indexer link like "/get nzb/x")
+    # instead of failing with an error whose text contains the full URL.
+    download_url = urllib.parse.quote(download_url, safe=":/?#[]@!$&'()*+,;=%~")
     parsed = urllib.parse.urlsplit(download_url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise UpstreamError("Indexer returned an invalid NZB download URL.")
@@ -2362,8 +2387,34 @@ def normalize_jellyfin_url(url: str) -> str:
     return url.split("?", 1)[0].split("#", 1)[0]
 
 
+_jf_conf_cache: dict = {"stamp": None, "conf": None}
+_jf_conf_lock = threading.Lock()
+
+
+def _file_stamp(path: Path):
+    try:
+        st = path.stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
 def jellyfin_conf() -> dict:
-    """{'url', 'key', 'source': 'phone'|'desktop'|''}: the phone's own connection wins."""
+    """{'url', 'key', 'source': 'phone'|'desktop'|''}: the phone's own connection wins.
+
+    Remembered until either settings file changes: working it out reads two files and decrypts the
+    key, and the Jellyfin tab asks for it several times per refresh (every 5 s while it's open)."""
+    stamp = (_file_stamp(SETTINGS_FILE), _file_stamp(CONFIG_FILE))
+    with _jf_conf_lock:
+        if _jf_conf_cache["conf"] is not None and _jf_conf_cache["stamp"] == stamp:
+            return dict(_jf_conf_cache["conf"])
+    conf = _jellyfin_conf_uncached()
+    with _jf_conf_lock:
+        _jf_conf_cache.update(stamp=stamp, conf=dict(conf))
+    return conf
+
+
+def _jellyfin_conf_uncached() -> dict:
     global _JF_SECRETS
     s = load_settings()
     url, key, source = s.get("jellyfin_url", ""), "", ""
@@ -2744,15 +2795,50 @@ def _default_settings() -> dict:
             "tv_host": "", "tv_psk": "", "tv_mac": "", "tv_mac_manual": False, "tv_kodi_uri": ""}
 
 
+def _retry_busy(fn, tries: int = 20):
+    """Windows refuses to read or replace a file that another program (an antivirus scan, a backup)
+    has open at that moment ("sharing violation", PermissionError). That's brief: try again."""
+    for attempt in range(tries):
+        try:
+            return fn()
+        except PermissionError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(0.05)
+
+
+def read_text_retry(path: Path, encoding: str = "utf-8") -> str:
+    return _retry_busy(lambda: path.read_text(encoding=encoding))
+
+
+def replace_retry(src: Path, dst: Path) -> None:
+    _retry_busy(lambda: os.replace(src, dst))
+
+
 def load_settings() -> dict:
-    """Phone-only settings (never the desktop configuration). Missing/damaged file -> defaults."""
+    """Phone-only settings (never the desktop configuration). Missing/damaged file -> defaults.
+
+    Read under the same lock as saving, so a save can never replace the file mid-read. A file that
+    exists but can't be read raises instead of returning defaults: otherwise the next save would
+    write defaults over the user's real settings."""
+    with _settings_lock:
+        return _load_settings_locked()
+
+
+def _load_settings_locked() -> dict:
     settings = _default_settings()
     try:
-        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(read_text_retry(SETTINGS_FILE))
     except FileNotFoundError:
         return settings
-    except (OSError, ValueError) as exc:
-        log.warning("%s could not be read (%s); using defaults.", SETTINGS_FILE.name, exc)
+    except ValueError as exc:  # damaged JSON: keep a copy aside, start from defaults
+        try:
+            import shutil
+            shutil.copy2(SETTINGS_FILE, SETTINGS_FILE.with_name(SETTINGS_FILE.stem + ".damaged.json"))
+        except OSError:
+            pass
+        log.warning("%s could not be read (%s); using defaults (a copy was kept as %s).",
+                    SETTINGS_FILE.name, exc, SETTINGS_FILE.stem + ".damaged.json")
         return settings
     if isinstance(data, dict):
         defaults = _default_settings()
@@ -2775,9 +2861,10 @@ def save_settings(settings: dict) -> None:
     later change to a default reaches everyone who never changed that setting."""
     defaults = _default_settings()
     changed = {k: v for k, v in settings.items() if k not in defaults or v != defaults[k]}
-    tmp = SETTINGS_FILE.with_name(SETTINGS_FILE.name + ".tmp")
-    tmp.write_text(json.dumps(changed, indent=1, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, SETTINGS_FILE)
+    with _settings_lock:
+        tmp = SETTINGS_FILE.with_name(SETTINGS_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(changed, indent=1, ensure_ascii=False), encoding="utf-8")
+        replace_retry(tmp, SETTINGS_FILE)
 
 
 def update_settings(fn):
@@ -2946,13 +3033,14 @@ TV_WATCHED_ART_DIR = BASE_DIR / "tv_watched_art"
 TV_WATCHED_ID_RE = re.compile(r"[me][0-9]{1,12}")
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".mpg", ".mpeg", ".webm", ".iso"}
 TV_KODI_PROPS = ["title", "year", "runtime", "file", "art", "thumbnail", "dateadded", "playcount", "streamdetails"]
-_tv_lock = threading.Lock()
+_tv_files_lock = threading.RLock()  # the TV row / watched files, reads and writes (not the TV power-on job: _tv_lock)
 _tv_refreshing = threading.Lock()
 
 
 def tv_load_state() -> dict:
     try:
-        data = json.loads(TV_STATE_FILE.read_text(encoding="utf-8"))
+        with _tv_files_lock:
+            data = json.loads(read_text_retry(TV_STATE_FILE))
     except (OSError, ValueError):
         data = {}
     data = data if isinstance(data, dict) else {}
@@ -2962,9 +3050,10 @@ def tv_load_state() -> dict:
 
 
 def tv_save_state(state: dict) -> None:
-    tmp = TV_STATE_FILE.with_name(TV_STATE_FILE.name + ".tmp")
-    tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, TV_STATE_FILE)
+    with _tv_files_lock:
+        tmp = TV_STATE_FILE.with_name(TV_STATE_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
+        replace_retry(tmp, TV_STATE_FILE)
 
 
 def _split_path(path: str) -> list[str]:
@@ -3095,7 +3184,7 @@ def _tv_save_poster(item: dict) -> bool:
         return False
     tmp = dest.with_suffix(".tmp")
     tmp.write_bytes(raw)
-    os.replace(tmp, dest)
+    replace_retry(tmp, dest)
     return True
 
 
@@ -3141,7 +3230,7 @@ def tv_refresh() -> dict:
                     f.unlink(missing_ok=True)
         state = {"updated": time.time(), "kodi_online": kodi_ok, "newest_kodi": newest_kodi,
                  "kodi": kodi_items, "items": items, "path_map": [list(p) for p in path_map][-20:]}
-        with _tv_lock:
+        with _tv_files_lock:
             tv_save_state(state)
         return state
 
@@ -3303,14 +3392,14 @@ def tv_mark_watched(item_id: str) -> dict:
         kodi_call("VideoLibrary.SetEpisodeDetails", dict(done, episodeid=num))
     else:
         kodi_call("VideoLibrary.SetMovieDetails", dict(done, movieid=num))
-    with _tv_lock:   # show it finished right away in the saved list too
+    with _tv_files_lock:   # show it finished right away in the saved list too
         state = tv_watched_load()
         for it in state["items"]:
             if it.get("id") == item_id:
                 it.update(progress=1.0, remaining=0, watched=True)
         tmp = TV_WATCHED_FILE.with_name(TV_WATCHED_FILE.name + ".tmp")
         tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, TV_WATCHED_FILE)
+        replace_retry(tmp, TV_WATCHED_FILE)
     return {"ok": True}
 
 
@@ -3452,13 +3541,14 @@ def _tv_save_watched_poster(item: dict) -> bool:
         return False
     tmp = dest.with_suffix(".tmp")
     tmp.write_bytes(raw)
-    os.replace(tmp, dest)
+    replace_retry(tmp, dest)
     return True
 
 
 def tv_watched_load() -> dict:
     try:
-        data = json.loads(TV_WATCHED_FILE.read_text(encoding="utf-8"))
+        with _tv_files_lock:
+            data = json.loads(read_text_retry(TV_WATCHED_FILE))
     except (OSError, ValueError):
         data = {}
     data = data if isinstance(data, dict) else {}
@@ -3488,10 +3578,10 @@ def tv_watched_refresh() -> dict:
                 if f.name not in keep:
                     f.unlink(missing_ok=True)
         state = {"updated": time.time(), "items": items}
-        with _tv_lock:
+        with _tv_files_lock:
             tmp = TV_WATCHED_FILE.with_name(TV_WATCHED_FILE.name + ".tmp")
             tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, TV_WATCHED_FILE)
+            replace_retry(tmp, TV_WATCHED_FILE)
         return state
 
 
@@ -3554,7 +3644,10 @@ class BackgroundWorker:
         settings = load_settings()
         if settings["ntfy_url"] and now >= self._next_history:
             self._next_history = now + self.HISTORY_EVERY
-            self.check_history(settings)
+            try:
+                self.check_history(settings)
+            except Exception:
+                log.exception("Download alert check failed")
         if now >= self._next_tv:
             self._next_tv = now + TV_REFRESH_SECS
             try:
@@ -3569,10 +3662,16 @@ class BackgroundWorker:
                 log.exception("Refreshing the TV's recently watched row failed")
         due = due_saved_search(settings, now)
         if due:  # one per tick spreads indexer API use out
-            run_saved_search(due["id"], notify=True)
+            try:
+                run_saved_search(due["id"], notify=True)
+            except Exception:
+                log.exception("Saved search failed")
         if now >= self._next_drives:
             self._next_drives = now + DRIVE_CHECK_EVERY
-            self.check_drives(settings, now)
+            try:
+                self.check_drives(settings, now)
+            except Exception:
+                log.exception("Drive check failed")
 
     def check_drives(self, settings: dict, now: float) -> None:
         """Refreshes drive health (also logging temperatures for the 24 h graph) and sends drive alerts."""
@@ -3707,13 +3806,19 @@ def _as_list(value) -> list:
     return value if isinstance(value, list) else [value]
 
 
+# Windows PowerShell writes piped output in the old console code page (cp850/437), so names like
+# "Películas" came out garbled, and some characters broke the whole drive check. Ask for UTF-8.
+PS_UTF8 = ("$u8 = New-Object System.Text.UTF8Encoding $false; "   # $false: no byte-order mark in front
+           "[Console]::OutputEncoding = $u8; $OutputEncoding = $u8; ")
+
+
 def run_powershell(script: str, timeout: float = 45) -> dict:
     """Runs a PowerShell script that prints one JSON object (Windows only, no window)."""
     import subprocess
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-                          capture_output=True, text=True, timeout=timeout, creationflags=flags)
-    out = (proc.stdout or "").strip()
+    proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", PS_UTF8 + script],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=flags)
+    out = (proc.stdout or "").lstrip("\ufeff").strip()
     if not out:
         raise UpstreamError((proc.stderr or "PowerShell returned nothing").strip()[:200])
     data = json.loads(out)
@@ -3805,7 +3910,7 @@ def record_drive_temps(temps: dict[str, float], now: float | None = None) -> Non
             try:
                 tmp = DRIVE_HISTORY_FILE.with_name(DRIVE_HISTORY_FILE.name + ".tmp")
                 tmp.write_text(json.dumps(hist), encoding="utf-8")
-                os.replace(tmp, DRIVE_HISTORY_FILE)
+                replace_retry(tmp, DRIVE_HISTORY_FILE)
             except OSError as exc:
                 log.warning("Could not save drive history: %s", exc)
 
@@ -3903,9 +4008,9 @@ def drive_activity() -> dict:
         import subprocess
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
-            proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", DRIVE_IO_PS],
-                                  capture_output=True, text=True, timeout=15, creationflags=flags)
-            rows = _as_list(json.loads(proc.stdout or "[]"))
+            proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", PS_UTF8 + DRIVE_IO_PS],
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15, creationflags=flags)
+            rows = _as_list(json.loads((proc.stdout or "").lstrip("\ufeff").strip() or "[]"))
         except Exception as exc:
             log.warning("Drive activity check failed: %s", exc)
             rows = []
@@ -4922,11 +5027,24 @@ function pumpArt(){
     const src=j.ref.startsWith('r:')?'/api/search/art?id='+encodeURIComponent(j.ref.slice(2)):(j.ref.startsWith('j:')?'/api/jellyfin/art?id='+encodeURIComponent(j.ref.slice(2)):'/api/kodi/art?u='+encodeURIComponent(j.ref));
     fetch(src,{headers:{'X-Mobile-Token':token}})
       .then(r=>{if(r.status===404)return null;if(!r.ok)throw new Error('HTTP '+r.status);return r.blob()})
-      .then(b=>{if(!b){j.res(null);return}const u=URL.createObjectURL(b);artReady.set(j.ref,u);j.res(u)})  // null = no poster: keep the placeholder, don't ask again
+      .then(b=>{if(!b){j.res(null);return}const u=URL.createObjectURL(b);artReady.set(j.ref,u);trimArt();j.res(u)})  // null = no poster: keep the placeholder, don't ask again
       .catch(e=>{artCache.delete(j.ref);j.rej(e)}).finally(()=>{artActive--;pumpArt()});
   }
 }
-const artReady=new Map();
+const artReady=new Map(),ART_KEEP=150;
+// Every poster is kept in memory as a blob: URL. Scrolling a big library would otherwise keep
+// adding hundreds of MB until iOS closes the home-screen app. Keep the newest ART_KEEP and let go
+// of older ones that aren't on screen (they're fetched again if they come back into view).
+function trimArt(){
+  if(artReady.size<=ART_KEEP)return;
+  const shown=new Set([...document.querySelectorAll('img[data-art]')].map(i=>i.dataset.art));
+  for(const [ref,u] of artReady){
+    if(artReady.size<=ART_KEEP)break;
+    if(shown.has(ref))continue;
+    artReady.delete(ref);artCache.delete(ref);
+    try{URL.revokeObjectURL(u)}catch{}
+  }
+}
 function artTag(ref){if(!ref)return '';const u=artReady.get(ref);return u?'<img class="art loaded" data-art="'+esc(ref)+'" src="'+u+'" alt="">':'<img class="art" data-art="'+esc(ref)+'" alt="">'}
 const artObserver='IntersectionObserver' in window?new IntersectionObserver(es=>{for(const e of es)if(e.isIntersecting){artObserver.unobserve(e.target);showArt(e.target)}},{rootMargin:'300px'}):null;
 function showArt(img){artURL(img.dataset.art).then(u=>{if(!u)return;img.onload=()=>img.classList.add('loaded');img.src=u}).catch(()=>{})}
@@ -5019,7 +5137,7 @@ function renderTv(){
   $('tvpsk').placeholder=tvInfo.psk_set?'•••••• saved (leave blank to keep)':'The key you set on the TV';
   if(tvPolling)return;
   if(!tvInfo.configured){tvSay('Set up TV control below to turn the TV on from here.');return}
-  if(tvInfo.error){tvSay(tvInfo.error,true);return}
+  if(tvInfo.problem){tvSay(tvInfo.problem,true);return}
   tvSay({on:'TV is on.',standby:'TV is in standby.',off:'TV is off or unreachable.'}[tvInfo.power]||'')
 }
 function tvBusy(b){$('tvon').disabled=b;$('tvkodi').disabled=b}
@@ -5048,8 +5166,8 @@ async function tvSave(){
   try{
     tvInfo=await api('/api/tv/settings',{host:$('tvhost').value.trim(),psk:$('tvpsk').value.trim(),mac:$('tvmac').value.trim()});
     $('tvpsk').value='';renderTv();
-    if(tvInfo.configured&&!tvInfo.error){toast('TV connected');$('tvsetup').open=false}
-    else if(tvInfo.error)toast(tvInfo.error,true);
+    if(tvInfo.configured&&!tvInfo.problem){toast('TV connected');$('tvsetup').open=false}
+    else if(tvInfo.problem)toast(tvInfo.problem,true);
   }catch(e){toast(e.message,true)}finally{b.disabled=false}
 }
 async function refreshKodi(){
@@ -5059,7 +5177,7 @@ async function refreshKodi(){
     const off=()=>{$('kodinow').innerHTML='';['kodilib','kodiTV','kodiseg','kodiremote','kodytype'].forEach(id=>$(id).classList.add('hidden'));kodiOnline=false};
     if(!d.configured){st.className='lede';st.textContent='Kodi isn\'t set up yet — add it in the desktop app\'s Kodi tab.';off();$('kodiscan').classList.add('hidden');return}
     $('kodiscan').classList.remove('hidden');
-    if(!d.online){st.className='lede status error';st.textContent=d.error||'Kodi is offline.';off();return}
+    if(!d.online){st.className='lede status error';st.textContent=d.problem||'Kodi is offline.';off();return}
     const c=d.counts||{};st.className='lede';st.textContent=(c.movies||0)+' movies · '+(c.shows||0)+' shows · '+(c.episodes||0)+' episodes';
     kodiPid=d.playing?d.playing.playerid:-1;
     $('kodinow').innerHTML=nowCard(d.playing,false);hydrateArt($('kodinow'));
@@ -6079,7 +6197,7 @@ class MobileHandler(BaseHTTPRequestHandler):
         try:
             return {"configured": True, "online": True, "playing": kodi_now_playing()}
         except UpstreamError as exc:
-            return {"configured": True, "online": False, "error": str(exc)}
+            return {"configured": True, "online": False, "problem": str(exc)}  # not "error": see api() in the page
 
     def _kodi_overview(self) -> dict:
         info = self._kodi_brief()
@@ -6096,7 +6214,7 @@ class MobileHandler(BaseHTTPRequestHandler):
             info["recent"] = [_kodi_movie(x) for x in recent]
             info["counts"]["shows"] = to_int(_kdict(_kdict(kodi_call("VideoLibrary.GetTVShows", lim)).get("limits")).get("total"))
         except UpstreamError as exc:
-            info.update(online=False, error=str(exc))
+            info.update(online=False, problem=str(exc))
             return info
         try:
             info["continue"] = kodi_continue_watching()
@@ -6192,7 +6310,7 @@ class MobileHandler(BaseHTTPRequestHandler):
             try:
                 view["power"] = tv_power_state(s)
             except UpstreamError as exc:
-                view["power"], view["error"] = "unknown", str(exc)
+                view["power"], view["problem"] = "unknown", str(exc)  # not "error": see api() in the page
             if view.get("power") == "on" and not s.get("tv_mac"):
                 threading.Thread(target=tv_learn_mac, args=(s,), daemon=True).start()
         view["mac"] = s.get("tv_mac") or ""
@@ -6350,6 +6468,13 @@ def setup_logging(verbose: bool = False) -> None:
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s", handlers=handlers, force=True,
     )
+    for h in handlers:  # keys never reach the console or mobile_server.log, not even in a traceback
+        h.setFormatter(_RedactingFormatter("%(asctime)s %(levelname)s %(message)s"))
+
+
+class _RedactingFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return redact(super().format(record))
 
 
 def init_state() -> dict:
