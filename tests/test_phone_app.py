@@ -98,6 +98,17 @@ assert st == 200 and k["counts"] == {"movies": 412, "episodes": 3001, "shows": 0
 assert k["recent"][0] == {"id": 9, "title": "Oppenheimer", "year": 2023, "runtime": 10800, "resume": 2472, "watched": False, "added": "2026-11-13 21:04:11", "poster": "", "imdb": None, "tmdb": None, "mpaa": "", "genres": []}
 with urllib.request.urlopen(base + "/manifest.webmanifest", timeout=5) as r:
     man = json.loads(r.read()); assert man["display"] == "standalone" and man["start_url"] == "/"
+assert man["shortcuts"][0]["url"] == "/kodi"
+# The Kodi home-screen icon: its own installable app that opens on the Kodi tab
+with urllib.request.urlopen(base + "/kodi.webmanifest", timeout=5) as r:
+    kman = json.loads(r.read())
+assert kman["start_url"] == "/kodi" and kman["id"] != man["id"] and kman["short_name"] == "Kodi"
+with urllib.request.urlopen(base + "/kodi", timeout=5) as r:
+    kpage = r.read().decode()
+assert "activeTab='kodi'" in kpage and 'href="/kodi.webmanifest"' in kpage and 'apple-touch-icon" href="/kodi-icon.png"' in kpage
+for ic in kman["icons"]:
+    with urllib.request.urlopen(base + ic["src"], timeout=5) as r:
+        assert r.headers["Content-Type"] == "image/png" and r.read(8) == b"\x89PNG\r\n\x1a\n"
 st, mv = api("/api/kodi/movies"); assert mv["movies"][0]["title"] == "Arrival" and mv["movies"][0]["watched"]
 
 assert home["kodi"]["playing"]["poster"] == "image://p5.jpg/" and home["kodi"]["playing"]["movieid"] == 5
