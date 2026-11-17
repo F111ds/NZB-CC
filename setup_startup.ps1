@@ -80,30 +80,42 @@ try {
         $t.Delay = "PT20S"   # give the network a moment after logon
         $pr = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $t -Principal $pr -Settings $settings `
-            -Description "Starts NZB Command Center's phone server (mobile_server.py) as administrator when $user logs in." -Force | Out-Null
+            -Description "Starts NZB Command Center's phone server (mobile_server.py) as administrator when $user logs in." -Force -ErrorAction Stop | Out-Null
     }
     $mode = "logon"
     if (-not $AtLogon) {
         Say "`nTo start before anyone logs in, the phone server needs your Windows password once:" Cyan
         Say "your keys are encrypted with it. Task Scheduler keeps it; this script doesn't save it."
         Say "(Signed in with a PIN or a Microsoft account? Use your Microsoft account password.)"
-        $cred = Get-Credential -UserName $user -Message "Windows password for $user (for the phone server's startup task)"
-        if (-not $cred) {
-            Say "No password given: it will start when you log in instead." Yellow
-        } else {
-            $boot = New-ScheduledTaskTrigger -AtStartup
-            $boot.Delay = "PT30S"   # let the disks and network come up
-            # Every 5 minutes: starts it again if it stopped (does nothing while it runs: IgnoreNew).
-            $watch = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(5)) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+        $boot = New-ScheduledTaskTrigger -AtStartup
+        $boot.Delay = "PT30S"   # let the disks and network come up
+        # Every 5 minutes: starts it again if it stopped (does nothing while it runs: IgnoreNew).
+        $watch = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(5)) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+        $askAs = $user
+        foreach ($try in 1..3) {
+            $cred = Get-Credential -UserName $askAs -Message "Windows password for $askAs (for the phone server's startup task). Microsoft account? Try the user name MicrosoftAccount\your-email"
+            if (-not $cred) { Say "No password given: it will start when you log in instead." Yellow; break }
             try {
+                # -ErrorAction Stop: Task Scheduler's cmdlets ignore the script's 'Stop' setting, so a
+                # refused password would otherwise just print an error and carry on.
                 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($boot, $watch) -Settings $settings `
-                    -User $user -Password $cred.GetNetworkCredential().Password -RunLevel Highest `
-                    -Description "Starts NZB Command Center's phone server (mobile_server.py) as administrator when Windows starts, as $user." -Force | Out-Null
+                    -User $cred.UserName -Password $cred.GetNetworkCredential().Password -RunLevel Highest `
+                    -Description "Starts NZB Command Center's phone server (mobile_server.py) as administrator when Windows starts, as $($cred.UserName)." `
+                    -Force -ErrorAction Stop | Out-Null
                 $mode = "startup"
+                break
             } catch {
-                Say "Windows didn't accept that password ($($_.Exception.Message.Trim())). It will start when you log in instead." Yellow
+                $askAs = $cred.UserName
+                if ($_.Exception.Message -match 'user name or password|0x8007052E|1326') {
+                    Say "Windows didn't accept that user name and password (try $try of 3)." Yellow
+                    if ($try -lt 3) { Say "If you sign in with a Microsoft account, use the user name MicrosoftAccount\your-email and that account's password (not your PIN)." }
+                } else {
+                    Say "Couldn't set up the before-logon start: $($_.Exception.Message.Trim())" Yellow
+                    break
+                }
             }
         }
+        if ($mode -ne "startup") { Say "It will start when you log in instead (as before)." Yellow }
     }
     if ($mode -eq "logon") { Register-AtLogon }
     Say "Task '$TaskName' created: starts at $(if ($mode -eq 'startup') { 'Windows startup' } else { 'logon' }), as administrator, hidden." Green
@@ -178,7 +190,7 @@ try {
                 $jp = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
                 $js = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
                 Register-ScheduledTask -TaskName "Jellyfin Server (at logon)" -Action (New-ScheduledTaskAction -Execute $exe -WorkingDirectory (Split-Path $exe)) `
-                    -Trigger $jt -Principal $jp -Settings $js -Description "Starts Jellyfin when $env:USERNAME logs in." -Force | Out-Null
+                    -Trigger $jt -Principal $jp -Settings $js -Description "Starts Jellyfin when $env:USERNAME logs in." -Force -ErrorAction Stop | Out-Null
                 Say "It wasn't set to start with Windows: added task 'Jellyfin Server (at logon)'." Green
                 $summary += "Jellyfin: program - now starts at logon (task 'Jellyfin Server (at logon)')"
             }
