@@ -10,7 +10,20 @@
   Your settings, pairing code and saved searches are separate files and are not touched.
   If anything fails before step 4, nothing is changed.
   To go back: delete mobile_server.py and rename mobile_server.old.py to mobile_server.py.
+  If setup_startup.ps1 made the phone server start as administrator, this asks for administrator
+  rights too (only administrator can stop and restart it).
 #>
+param([switch]$Elevated)
+
+$TaskName = "NZB Mobile Server"
+$hasTask = [bool](Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($hasTask -and -not $isAdmin -and $PSCommandPath) {
+    if ($Elevated) { Write-Host "Administrator rights were not granted." -ForegroundColor Red; Read-Host "Press Enter to close"; exit 1 }
+    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Elevated"
+    exit
+}
+
 & {
 $ErrorActionPreference = "Stop"
 $Repo = "F111ds/NZB-CC"; $Branch = "main"
@@ -69,13 +82,20 @@ try {
     } else { Say "Couldn't run Python to test the file; skipping that check." Yellow }
 
     # --- 2. Stop, 3. back up, 4. replace ---
+    if ($hasTask) { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
     if ($running.Count) { Say "Stopping the phone server..."; $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep 2 }
-    else { Say "The phone server wasn't running." }
+    elseif (-not $hasTask) { Say "The phone server wasn't running." }
     if (Test-Path $Target) { Copy-Item $Target $Backup -Force; Say "Old version saved as mobile_server.old.py" }
     Move-Item $Temp $Target -Force
     Say "Installed version $new" Green
 
-    # --- Start it again (hidden if it was hidden before) ---
+    # --- Start it again: through the startup task (as administrator) if there is one ---
+    if ($hasTask) {
+        Start-ScheduledTask -TaskName $TaskName
+        Say "Phone server started again (as administrator). Close and reopen the app on your phone." Green
+        return
+    }
+    # Otherwise the same way it was running (hidden if it was hidden before).
     $run = $python
     if ($hidden -and $python) { $w = Join-Path (Split-Path $python) "pythonw.exe"; $wc = Get-Command pythonw -ErrorAction SilentlyContinue; if (Test-Path $w) { $run = $w } elseif ($wc) { $run = $wc.Source } }
     if ($run) {
