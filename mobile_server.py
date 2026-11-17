@@ -72,7 +72,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.9.4"
+VERSION = "3.9.5"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -1157,6 +1157,32 @@ def kodi_send_text(text: str, done: bool = True) -> dict:
     kodi_call("Input.SendText", {"text": text, "done": bool(done)})
     # Kodi can't tell us whether a text field was selected; outside its keyboard, say what to check.
     return {"ok": True, "window": KODI_TEXT_WINDOWS.get(wid, "field")}
+
+
+def library_scan() -> dict:
+    """The Kodi tab's "Scan library": Jellyfin first, then Kodi.
+
+    With the Jellyfin add-on, new downloads reach Kodi through Jellyfin: Jellyfin has to find them
+    first, then the add-on copies them into Kodi. Scanning only Kodi's own folders finds nothing new."""
+    out = {"ok": True, "jellyfin": None, "kodi": None}
+    if jellyfin_configured():
+        try:
+            jf_request("/Library/Refresh", post=True, timeout=10)
+            jf_clear_cache()
+            out["jellyfin"] = True
+        except (UpstreamError, ConfigError) as exc:
+            out["jellyfin"] = False
+            out["jellyfin_problem"] = redact(exc)
+    try:
+        kodi_call("VideoLibrary.Scan", {"showdialogs": False})
+        out["kodi"] = True
+    except (UpstreamError, ConfigError) as exc:
+        out["kodi"] = False
+        out["kodi_problem"] = redact(exc)
+    if not out["jellyfin"] and not out["kodi"]:
+        raise UpstreamError(out.get("kodi_problem") or out.get("jellyfin_problem") or "Couldn't start a scan.")
+    log.info("library scan: jellyfin=%s kodi=%s", out["jellyfin"], out["kodi"])
+    return out
 
 
 def _art_ref(value) -> str:
@@ -5427,7 +5453,11 @@ async function kodiType(done){
 
 async function kodiScan(){
   const b=$('kodiscan');b.disabled=true;
-  try{await api('/api/kodi/scan',{});kodiMovies=null;toast('Library scan started on Kodi')}catch(e){toast(e.message,true)}finally{b.disabled=false}
+  try{const r=await api('/api/kodi/scan',{});kodiMovies=null;
+    if(r.jellyfin)toast('Scanning Jellyfin and Kodi. New movies show up in Kodi in a few minutes, once Jellyfin has found them and the Jellyfin add-on has synced.'+(r.kodi===false?' (Kodi itself didn\'t answer.)':''));
+    else if(r.jellyfin===false)toast('Kodi is scanning, but Jellyfin didn\'t answer ('+(r.jellyfin_problem||'offline')+'), so new movies may not appear yet.',true);
+    else toast('Library scan started on Kodi')}
+  catch(e){toast(e.message,true)}finally{b.disabled=false}
 }
 
 async function retryItem(id){try{await api('/api/history/retry',{id});toast('Retry requested');await refreshHistory()}catch(e){toast(e.message,true)}}
@@ -5916,9 +5946,7 @@ class MobileHandler(BaseHTTPRequestHandler):
         elif path == "/api/tv/settings":
             self._post_tv_settings(body)
         elif path == "/api/kodi/scan":
-            kodi_call("VideoLibrary.Scan", {"showdialogs": False})
-            log.info("kodi scan ip=%s", self.ip)
-            self.send_json(200, {"ok": True})
+            self.send_json(200, library_scan())
         elif path == "/api/speedlimit":
             mbps = to_float(body.get("mbps"), -1.0)
             if not 0 <= mbps <= 10000:
