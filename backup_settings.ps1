@@ -22,7 +22,11 @@ $ErrorActionPreference = "Stop"
 $Repo = "https://github.com/F111ds/NZB-CC.git"
 function Say($t, $c = "Gray") { Write-Host $t -ForegroundColor $c }
 # Runs git.exe (a helper named "Git" would call itself: PowerShell prefers functions and ignores case).
-function RunGit { $ErrorActionPreference = 'Continue'; $out = & git.exe @args 2>&1 | Out-String; $script:gitCode = $LASTEXITCODE; return $out.Trim() }
+# -c safe.directory: the backup folder may have been created from an administrator window (owned by
+# "Administrators") and later used as you, or the other way round; git then refuses it as "dubious
+# ownership". This marks only this script's own folder as safe, for its own commands only.
+$SafeDir = (Join-Path $env:LOCALAPPDATA "NZB-CC-backup\repo") -replace '\\', '/'
+function RunGit { $ErrorActionPreference = 'Continue'; $out = & git.exe -c "safe.directory=$SafeDir" @args 2>&1 | Out-String; $script:gitCode = $LASTEXITCODE; return $out.Trim() }
 
 # Field names that hold secrets (matched on whole name parts: sab_api_key, kodi_password, tv_psk, ...).
 $SecretName = '(^|_)(api_?key|apikey|key|keys|token|tokens|password|passwd|pass|pwd|psk|secret|secrets|auth|cookie|credential|credentials)($|_)'
