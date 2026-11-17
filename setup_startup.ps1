@@ -4,14 +4,19 @@
   Keep this file in your NZB Command Center folder and right-click it > Run with PowerShell.
   It asks for administrator rights (one Windows prompt), then:
     1. Phone server: creates the Task Scheduler task "NZB Mobile Server" that starts
-       mobile_server.py hidden, AS ADMINISTRATOR, every time you log in to Windows (no prompt
-       at logon). Administrator lets it read drive temperatures and health counters.
-       The old Startup-folder launcher is removed so it doesn't start twice.
+       mobile_server.py hidden, AS ADMINISTRATOR, when WINDOWS STARTS (before anyone logs in),
+       and again within 5 minutes if it ever stops. Administrator lets it read drive
+       temperatures and health counters. The old Startup-folder launcher is removed.
+       Starting before logon needs your Windows password ONCE: your keys are encrypted with it,
+       so the server can only unlock them with it. Task Scheduler keeps it (this script doesn't).
+       If you sign in with a PIN or a Microsoft account, it's your Microsoft account password.
+       If the server can't start that way, it falls back to starting at logon and says so.
+       -AtLogon: start at logon instead (no password needed).
     2. Jellyfin: checks it is set to start with Windows (service or tray app) and fixes it if not.
     3. Checks both answer, and prints a summary.
   Safe to run again. To undo the phone part: Task Scheduler > delete "NZB Mobile Server".
 #>
-param([switch]$Elevated, [string]$ForUser)
+param([switch]$Elevated, [string]$ForUser, [switch]$AtLogon)
 
 # --- Ask for administrator rights (re-runs this script elevated) ---
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -19,7 +24,9 @@ if (-not $isAdmin) {
     if ($Elevated) { Write-Host "Administrator rights were not granted." -ForegroundColor Red; Read-Host "Press Enter to close"; exit 1 }
     # Pass on who is running this: if the prompt is answered with a different (administrator)
     # account, the task must still be for this user, not for that account.
-    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Elevated -ForUser `"$env:USERDOMAIN\$env:USERNAME`""
+    $a = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Elevated -ForUser `"$env:USERDOMAIN\$env:USERNAME`""
+    if ($AtLogon) { $a += " -AtLogon" }
+    Start-Process powershell.exe -Verb RunAs -ArgumentList $a
     exit
 }
 
@@ -61,19 +68,45 @@ try {
     if (-not (Test-Path $pyw)) { $wc = Get-Command $twin -ErrorAction SilentlyContinue; $pyw = if ($wc) { $wc.Source } else { $python } }
     Say "Python: $pyw"
 
-    # The task: at logon of this user, highest privileges, hidden, restarted if it crashes.
+    # The task: hidden, highest privileges, restarted if it crashes.
     $user = if ($ForUser) { $ForUser } else { "$env:USERDOMAIN\$env:USERNAME" }
     if ($user -ne "$env:USERDOMAIN\$env:USERNAME") { Say "Setting this up for $user (the administrator prompt was answered with another account)." Yellow }
     $argLine = ("`"$Script`" " + $extra).Trim()
     $action = New-ScheduledTaskAction -Execute $pyw -Argument $argLine -WorkingDirectory $Folder
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
-    $trigger.Delay = "PT20S"   # give the network a moment after logon
-    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
         -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
-        -Description "Starts NZB Command Center's phone server (mobile_server.py) as administrator when $env:USERNAME logs in." -Force | Out-Null
-    Say "Task '$TaskName' created: starts at logon, as administrator, hidden." Green
+    function Register-AtLogon {
+        $t = New-ScheduledTaskTrigger -AtLogOn -User $user
+        $t.Delay = "PT20S"   # give the network a moment after logon
+        $pr = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $t -Principal $pr -Settings $settings `
+            -Description "Starts NZB Command Center's phone server (mobile_server.py) as administrator when $user logs in." -Force | Out-Null
+    }
+    $mode = "logon"
+    if (-not $AtLogon) {
+        Say "`nTo start before anyone logs in, the phone server needs your Windows password once:" Cyan
+        Say "your keys are encrypted with it. Task Scheduler keeps it; this script doesn't save it."
+        Say "(Signed in with a PIN or a Microsoft account? Use your Microsoft account password.)"
+        $cred = Get-Credential -UserName $user -Message "Windows password for $user (for the phone server's startup task)"
+        if (-not $cred) {
+            Say "No password given: it will start when you log in instead." Yellow
+        } else {
+            $boot = New-ScheduledTaskTrigger -AtStartup
+            $boot.Delay = "PT30S"   # let the disks and network come up
+            # Every 5 minutes: starts it again if it stopped (does nothing while it runs: IgnoreNew).
+            $watch = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(5)) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+            try {
+                Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($boot, $watch) -Settings $settings `
+                    -User $user -Password $cred.GetNetworkCredential().Password -RunLevel Highest `
+                    -Description "Starts NZB Command Center's phone server (mobile_server.py) as administrator when Windows starts, as $user." -Force | Out-Null
+                $mode = "startup"
+            } catch {
+                Say "Windows didn't accept that password ($($_.Exception.Message.Trim())). It will start when you log in instead." Yellow
+            }
+        }
+    }
+    if ($mode -eq "logon") { Register-AtLogon }
+    Say "Task '$TaskName' created: starts at $(if ($mode -eq 'startup') { 'Windows startup' } else { 'logon' }), as administrator, hidden." Green
 
     # Only now that the task exists: stop what's running and remove the old Startup-folder launcher.
     if ($running.Count) { $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep 2; Say "Stopped the running phone server." }
@@ -82,8 +115,20 @@ try {
     elseif ($ForUser -and $user -ne "$env:USERDOMAIN\$env:USERNAME") { Say "If $user has 'NZB Mobile Server.vbs' in their Startup folder, delete it so it doesn't start twice." Yellow }
 
     Start-ScheduledTask -TaskName $TaskName
-    $ok = $false; foreach ($i in 1..15) { Start-Sleep 1; if (Up "http://${probeHost}:$port/") { $ok = $true; break } }
-    if ($ok) { Say "Phone server is running (port $port), as administrator." Green; $summary += "Phone server: starts at logon as administrator - running now" }
+    $ok = $false; foreach ($i in 1..20) { Start-Sleep 1; if (Up "http://${probeHost}:$port/") { $ok = $true; break } }
+    if (-not $ok -and $mode -eq "startup") {
+        # Started outside a logon (the way it runs at boot) it didn't come up - e.g. a Microsoft Store
+        # Python that only starts in a logged-in session. Fall back to starting at logon.
+        Say "The phone server didn't start in before-logon mode; switching to starting at logon instead." Yellow
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        Get-CimInstance Win32_Process -Filter "Name LIKE 'python%' OR Name = 'py.exe'" | Where-Object { $_.CommandLine -match 'mobile_server\.py' } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Register-AtLogon; $mode = "logon"
+        Start-ScheduledTask -TaskName $TaskName
+        foreach ($i in 1..20) { Start-Sleep 1; if (Up "http://${probeHost}:$port/") { $ok = $true; break } }
+    }
+    $when = if ($mode -eq "startup") { "when Windows starts (before logon)" } else { "at logon" }
+    if ($ok) { Say "Phone server is running (port $port), as administrator." Green; $summary += "Phone server: starts $when as administrator - running now" }
     else { Say "The task started, but the phone server isn't answering on port $port yet. Check mobile_server.log in $Folder." Yellow; $summary += "Phone server: task created, but not answering yet - see mobile_server.log" }
 
     # ================= 2. Jellyfin starts with Windows =================
