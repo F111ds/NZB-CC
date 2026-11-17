@@ -211,6 +211,9 @@ class JellyfinClient:
     def _request(self, path: str, method: str = "GET", params: dict | None = None, timeout: float = 10.0):
         if not self.base_url or not self.api_key:
             raise ValueError("Jellyfin URL and API key are required.")
+        if not re.fullmatch(r"[A-Za-z0-9]{16,64}", self.api_key):
+            raise ValueError("That isn't a Jellyfin API key (it should be one word of 32 letters and numbers). "
+                             "Copy it again from Jellyfin: Dashboard > API Keys.")
 
         url = f"{self.base_url}{path}"
         if params:
