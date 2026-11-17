@@ -71,7 +71,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.8.0"
+VERSION = "3.8.1"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -2712,6 +2712,8 @@ def load_settings() -> dict:
             if isinstance(data.get(key), type(default)):
                 settings[key] = data[key]
     settings["saved_searches"] = [x for x in settings["saved_searches"] if isinstance(x, dict) and x.get("id")]
+    if settings["drive_low_gb"] == 100:  # the old default, saved by 3.6-3.8: follow the new one
+        settings["drive_low_gb"] = DRIVE_LOW_GB
     return settings
 
 
@@ -3587,7 +3589,7 @@ DRIVE_HISTORY_HOURS = 24
 DRIVE_TEMP_ALERT = 55          # °C for hard drives and SATA SSDs
 DRIVE_NVME_TEMP_EXTRA = 15     # NVMe SSDs are rated hotter (~70 °C)
 DRIVE_WARM_MARGIN = 4          # "running warm" this close to the limit
-DRIVE_LOW_GB = 100
+DRIVE_LOW_GB = 75
 DRIVE_ALERT_REPEAT = 24 * 3600
 LHM_PORT = 8085
 
@@ -3851,6 +3853,7 @@ def drive_report(force: bool = False, with_rate: bool = True) -> dict:
     media_letters = {_letter_of(p) for p in cfg_media} - {""}
     sab_letter = _letter_of(sab_complete_dir())
     rate = daily_download_bytes() if with_rate and sab_letter else 0.0
+    low_gb = load_settings().get("drive_low_gb", DRIVE_LOW_GB)
 
     drives, temps = [], {}
     for disk in inv["disks"]:
@@ -3898,7 +3901,7 @@ def drive_report(force: bool = False, with_rate: bool = True) -> dict:
             problems.append(("bad", f"Too hot ({temp:.0f}°C, limit {limit:.0f}°C). Check airflow around it."))
         elif temp and temp >= limit - DRIVE_WARM_MARGIN:
             problems.append(("warn", f"Running warm ({temp:.0f}°C). Check airflow around it."))
-        if total and free < DRIVE_LOW_GB * 1024 ** 3:
+        if total and free < low_gb * 1024 ** 3:
             problems.append(("warn", f"Only {format_bytes(free)} free."))
         status = "bad" if any(p[0] == "bad" for p in problems) else ("warn" if problems else
                                                                       ("ok" if health == "Healthy" else "unknown"))
@@ -5079,7 +5082,7 @@ function renderDrives(r){
   const alerts='<div class="section">ALERTS TO MY PHONE</div><div class="card" id="drivealerts">'+
     '<label class="tgl"><span>Health changes<small>Windows reports a drive problem</small></span><input type="checkbox" data-dalert="notify_drive_health"'+(a.health?' checked':'')+'></label>'+
     '<label class="tgl"><span>Too hot<small>Hard drives '+esc(r.temp_alert)+'°C · NVMe '+esc(r.nvme_temp_alert)+'°C</small></span><input type="checkbox" data-dalert="notify_drive_hot"'+(a.hot?' checked':'')+'></label>'+
-    '<label class="tgl"><span>Less than '+esc(a.low_gb||100)+' GB free</span><input type="checkbox" data-dalert="notify_drive_low"'+(a.low?' checked':'')+'></label>'+
+    '<label class="tgl"><span>Less than '+esc(a.low_gb||75)+' GB free</span><input type="checkbox" data-dalert="notify_drive_low"'+(a.low?' checked':'')+'></label>'+
     (a.ready?'':'<p class="hint" style="margin:8px 0 0">Phone alerts aren\'t set up yet: they use ntfy, the same as download alerts.</p>')+'</div>';
   $('drivebody').innerHTML=banner+tiles+tempHint+'<div class="section">ALL DRIVES</div>'+ds.map(driveCard).join('')+tempChart(ds)+alerts+(r.problem?'<p class="hint">'+esc(r.problem)+'</p>':'');
   renderHomeDrives(r);

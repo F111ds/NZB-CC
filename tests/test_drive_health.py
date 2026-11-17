@@ -133,11 +133,14 @@ def api(path, body=None):
     except urllib.error.HTTPError as e: return e.code, json.loads(e.read())
 
 st, d = api("/api/drives")
-assert st == 200 and len(d["drives"]) == 2 and d["alerts"] == {"ready": False, "health": True, "hot": True, "low": True, "low_gb": 100}, d
+assert st == 200 and len(d["drives"]) == 2 and d["alerts"] == {"ready": False, "health": True, "hot": True, "low": True, "low_gb": 75}, d
 assert d["temp_alert"] == 55 and d["nvme_temp_alert"] == 70
 st, d = api("/api/drives/alerts", {"notify_drive_hot": False})
 assert st == 200 and d["alerts"]["hot"] is False and d["alerts"]["health"] is True
 assert json.loads(m.SETTINGS_FILE.read_text())["notify_drive_hot"] is False
+saved = json.loads(m.SETTINGS_FILE.read_text()); saved["drive_low_gb"] = 100   # saved by an older version
+m.SETTINGS_FILE.write_text(json.dumps(saved))
+assert m.load_settings()["drive_low_gb"] == 75                                    # old default follows the new one
 assert api("/api/drives/io") == (200, {"io": {}})
 st, d = api("/api/drives/check", {})
 assert st == 200 and d["checked"]
