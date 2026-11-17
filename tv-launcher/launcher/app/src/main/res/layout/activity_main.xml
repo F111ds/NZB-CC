@@ -126,8 +126,8 @@
             android:id="@+id/heroName"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="#FFFFFFFF"
-            android:textSize="48sp"
+            android:textColor="#CCFFFFFF"
+            android:textSize="15sp"
             android:fontFamily="@string/font_light"
             android:letterSpacing="-0.02"
             android:includeFontPadding="false"
@@ -212,8 +212,8 @@
                         android:format12Hour="h:mm"
                         android:format24Hour="HH:mm"
                         android:textColor="#FFFFFFFF"
-                        android:textSize="52sp"
-                        android:fontFamily="@string/font_light"
+                        android:textSize="18sp"
+                        android:fontFamily="@string/font_regular"
                         android:letterSpacing="-0.04"
                         android:fontFeatureSettings="tnum"
                         android:includeFontPadding="false" />
@@ -224,11 +224,11 @@
                         android:layout_height="wrap_content"
                         android:layout_marginStart="6dp"
                         android:layout_gravity="bottom"
-                        android:layout_marginBottom="8dp"
+                        android:layout_marginBottom="0dp"
                         android:format12Hour="a"
                         android:format24Hour=""
                         android:textColor="#B3FFFFFF"
-                        android:textSize="15sp"
+                        android:textSize="12sp"
                         android:fontFamily="@string/font_medium"
                         android:letterSpacing="0.08"
                         android:textAllCaps="true" />
@@ -236,19 +236,18 @@
                     <View
                         android:id="@+id/clockDivider"
                         android:layout_width="1dp"
-                        android:layout_height="26dp"
+                        android:layout_height="18dp"
                         android:layout_gravity="bottom"
-                        android:layout_marginStart="16dp"
-                        android:layout_marginEnd="16dp"
-                        android:layout_marginBottom="8dp"
+                        android:layout_marginStart="14dp"
+                        android:layout_marginEnd="14dp"
+                        android:layout_marginBottom="0dp"
                         android:background="#33FFFFFF" />
 
                     <LinearLayout
-                        android:layout_width="0dp"
-                        android:layout_weight="1"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_gravity="bottom"
-                        android:layout_marginBottom="9dp"
+                        android:layout_marginBottom="0dp"
                         android:orientation="vertical">
 
                         <!-- Shamsi date ("27 Mehr 1405"), shown when shamsi_date is on. -->
@@ -278,9 +277,9 @@
                             android:format12Hour="@string/date_format_home"
                             android:format24Hour="@string/date_format_home"
                             android:textColor="#A6FFFFFF"
-                            android:textSize="14sp"
+                            android:textSize="16sp"
                             android:fontFamily="@string/font_regular"
-                            android:letterSpacing="0.14"
+                            android:letterSpacing="0.06"
                             android:textAllCaps="true" />
 
                         <!-- Lunar date ("Lunar 13/9 · Year of the Horse"), shown when lunar_date is on. -->
@@ -298,8 +297,32 @@
                             android:letterSpacing="0.14"
                             android:textAllCaps="true"
                             android:visibility="gone" />
-
                     </LinearLayout>
+
+                    <!-- NZB-CC: the exchange rate (ExchangeRate) on the same line as the time and date. -->
+                    <View
+                        android:id="@+id/fxDivider"
+                        android:layout_width="1dp"
+                        android:layout_height="18dp"
+                        android:layout_marginStart="14dp"
+                        android:layout_marginEnd="14dp"
+                        android:background="#33FFFFFF"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/fxLine"
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:gravity="left"
+                        android:singleLine="true"
+                        android:ellipsize="end"
+                        android:textColor="#A6FFFFFF"
+                        android:textSize="16sp"
+                        android:fontFamily="@string/font_regular"
+                        android:letterSpacing="0.06"
+                        android:focusable="false"
+                        android:visibility="gone" />
                 </LinearLayout>
 
             </LinearLayout>
@@ -334,13 +357,12 @@
                 android:clipToPadding="false"
                 android:orientation="horizontal">
 
-                <!-- The weather now (WeatherNow): just the temperature, not focusable. Gone until there is a reading. -->
+                <!-- The weather now (WeatherNow); OK opens the forecast. Gone until there is a reading. -->
                 <TextView
                     android:id="@+id/weatherPill"
                     style="@style/TopButton"
-                    android:focusable="false"
-                    android:clickable="false"
                     android:singleLine="true"
+                    android:nextFocusDown="@+id/grid"
                     android:visibility="gone" />
 
                 <TextView
@@ -353,7 +375,7 @@
                 <TextView
                     android:id="@+id/btnWifi"
                     style="@style/TopButton"
-                    android:maxWidth="180dp"
+                    android:maxWidth="150dp"
                     android:singleLine="true"
                     android:ellipsize="end"
                     android:text="@string/wifi"
@@ -415,75 +437,117 @@
         </FrameLayout>
     </LinearLayout>
 
-    <!-- Kodi row (KodiRow): the newest movies on a glass shelf between the weather and the dock. Placed and
+    <!-- NZB-CC news ticker (NewsFeed + TickerView): headlines scrolling in a faint glass strip above the Kodi row.
+         Placed and sized in code (MainActivity.layoutKodiRow); gone until there are headlines. -->
+    <com.gathin.tvhome.TickerView
+        android:id="@+id/newsTicker"
+        android:layout_width="632dp"
+        android:layout_height="30dp"
+        android:layout_gravity="top|center_horizontal"
+        android:background="@drawable/news_strip"
+        android:focusable="false"
+        android:importantForAccessibility="no"
+        android:visibility="gone" />
+
+    <!-- Kodi row (KodiRow): what was watched last in Kodi, on a glass shelf between the weather and the dock. Placed and
          sized in code (MainActivity.layoutKodiRow); gone until it has movies. -->
     <LinearLayout
         android:id="@+id/kodiBlock"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginStart="48dp"
-        android:layout_marginEnd="48dp"
+        android:layout_marginStart="46dp"
+        android:layout_marginEnd="46dp"
         android:orientation="vertical"
-        android:gravity="center_horizontal"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:paddingTop="9dp"
+        android:paddingBottom="2dp"
         android:clipChildren="false"
         android:clipToPadding="false"
         android:visibility="gone">
 
-        <TextView
-            android:id="@+id/kodiCount"
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="#D9FFFFFF"
-            android:textSize="11sp"
-            android:fontFamily="@string/font_medium"
-            android:letterSpacing="0.02" />
+            android:layout_marginStart="6dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
 
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/kodi_chip"
+                android:paddingStart="7dp"
+                android:paddingEnd="7dp"
+                android:paddingTop="1dp"
+                android:paddingBottom="1dp"
+                android:text="KODI"
+                android:textColor="#FFFFFFFF"
+                android:textSize="9sp"
+                android:fontFamily="@string/font_medium"
+                android:letterSpacing="0.16" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Recently watched"
+                android:textColor="#FFFFFFFF"
+                android:textSize="13sp"
+                android:fontFamily="@string/font_medium" />
+
+            <TextView
+                android:id="@+id/kodiCount"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/kodi_count"
+                android:paddingStart="7dp"
+                android:paddingEnd="7dp"
+                android:paddingTop="1dp"
+                android:paddingBottom="1dp"
+                android:textColor="#E6FFFFFF"
+                android:textSize="10sp"
+                android:fontFamily="@string/font_regular" />
+
+            <!-- The focused movie: "The Long Tide   2025 · 2h 11m · 4K · OK to play in Kodi". -->
+            <TextView
+                android:id="@+id/kodiFocusTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="18dp"
+                android:maxWidth="420dp"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:textColor="#FFFFFFFF"
+                android:textSize="15sp"
+                android:fontFamily="@string/font_medium" />
+
+            <TextView
+                android:id="@+id/kodiFocusMeta"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:textColor="#BFFFFFFF"
+                android:textSize="11sp"
+                android:fontFamily="@string/font_regular" />
+        </LinearLayout>
+
+        <!-- wrap_content and centred: the five posters sit in the middle of the shelf. -->
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/kodiRow"
             android:layout_width="wrap_content"
+            android:layout_gravity="center_horizontal"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
             android:clipChildren="true"
             android:clipToPadding="false"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
+            android:paddingStart="0dp"
+            android:paddingEnd="0dp"
             android:overScrollMode="never"
             android:scrollbars="none"
             android:descendantFocusability="afterDescendants" />
-
-        <TextView
-            android:id="@+id/kodiFocusTitle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:maxWidth="640dp"
-            android:singleLine="true"
-            android:ellipsize="end"
-            android:textColor="#FFFFFFFF"
-            android:textSize="19sp"
-            android:fontFamily="@string/font_medium" />
-
-        <TextView
-            android:id="@+id/kodiFocusMeta"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="3dp"
-            android:singleLine="true"
-            android:ellipsize="end"
-            android:textColor="#CCFFFFFF"
-            android:textSize="11sp"
-            android:fontFamily="@string/font_regular" />
-
-        <!-- How far into the movie Kodi left off; shown only for a movie started and not finished. -->
-        <ProgressBar
-            android:id="@+id/kodiFocusProgress"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="150dp"
-            android:layout_height="3dp"
-            android:layout_marginTop="7dp"
-            android:max="1000"
-            android:progressDrawable="@drawable/kodi_progress"
-            android:visibility="invisible" />
     </LinearLayout>
 
     <!-- The single floating glass highlight that springs between tiles. -->

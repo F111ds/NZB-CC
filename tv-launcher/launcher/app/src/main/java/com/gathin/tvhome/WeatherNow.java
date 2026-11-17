@@ -33,6 +33,23 @@ final class WeatherNow {
     /** "☁ 22° · H 24° L 10°" */
     String pill = "";
     long readAt;
+    /** Today and the next days, for the forecast panel (the weather pill's OK). */
+    java.util.List<Day> days = new java.util.ArrayList<>();
+    /** "Partly cloudy · feels like 20°", for the panel's first line. */
+    String now = "";
+
+    static final class Day {
+        final String date;   // yyyy-MM-dd
+        final int code, hi, lo, rain;
+
+        Day(String date, int code, int hi, int lo, int rain) {
+            this.date = date;
+            this.code = code;
+            this.hi = hi;
+            this.lo = lo;
+            this.rain = rain;
+        }
+    }
 
     WeatherNow(Context ctx, HomeExtras extras, Handler main, Runnable onChange) {
         this.ctx = ctx.getApplicationContext();
@@ -43,6 +60,8 @@ final class WeatherNow {
         if (p.getString("where", "").equals(where())) {
             pill = p.getString("pill", "");
             readAt = p.getLong("at", 0);
+            now = p.getString("now", "");
+            days = parseDays(p.getString("days", ""));
         }
     }
 
@@ -65,8 +84,9 @@ final class WeatherNow {
         try {
             String url = String.format(Locale.US,
                     "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
-                            + "&current=temperature_2m,weather_code,is_day&daily=temperature_2m_max,temperature_2m_min"
-                            + "&timezone=auto&forecast_days=1&temperature_unit=%s",
+                            + "&current=temperature_2m,apparent_temperature,weather_code,is_day"
+                            + "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+                            + "&timezone=auto&forecast_days=5&temperature_unit=%s",
                     extras.weatherLat, extras.weatherLon, extras.fahrenheit ? "fahrenheit" : "celsius");
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(8000);
@@ -84,12 +104,29 @@ final class WeatherNow {
             long lo = Math.round(day.getJSONArray("temperature_2m_min").getDouble(0));
             String text = icon(cur.optInt("weather_code", -1), cur.optInt("is_day", 1) == 1)
                     + "  " + now + "°  ·  H " + hi + "°  L " + lo + "°";
+            org.json.JSONArray out = new org.json.JSONArray();
+            org.json.JSONArray dates = day.getJSONArray("time");
+            for (int i = 0; i < dates.length(); i++) {
+                out.put(new JSONObject().put("d", dates.getString(i))
+                        .put("c", day.optJSONArray("weather_code") == null ? -1 : day.getJSONArray("weather_code").optInt(i, -1))
+                        .put("h", Math.round(day.getJSONArray("temperature_2m_max").optDouble(i)))
+                        .put("l", Math.round(day.getJSONArray("temperature_2m_min").optDouble(i)))
+                        .put("r", day.optJSONArray("precipitation_probability_max") == null ? -1
+                                : day.getJSONArray("precipitation_probability_max").optInt(i, -1)));
+            }
+            String daysJson = out.toString();
+            String nowText = condition(cur.optInt("weather_code", -1), cur.optInt("is_day", 1) == 1)
+                    + (cur.has("apparent_temperature") ? " · feels like " + Math.round(cur.getDouble("apparent_temperature")) + "°" : "");
             long at = System.currentTimeMillis();
             ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                    .putString("where", where()).putString("pill", text).putLong("at", at).apply();
+                    .putString("where", where()).putString("pill", text).putLong("at", at)
+                    .putString("days", daysJson).putString("now", nowText).apply();
+            java.util.List<Day> parsed = parseDays(daysJson);
             main.post(() -> {
                 pill = text;
                 readAt = at;
+                days = parsed;
+                this.now = nowText;
                 onChange.run();
             });
         } catch (Exception e) {
@@ -98,6 +135,20 @@ final class WeatherNow {
         } finally {
             busy = false;
         }
+    }
+
+    static java.util.List<Day> parseDays(String json) {
+        java.util.List<Day> out = new java.util.ArrayList<>();
+        try {
+            org.json.JSONArray a = new org.json.JSONArray(json);
+            for (int i = 0; i < a.length(); i++) {
+                JSONObject o = a.getJSONObject(i);
+                out.add(new Day(o.optString("d"), o.optInt("c", -1), o.optInt("h"), o.optInt("l"), o.optInt("r", -1)));
+            }
+        } catch (Exception ignored) {
+            // nothing saved yet
+        }
+        return out;
     }
 
     private String where() {

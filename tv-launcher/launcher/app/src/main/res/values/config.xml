@@ -317,16 +317,16 @@
     <!-- The dock band as light frosted glass, like the Inputs, Wi-Fi and Settings pills, so a sky or wallpaper shows
          through it. false (the default) keeps the solid near-black band, or the cinematic shelf's dark glass. Can
          also be set with "dock_glass": true in a theme's config.json. -->
-    <bool name="dock_glass">false</bool>
+    <bool name="dock_glass">true</bool>   <!-- NZB-CC default -->
     <!-- Draw the dock band and its edge. false leaves the tiles floating on the wallpaper (config.xml dock_band). -->
     <bool name="dock_band">true</bool>
     <!-- Every app in one row: the dock apps first, the rest after them, and the row scrolls sideways when focus
          reaches its edge. No grid below; rows_below_dock is ignored. Needs dock_row. Can also be set with
          "single_row" in a theme. -->
-    <bool name="single_row">false</bool>
+    <bool name="single_row">true</bool>   <!-- NZB-CC default -->
     <!-- With single_row, the band runs behind every app in the row, apps installed later included, instead of
          the dock apps only. Can also be set with "dock_band_all" in a theme. -->
-    <bool name="dock_band_all">false</bool>
+    <bool name="dock_band_all">true</bool>   <!-- NZB-CC default -->
     <!-- The dock band's padding equals the gap between its tiles on all four sides (as far as the grid's edges leave room),
          so its corners are concentric with the tiles' and the spacing reads even. false (the default) keeps the fixed
          14dp above and below, up to 22dp at the sides and 26dp corners. Can also be set with "dock_even_padding": true in a theme's config.json. -->
@@ -360,7 +360,7 @@
     <!-- The App library pill after the last Home row. false hides it while library_button is on, so the top-bar
          button stays the way in, and Down from the last row stays put as with app_library off. Can also be set
          with "show_library_pill": false in a theme's config.json. -->
-    <bool name="show_library_pill">true</bool>
+    <bool name="show_library_pill">false</bool>   <!-- NZB-CC default: the grid button opens it -->
     <!-- With icon_only_buttons: keep the network name on the Wi-Fi pill up to this width in dp, cut with an ellipsis.
          0 leaves the Wi-Fi pill as an icon. -->
     <integer name="wifi_label_width">0</integer>
@@ -439,7 +439,7 @@
     <!-- OK opens every app in the library, not only the apps on Home: for a library that holds the apps a theme
          keeps off Home with hidden_apps. Hold OK still offers Add to Home. app_library_selection wins when both are
          on. Off by default; a theme can set "library_ok_opens": true (also needs app_library). -->
-    <bool name="library_ok_opens">false</bool>
+    <bool name="library_ok_opens">true</bool>   <!-- NZB-CC default: OK opens; Add to Home is in the hold menu -->
 
     <!-- Apps pre-seeded into the App library's "added" set at startup (config.xml library_apps, or a theme's
          config.json). They show on Home as if the owner had added them in the App library UI, and stay
@@ -489,7 +489,7 @@
          horizon glow around sunrise and sunset. 0 keeps the plain background (the default); 1 to 100
          sets its opacity. Around 60 reads clearly without hiding a wallpaper. Can also be set with
          "sky_intensity": 60 in a theme's config.json. -->
-    <integer name="sky_intensity">0</integer>
+    <integer name="sky_intensity">70</integer>   <!-- NZB-CC default: the time-of-day sky -->
     <!-- Where the TV is, in decimal degrees, so the sky's sunrise and sunset glows follow the real sun
          (computed on the TV, no network). Empty: a fixed temperate day, sunset glow around 19:00.
          Vilnius: 54.69 and 25.28. -->

@@ -8,7 +8,8 @@ A phone version of NZB Command Center, served on your home network:
   * Search - your Newznab indexers, with a category drop-down per indexer; send to SABnzbd
   * Queue  - SABnzbd queue and history (pause, delete, retry, speed limit)
   * Kodi   - now playing with a full remote, movies and TV shows (continue watching,
-             next episode, missing episodes), "find a better copy" for a movie
+             next episode, missing episodes), "find a better copy" for a movie,
+             and "TV on + Kodi" / "Open Kodi" buttons for a Sony TV (IP control)
 It reads the SAME nzb_manager_config.json (and DPAPI-protected keys) as the desktop
 app, including its Kodi settings, and never modifies it. Phone-only
 settings (alerts, saved searches) live in mobile_settings.json. Add the page to your
@@ -1197,6 +1198,323 @@ def kodi_missing_episodes(cap: int = 400) -> list[dict]:
 
 
 # ==============================================================================
+# 3c. SONY TV - power on and open Kodi (Sony "IP control" REST API + Wake-on-LAN)
+# ==============================================================================
+# On the TV: Settings > Network > Remote start: On, and
+# Settings > Network > Home network > IP control > Authentication: "Normal and Pre-Shared Key" + a key.
+
+TV_WAKE_SECONDS = 45       # how long to wait for the TV to come out of standby
+TV_KODI_SECONDS = 60       # how long to wait for Kodi to answer after it's opened
+MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}$")
+_tv_lock = threading.Lock()
+_tv_job: dict = {"state": "idle", "message": "", "at": 0.0}
+
+
+def tv_psk(settings: dict) -> str:
+    global _EXTRA_SECRETS
+    try:
+        key = _dpapi_unprotect(str(settings.get("tv_psk") or ""))
+    except ConfigError:
+        return ""
+    if key and len(key) >= 4 and key not in _EXTRA_SECRETS:
+        _EXTRA_SECRETS = _EXTRA_SECRETS | {key}
+    return key
+
+
+def tv_host(settings: dict | None = None) -> str:
+    """The TV's address: the one saved for the TV, else the host from the Kodi URL (Kodi runs on the TV)."""
+    settings = settings if settings is not None else load_settings()
+    host = str(settings.get("tv_host") or "").strip()
+    if host:
+        return host
+    try:
+        return urllib.parse.urlsplit(get_config()["kodi"]["url"]).hostname or ""
+    except ConfigError:
+        return ""
+
+
+def tv_host_is_local(host: str) -> bool:
+    """True only if the TV address points at the home network (every address a name resolves to is private)."""
+    name = host.rsplit(":", 1)[0] if re.fullmatch(r".+:\d{1,5}", host) else host
+    try:
+        addrs = {info[4][0].split("%")[0] for info in socket.getaddrinfo(name, None)}
+    except (OSError, ValueError, UnicodeError):
+        return False
+    try:
+        return bool(addrs) and not any(ipaddress.ip_address(a).is_global for a in addrs)
+    except ValueError:
+        return False
+
+
+def validate_tv_host(host: str) -> str:
+    host = str(host or "").strip()
+    if not host:
+        return ""
+    if "://" in host:
+        host = urllib.parse.urlsplit(host).netloc
+    m_ = re.fullmatch(r"([A-Za-z0-9.\-]{1,253})(?::(\d{1,5}))?", host)
+    if not m_ or (m_.group(2) and not 1 <= int(m_.group(2)) <= 65535):
+        raise ValueError("Enter the TV's address like 192.168.1.40.")
+    if not tv_host_is_local(host):
+        raise ValueError("That address isn't on your home network (or can't be found). Use the TV's IP, like 192.168.1.40.")
+    return host
+
+
+def tv_configured(settings: dict | None = None) -> bool:
+    settings = settings if settings is not None else load_settings()
+    return bool(tv_host(settings) and tv_psk(settings))
+
+
+def sony_call(service: str, method: str, params: list | None = None, version: str = "1.0",
+              timeout: float = 4, settings: dict | None = None):
+    settings = settings if settings is not None else load_settings()
+    host, key = tv_host(settings), tv_psk(settings)
+    if not host or not key:
+        raise UpstreamError("Set up TV control first (TV address and Pre-Shared Key).")
+    if not tv_host_is_local(host):
+        raise UpstreamError("The TV address isn't on your home network, so the key wasn't sent. Fix it in TV setup.")
+    payload = {"method": method, "id": 1, "params": params or [], "version": version}
+    url = f"http://{host}/sony/{service}"   # host may carry a :port
+    try:
+        raw = http_fetch(url, timeout=timeout, max_bytes=512 * 1024, data=json.dumps(payload).encode("utf-8"),
+                         headers={"Content-Type": "application/json", "X-Auth-PSK": key})
+    except UpstreamError as exc:
+        msg = str(exc)
+        if msg.startswith("HTTP 403") or msg.startswith("HTTP 401"):
+            raise UpstreamError("The TV refused the Pre-Shared Key. Check it matches the TV's IP control setting.") from None
+        if msg.startswith(("Connection failed", "Network error")):
+            raise UpstreamError("Can't reach the TV.") from None
+        raise UpstreamError(f"TV: {msg}") from None
+    try:
+        body = json.loads(raw.decode("utf-8", errors="replace"))
+    except ValueError:
+        raise UpstreamError("The TV sent an invalid response.") from None
+    if isinstance(body, dict) and body.get("error"):
+        err = body["error"]
+        code = err[0] if isinstance(err, list) and err else err
+        if code in (40005,):   # "Display is turned off" style errors
+            raise UpstreamError("The TV is in standby.")
+        raise UpstreamError(f"TV error {err}")
+    return (body.get("result") or [None])[0] if isinstance(body, dict) else None
+
+
+IRCC_WAKEUP = "AAAAAQAAAAEAAAAuAw=="   # the remote's "power on" code (discrete, not a toggle)
+
+
+def sony_ircc(code: str, settings: dict | None = None, timeout: float = 3) -> None:
+    """Sends a remote-control (IR) code over the network. Some Sony TVs only wake from this."""
+    settings = settings if settings is not None else load_settings()
+    host, key = tv_host(settings), tv_psk(settings)
+    if not host or not key:
+        raise UpstreamError("Set up TV control first (TV address and Pre-Shared Key).")
+    if not tv_host_is_local(host):
+        raise UpstreamError("The TV address isn't on your home network, so the key wasn't sent. Fix it in TV setup.")
+    body = ('<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+            's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>'
+            '<u:X_SendIRCC xmlns:u="urn:schemas-sony-com:service:IRCC:1"><IRCCCode>' + code +
+            '</IRCCCode></u:X_SendIRCC></s:Body></s:Envelope>')
+    try:
+        http_fetch(f"http://{host}/sony/IRCC", timeout=timeout, max_bytes=64 * 1024, data=body.encode("utf-8"),
+                   headers={"Content-Type": 'text/xml; charset="UTF-8"',
+                            "SOAPACTION": '"urn:schemas-sony-com:service:IRCC:1#X_SendIRCC"', "X-Auth-PSK": key})
+    except UpstreamError as exc:
+        msg = str(exc)
+        if msg.startswith(("HTTP 401", "HTTP 403")):
+            raise UpstreamError("The TV refused the Pre-Shared Key. Check it matches the TV's IP control setting.") from None
+        if msg.startswith(("Connection failed", "Network error")):
+            raise UpstreamError("Can't reach the TV.") from None
+        raise UpstreamError(f"TV: {msg}") from None
+
+
+def tv_power_state(settings: dict | None = None) -> str:
+    """'on', 'standby' (network alive, screen off) or 'off' (unreachable)."""
+    try:
+        res = sony_call("system", "getPowerStatus", timeout=3, settings=settings)
+    except UpstreamError as exc:
+        if "Pre-Shared Key" in str(exc) or "Set up TV control" in str(exc):
+            raise
+        return "off"
+    return "on" if _kdict(res).get("status") == "active" else "standby"
+
+
+def send_wol(mac: str) -> None:
+    """Wake-on-LAN magic packet to the whole local network (helps a TV whose network is asleep)."""
+    if not MAC_RE.match(mac or ""):
+        return
+    packet = b"\xff" * 6 + bytes.fromhex(re.sub(r"[:-]", "", mac)) * 16
+    targets = {"255.255.255.255"}
+    try:
+        targets.add(str(ipaddress.ip_network(get_local_ip() + "/24", strict=False).broadcast_address))
+    except ValueError:
+        pass
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        for target in targets:
+            for port in (9, 7):
+                try:
+                    sock.sendto(packet, (target, port))
+                except OSError:
+                    pass
+
+
+def tv_learn_mac(settings: dict) -> None:
+    """While the TV is on, remember its network card address so Wake-on-LAN can be used later."""
+    if settings.get("tv_mac_manual"):
+        return
+    try:
+        nets = sony_call("system", "getNetworkSettings", [{"netif": ""}], timeout=3, settings=settings) or []
+    except UpstreamError:
+        return
+    host = tv_host(settings)
+    best = ""
+    for n in nets if isinstance(nets, list) else []:
+        mac = str(_kdict(n).get("hwAddr") or "")
+        if MAC_RE.match(mac) and (not best or _kdict(n).get("ipAddrV4") == host.split(":")[0]):
+            best = mac
+    if best and best.lower() != str(settings.get("tv_mac") or "").lower():
+        def change(st: dict) -> None:
+            st["tv_mac"] = best
+        update_settings(change)
+
+
+def tv_kodi_uri(settings: dict, refresh: bool = False) -> str:
+    """The TV's launch address for Kodi (looked up once, then remembered)."""
+    cached = str(settings.get("tv_kodi_uri") or "")
+    if cached and not refresh:
+        return cached
+    apps = sony_call("appControl", "getApplicationList", settings=settings) or []
+    uri = ""
+    for app in apps if isinstance(apps, list) else []:
+        a = _kdict(app)
+        if "kodi" in str(a.get("title") or "").lower() or "xbmc" in str(a.get("uri") or "").lower():
+            uri = str(a.get("uri") or "")
+            break
+    if not uri:
+        raise UpstreamError("Kodi isn't installed on the TV (it's not in the TV's app list).")
+    if uri != cached:
+        def change(st: dict) -> None:
+            st["tv_kodi_uri"] = uri
+        update_settings(change)
+    return uri
+
+
+def tv_open_kodi(settings: dict | None = None) -> None:
+    """Brings Kodi to the front on the TV (starts it if it isn't running)."""
+    settings = settings if settings is not None else load_settings()
+    try:
+        sony_call("appControl", "setActiveApp", [{"uri": tv_kodi_uri(settings), "data": ""}], timeout=6, settings=settings)
+    except UpstreamError as exc:
+        if "standby" in str(exc) or "Can't reach" in str(exc):
+            raise
+        # The remembered launch address may be stale (Kodi reinstalled/updated): look it up again once.
+        sony_call("appControl", "setActiveApp", [{"uri": tv_kodi_uri(settings, refresh=True), "data": ""}],
+                  timeout=6, settings=settings)
+
+
+def wait_for_kodi(seconds: float) -> bool:
+    if not kodi_configured():
+        return True
+    url = get_config()["kodi"]["url"]
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        mark_backend("kodi|" + url)   # forget an earlier "Kodi is off" so we really ask again
+        try:
+            kodi_call("JSONRPC.Ping", timeout=3)
+            return True
+        except UpstreamError:
+            time.sleep(2)
+    return False
+
+
+def _set_tv_job(state: str, message: str = "") -> None:
+    with _tv_lock:
+        _tv_job.update(state=state, message=message, at=time.time())
+
+
+def tv_job_view() -> dict:
+    with _tv_lock:
+        return dict(_tv_job)
+
+
+def tv_start(launch_kodi: bool = True) -> bool:
+    """Starts 'TV on (+ open Kodi)' in the background. False if one is already running."""
+    with _tv_lock:
+        if _tv_job["state"] in ("waking", "launching", "waiting"):
+            return False
+        _tv_job.update(state="waking", message="Turning the TV on…", at=time.time())
+    threading.Thread(target=_tv_worker, args=(launch_kodi,), daemon=True, name="tv-on").start()
+    return True
+
+
+def _tv_worker(launch_kodi: bool) -> None:
+    try:
+        settings = load_settings()
+        state = tv_power_state(settings)
+        log.info("tv on: TV is %s (MAC %s)", state, settings.get("tv_mac") or "not known yet")
+        if state != "on":
+            mac = str(settings.get("tv_mac") or "")
+            deadline = time.monotonic() + TV_WAKE_SECONDS
+            next_send, reached, sent_ok = 0.0, state == "standby", False
+            while time.monotonic() < deadline:
+                if time.monotonic() >= next_send:
+                    # Every few seconds, try every way of waking it: Wake-on-LAN, the power API, the remote's IR code.
+                    send_wol(mac)
+                    for label, fn in (("setPowerStatus", lambda: sony_call("system", "setPowerStatus", [{"status": True}],
+                                                                           timeout=3, settings=settings)),
+                                      ("IRCC WakeUp", lambda: sony_ircc(IRCC_WAKEUP, settings=settings))):
+                        try:
+                            fn()
+                            reached = sent_ok = True
+                            log.info("tv on: %s accepted", label)
+                        except UpstreamError as exc:
+                            if "Pre-Shared Key" in str(exc):
+                                raise
+                            log.info("tv on: %s failed: %s", label, redact(exc))
+                    next_send = time.monotonic() + 8
+                now_state = tv_power_state(settings)
+                if now_state == "on":
+                    break
+                if now_state == "standby":
+                    reached = True
+                time.sleep(2)
+            else:
+                if not reached:
+                    hint = ("The TV can't be reached while it's off. On the TV turn on Settings › Network › Remote start"
+                            + ("." if mac else ", then use Open Kodi once while the TV is on so the app can learn its network address."))
+                elif sent_ok:
+                    hint = "The TV got the wake command but stayed off. Try turning Remote start off and on again on the TV."
+                else:
+                    hint = "The TV answered but refused to turn on. Check Remote start is on in the TV's Network settings."
+                raise UpstreamError(hint)
+            log.info("tv on: TV woke up")
+            time.sleep(3)  # the TV's home screen takes a moment after waking
+        tv_learn_mac(settings)
+        if not launch_kodi:
+            _set_tv_job("done", "TV is on.")
+            return
+        _set_tv_job("launching", "Opening Kodi…")
+        for attempt in range(3):
+            try:
+                tv_open_kodi(settings)
+                break
+            except UpstreamError:
+                if attempt == 2:
+                    raise
+                time.sleep(3)
+        _set_tv_job("waiting", "Waiting for Kodi…")
+        if wait_for_kodi(TV_KODI_SECONDS):
+            _set_tv_job("done", "Kodi is ready.")
+        else:
+            _set_tv_job("error", "Kodi opened on the TV but isn't answering yet. Check Kodi's remote control setting.")
+        log.info("tv on%s finished", " + kodi" if launch_kodi else "")
+    except UpstreamError as exc:
+        _set_tv_job("error", str(exc))
+    except Exception as exc:  # never leave the phone waiting on a crashed worker
+        log.warning("TV start failed: %s", redact(exc))
+        _set_tv_job("error", "Something went wrong turning the TV on.")
+
+
+# ==============================================================================
 # 4. NEWZNAB SEARCH
 # ==============================================================================
 
@@ -1704,7 +2022,9 @@ _settings_lock = threading.RLock()
 
 def _default_settings() -> dict:
     return {"ntfy_url": "", "ntfy_token": "", "notify_complete": True, "notify_failed": True, "notify_saved": True,
-            "saved_interval_hours": 6, "saved_searches": []}
+            "saved_interval_hours": 6, "saved_searches": [],
+            # Sony TV power / app launch (TV on + Kodi). Blank tv_host = the host from the Kodi URL.
+            "tv_host": "", "tv_psk": "", "tv_mac": "", "tv_mac_manual": False, "tv_kodi_uri": ""}
 
 
 def load_settings() -> dict:
@@ -1773,7 +2093,7 @@ def ntfy_token(settings: dict) -> str:
     except ConfigError:
         return ""
     if token and token not in _EXTRA_SECRETS:
-        _EXTRA_SECRETS = frozenset([token])
+        _EXTRA_SECRETS = _EXTRA_SECRETS | {token}
     return token
 
 
@@ -1886,9 +2206,17 @@ TV_REFRESH_SECS = 300
 TV_PLAY_WAIT_SECS = 45              # how long /api/tv/play waits for a Kodi that was just started
 TV_STATE_FILE = BASE_DIR / "tv_recent.json"
 TV_ART_DIR = BASE_DIR / "tv_art"
-TV_ID_RE = re.compile(r"[ks][A-Za-z0-9_]{1,80}")
+TV_ID_RE = re.compile(r"[ksme][A-Za-z0-9_]{1,80}")
+# "Recently watched" (GET /api/tv/watched): Kodi's movies and episodes started or finished, the last
+# played first, with how far in each is. Kept on disk like the downloads row, so the TV still has it
+# while Kodi is closed. Only items with a poster are listed; ids are m<movieid> and e<episodeid>.
+TV_WATCHED_SIZE = 10
+TV_WATCHED_REFRESH_SECS = 120
+TV_WATCHED_FILE = BASE_DIR / "tv_watched.json"
+TV_WATCHED_ART_DIR = BASE_DIR / "tv_watched_art"
+TV_WATCHED_ID_RE = re.compile(r"[me][0-9]{1,12}")
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".mpg", ".mpeg", ".webm", ".iso"}
-TV_KODI_PROPS = ["title", "year", "runtime", "file", "art", "thumbnail", "dateadded", "playcount", "streamdetails", "resume"]
+TV_KODI_PROPS = ["title", "year", "runtime", "file", "art", "thumbnail", "dateadded", "playcount", "streamdetails"]
 _tv_lock = threading.Lock()
 _tv_refreshing = threading.Lock()
 
@@ -1979,15 +2307,6 @@ def _kodi_time(text: str) -> float:
         return 0.0
 
 
-def _tv_resume(mv: dict) -> dict:
-    """{"resume": 0..1, "left_min": n} for a movie Kodi stopped part-way through, else zeros."""
-    r = _kdict(mv.get("resume"))
-    pos, total = to_float(r.get("position")), to_float(r.get("total"))
-    if pos <= 0 or total <= 0 or pos >= total:
-        return {"resume": 0.0, "left_min": 0}
-    return {"resume": round(pos / total, 3), "left_min": int(round((total - pos) / 60))}
-
-
 def tv_kodi_recent(limit: int = TV_ROW_SIZE) -> list[dict]:
     res = _kdict(kodi_call("VideoLibrary.GetRecentlyAddedMovies",
                            {"properties": TV_KODI_PROPS, "limits": {"start": 0, "end": limit}}, timeout=10))
@@ -2001,29 +2320,8 @@ def tv_kodi_recent(limit: int = TV_ROW_SIZE) -> list[dict]:
                     "title": str(mv.get("title") or "Untitled"), "year": to_int(mv.get("year")) or None,
                     "runtime": to_int(mv.get("runtime")) // 60, "quality": "4K" if quality == "2160p" else quality,
                     "added": _kodi_time(mv.get("dateadded")), "watched": to_int(mv.get("playcount")) > 0,
-                    "file": str(mv.get("file") or ""), "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail")),
-                    **_tv_resume(mv)})
+                    "file": str(mv.get("file") or ""), "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail"))})
     return out
-
-
-def tv_kodi_find(item: dict) -> dict | None:
-    """The movie in Kodi's library that a download is, as a row entry, or None."""
-    try:
-        res = _kdict(kodi_call("VideoLibrary.GetMovies", {"properties": TV_KODI_PROPS, "filter": {
-            "field": "title", "operator": "contains", "value": item["title"]}, "limits": {"start": 0, "end": 10}}, timeout=8))
-    except (UpstreamError, ConfigError):
-        return None
-    for mv in res.get("movies") or []:
-        if isinstance(mv, dict) and _same_movie(item, mv) and to_int(mv.get("movieid")) > 0:
-            art = _kdict(mv.get("art"))
-            quality, _hdr = video_quality(mv.get("streamdetails"))
-            return {"id": f"k{to_int(mv.get('movieid'))}", "movieid": to_int(mv.get("movieid")),
-                    "title": str(mv.get("title") or item["title"]), "year": to_int(mv.get("year")) or None,
-                    "runtime": to_int(mv.get("runtime")) // 60, "quality": "4K" if quality == "2160p" else quality,
-                    "added": item.get("added", 0.0), "watched": to_int(mv.get("playcount")) > 0,
-                    "file": str(mv.get("file") or ""), "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail")),
-                    **_tv_resume(mv)}
-    return None
 
 
 def _same_movie(a: dict, b: dict) -> bool:
@@ -2093,13 +2391,8 @@ def tv_refresh() -> dict:
             if pair and pair not in path_map:
                 path_map.append(pair)
         merged = list(kodi_items)
-        for s in sab_items:     # newest first, so a re-download replaces nothing and adds no second card
-            if any(_same_movie(s, k) for k in merged):
-                continue
-            hit = tv_kodi_find(s) if kodi_ok else None
-            if hit:             # Kodi has it, just not among its newest: use Kodi's poster and id
-                hit["added"] = s["added"]
-                merged.append(hit)
+        for s in sab_items:
+            if any(_same_movie(s, k) for k in kodi_items):
                 continue
             video = tv_video_file(s["storage"])
             s["file"] = tv_map_path(video, path_map) if video else ""
@@ -2134,7 +2427,7 @@ def tv_row(background: bool = True) -> dict:
         else:
             state = tv_refresh()
     items = [{k: it.get(k) for k in ("id", "title", "year", "runtime", "quality", "added", "watched", "new",
-                                      "in_kodi", "movieid", "file", "resume", "left_min")}
+                                      "in_kodi", "movieid", "file")}
              | {"poster": f"/api/tv/poster?id={it['id']}" if it.get("poster") else ""} for it in state["items"]]
     return {"updated": state["updated"], "items": items}
 
@@ -2142,28 +2435,39 @@ def tv_row(background: bool = True) -> dict:
 def tv_poster(item_id: str) -> bytes | None:
     if not TV_ID_RE.fullmatch(item_id or ""):
         raise ValueError("Invalid item.")
+    folder = TV_WATCHED_ART_DIR if TV_WATCHED_ID_RE.fullmatch(item_id) else TV_ART_DIR
     try:
-        return (TV_ART_DIR / f"{item_id}.img").read_bytes()
+        return (folder / f"{item_id}.img").read_bytes()
     except OSError:
         return None
 
 
-def tv_play(item_id: str, wait: float = TV_PLAY_WAIT_SECS) -> dict:
-    """Plays a row item in Kodi. The TV starts Kodi first, so this waits for Kodi to answer."""
-    if not TV_ID_RE.fullmatch(item_id or ""):
-        raise ValueError("Invalid item.")
-    item = next((x for x in tv_load_state()["items"] if x.get("id") == item_id), None)
-    if not item:
-        raise ValueError("That movie isn't in the row any more.")
+def _tv_wait_for_kodi(wait: float) -> None:
     deadline = time.monotonic() + wait
     while True:
         try:
             kodi_call("JSONRPC.Ping", timeout=3)
-            break
+            return
         except UpstreamError:
             if time.monotonic() >= deadline:
                 raise UpstreamError("Kodi didn't start in time.")
             time.sleep(1.5)
+
+
+def tv_play(item_id: str, wait: float = TV_PLAY_WAIT_SECS, from_start: bool = False) -> dict:
+    """Plays a row item in Kodi. The TV starts Kodi first, so this waits for Kodi to answer."""
+    if not TV_ID_RE.fullmatch(item_id or ""):
+        raise ValueError("Invalid item.")
+    if TV_WATCHED_ID_RE.fullmatch(item_id):   # recently watched: resume where it was left, or from the start
+        _tv_wait_for_kodi(wait)
+        kind = "episodeid" if item_id[0] == "e" else "movieid"
+        target = {kind: int(item_id[1:])}
+        kodi_call("Player.Open", {"item": target, "options": {"resume": not from_start}})
+        return {"ok": True, "played": target}
+    item = next((x for x in tv_load_state()["items"] if x.get("id") == item_id), None)
+    if not item:
+        raise ValueError("That movie isn't in the row any more.")
+    _tv_wait_for_kodi(wait)
     target = None
     if item.get("movieid"):
         target = {"movieid": int(item["movieid"])}
@@ -2181,6 +2485,273 @@ def tv_play(item_id: str, wait: float = TV_PLAY_WAIT_SECS) -> dict:
     return {"ok": True, "played": target}
 
 
+# Screensaver photos (GET /api/tv/photos, /api/tv/photo): pictures from a folder on this PC, which
+# the TV's screensaver shows one after another. The folder is the first line of tv_photos_folder.txt
+# next to this file, else the user's Pictures folder (or OneDrive's). Only files found by walking that
+# folder can be served, by an id derived from their path; nothing else on the PC is reachable.
+TV_PHOTOS_FILE = BASE_DIR / "tv_photos_folder.txt"
+TV_PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+TV_PHOTO_MAX_FILES = 5000
+TV_PHOTO_MAX_BYTES = 40 * 1024 * 1024
+TV_PHOTO_ID_RE = re.compile(r"[0-9a-f]{16}")
+_tv_photo_lock = threading.Lock()
+_tv_photo_index: dict = {"at": 0.0, "folder": "", "items": {}}
+
+
+def tv_photos_folder() -> Path | None:
+    try:
+        line = TV_PHOTOS_FILE.read_text(encoding="utf-8-sig").strip().splitlines()[0].strip().strip('"')
+        if line and Path(line).is_dir():
+            return Path(line)
+    except (OSError, IndexError):
+        pass
+    home = Path.home()
+    for cand in (home / "Pictures", home / "OneDrive" / "Pictures", home / "OneDrive" / "Imágenes", home / "Imágenes"):
+        if cand.is_dir():
+            return cand
+    return None
+
+
+def tv_photo_index(max_age: float = 600) -> dict:
+    """{id: (path, mtime)} for the pictures in the folder, re-walked at most every max_age seconds."""
+    folder = tv_photos_folder()
+    key = str(folder or "")
+    with _tv_photo_lock:
+        if _tv_photo_index["folder"] == key and time.time() - _tv_photo_index["at"] < max_age:
+            return _tv_photo_index["items"]
+        items: dict = {}
+        if folder:
+            for root, dirs, files in os.walk(folder):
+                dirs[:] = sorted(d for d in dirs if not d.startswith((".", "$")))
+                for f in sorted(files):
+                    if Path(f).suffix.lower() not in TV_PHOTO_EXTS or f.startswith("."):
+                        continue
+                    full = Path(root) / f
+                    try:
+                        st = full.stat()
+                    except OSError:
+                        continue
+                    if not 0 < st.st_size <= TV_PHOTO_MAX_BYTES:
+                        continue
+                    rel = str(full.relative_to(folder)).replace("\\", "/")
+                    items[hashlib.sha1(rel.encode("utf-8")).hexdigest()[:16]] = (str(full), st.st_mtime)
+                    if len(items) >= TV_PHOTO_MAX_FILES:
+                        break
+                if len(items) >= TV_PHOTO_MAX_FILES:
+                    break
+        _tv_photo_index.update(at=time.time(), folder=key, items=items)
+        return items
+
+
+def tv_photos_list() -> dict:
+    items = tv_photo_index()
+    folder = tv_photos_folder()
+    return {"folder": folder.name if folder else "", "count": len(items),
+            "items": [{"id": pid, "name": Path(path).stem[:80], "date": time.strftime("%Y-%m-%d", time.localtime(mtime))}
+                      for pid, (path, mtime) in sorted(items.items(), key=lambda kv: -kv[1][1])]}
+
+
+def tv_photo(photo_id: str) -> bytes | None:
+    if not TV_PHOTO_ID_RE.fullmatch(photo_id or ""):
+        raise ValueError("Invalid photo.")
+    hit = tv_photo_index().get(photo_id)
+    if not hit:
+        return None
+    try:
+        raw = Path(hit[0]).read_bytes()
+    except OSError:
+        return None
+    return raw if _image_type(raw) else None
+
+
+def tv_mark_watched(item_id: str) -> dict:
+    """Marks a recently-watched item as watched in Kodi (play count 1, resume point cleared)."""
+    if not TV_WATCHED_ID_RE.fullmatch(item_id or ""):
+        raise ValueError("Invalid item.")
+    num = int(item_id[1:])
+    done = {"playcount": 1, "resume": {"position": 0, "total": 0}}
+    if item_id[0] == "e":
+        kodi_call("VideoLibrary.SetEpisodeDetails", dict(done, episodeid=num))
+    else:
+        kodi_call("VideoLibrary.SetMovieDetails", dict(done, movieid=num))
+    with _tv_lock:   # show it finished right away in the saved list too
+        state = tv_watched_load()
+        for it in state["items"]:
+            if it.get("id") == item_id:
+                it.update(progress=1.0, remaining=0, watched=True)
+        tmp = TV_WATCHED_FILE.with_name(TV_WATCHED_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, TV_WATCHED_FILE)
+    return {"ok": True}
+
+
+def tv_finished(limit: int = 10) -> dict:
+    """Downloads SABnzbd finished most recently (movies and episodes), newest first, for the TV's
+    "Ready to watch" note. A poster is offered when the TV row already has one for that title."""
+    slots = sab_request("history", {"limit": 30}).get("history", {}).get("slots", [])
+    row = tv_load_state()["items"]
+    out = []
+    for x in slots:
+        if str(x.get("status", "")).lower() != "completed":
+            continue
+        name, cat = str(x.get("name") or ""), str(x.get("category") or "")
+        clean, year, kind = artwork_query(name, cat)
+        nzo = re.sub(r"[^A-Za-z0-9_]", "", str(x.get("nzo_id") or ""))[:80]
+        if not clean or not nzo or kind not in ("movie", "tv"):
+            continue
+        ep = re.search(r"\bS(\d{1,2})E(\d{1,3})\b", name.replace(".", " "), re.I)
+        title = f"{clean} S{int(ep.group(1))} E{int(ep.group(2))}" if kind == "tv" and ep else clean
+        poster = ""
+        if kind == "movie":
+            hit = next((it for it in row if it.get("poster") and _same_movie({"title": clean, "year": year}, it)), None)
+            if hit:
+                poster = f"/api/tv/poster?id={hit['id']}"
+        out.append({"id": f"s{nzo}", "title": title, "year": to_int(year) or None, "kind": kind,
+                    "completed": to_int(x.get("completed")), "poster": poster})
+        if len(out) >= limit:
+            break
+    out.sort(key=lambda it: -it["completed"])
+    return {"items": out}
+
+
+_tv_watched_refreshing = threading.Lock()
+_TV_SEEN_FILTER = {"or": [{"field": "inprogress", "operator": "true", "value": ""},
+                          {"field": "playcount", "operator": "greaterthan", "value": "0"}]}
+
+
+def _tv_progress(raw: dict) -> dict:
+    """{"progress": 0..1, "remaining": minutes left, "runtime": minutes} from Kodi's resume point."""
+    resume = _kdict(raw.get("resume"))
+    pos, total = to_float(resume.get("position")), to_float(resume.get("total"))
+    if total <= 0:
+        total = to_float(raw.get("runtime"))
+    watched = to_int(raw.get("playcount")) > 0
+    if pos > 0 and total > 0:
+        progress, remaining = min(1.0, pos / total), round((total - pos) / 60)
+    else:
+        progress, remaining = (1.0 if watched else 0.0), 0
+    return {"progress": round(progress, 3), "remaining": remaining, "runtime": round(total / 60), "watched": watched}
+
+
+def tv_kodi_watched(limit: int = TV_WATCHED_SIZE) -> list[dict]:
+    """Movies and episodes started or finished in Kodi, the last played first."""
+    common = {"filter": _TV_SEEN_FILTER, "sort": {"method": "lastplayed", "order": "descending"},
+              "limits": {"start": 0, "end": limit * 2}}
+    movies = _kdict(kodi_call("VideoLibrary.GetMovies", dict(common, properties=[
+        "title", "year", "runtime", "art", "thumbnail", "playcount", "resume", "lastplayed", "streamdetails"]),
+        timeout=10)).get("movies") or []
+    episodes = _kdict(kodi_call("VideoLibrary.GetEpisodes", dict(common, properties=[
+        "title", "showtitle", "season", "episode", "runtime", "art", "playcount", "resume", "lastplayed"]),
+        timeout=10)).get("episodes") or []
+    out = []
+    for mv in movies:
+        if not isinstance(mv, dict) or to_int(mv.get("movieid")) <= 0:
+            continue
+        art = _kdict(mv.get("art"))
+        quality, _hdr = video_quality(mv.get("streamdetails"))
+        out.append({"id": f"m{to_int(mv.get('movieid'))}", "movieid": to_int(mv.get("movieid")),
+                    "title": str(mv.get("title") or "Untitled"), "year": to_int(mv.get("year")) or None,
+                    "quality": "4K" if quality == "2160p" else quality,
+                    "lastplayed": str(mv.get("lastplayed") or ""),
+                    "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail"))} | _tv_progress(mv))
+    for ep in episodes:
+        if not isinstance(ep, dict) or to_int(ep.get("episodeid")) <= 0:
+            continue
+        art = _kdict(ep.get("art"))
+        show = str(ep.get("showtitle") or "")
+        out.append({"id": f"e{to_int(ep.get('episodeid'))}", "episodeid": to_int(ep.get("episodeid")),
+                    "title": show or str(ep.get("title") or "Untitled"), "episode_title": str(ep.get("title") or ""),
+                    "season": to_int(ep.get("season")), "episode": to_int(ep.get("episode")),
+                    "lastplayed": str(ep.get("lastplayed") or ""),
+                    "art_ref": _art_ref(art.get("tvshow.poster") or art.get("season.poster"))} | _tv_progress(ep))
+    out.sort(key=lambda x: x["lastplayed"], reverse=True)   # "YYYY-MM-DD HH:MM:SS" sorts as text
+    return out
+
+
+def _tv_save_watched_poster(item: dict) -> bool:
+    TV_WATCHED_ART_DIR.mkdir(exist_ok=True)
+    dest = TV_WATCHED_ART_DIR / f"{item['id']}.img"
+    if dest.exists():
+        return True
+    if not item.get("art_ref"):
+        return False
+    try:
+        raw = kodi_art(item["art_ref"])[0]
+    except (UpstreamError, ValueError, ConfigError):
+        return False
+    if not raw or not _image_type(raw):
+        return False
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_bytes(raw)
+    os.replace(tmp, dest)
+    return True
+
+
+def tv_watched_load() -> dict:
+    try:
+        data = json.loads(TV_WATCHED_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    return {"updated": to_float(data.get("updated")), "items": [x for x in data.get("items") or [] if isinstance(x, dict)]}
+
+
+def tv_watched_refresh() -> dict:
+    """Re-reads the list from Kodi; while Kodi is closed the last list is kept."""
+    with _tv_watched_refreshing:
+        state = tv_watched_load()
+        try:
+            if not kodi_configured():
+                return state
+            found = tv_kodi_watched()
+        except (UpstreamError, ConfigError):
+            return state
+        items = []
+        for it in found:   # no poster, no tile
+            if _tv_save_watched_poster(it):
+                it.pop("art_ref", None)
+                items.append(it)
+            if len(items) >= TV_WATCHED_SIZE:
+                break
+        if TV_WATCHED_ART_DIR.exists():
+            keep = {f"{it['id']}.img" for it in items}
+            for f in TV_WATCHED_ART_DIR.glob("*.img"):
+                if f.name not in keep:
+                    f.unlink(missing_ok=True)
+        state = {"updated": time.time(), "items": items}
+        with _tv_lock:
+            tmp = TV_WATCHED_FILE.with_name(TV_WATCHED_FILE.name + ".tmp")
+            tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, TV_WATCHED_FILE)
+        return state
+
+
+def tv_watched_row(background: bool = True, fresh: bool = False) -> dict:
+    """Recently watched as the TV reads it; a stale list is returned at once and re-read on a worker thread.
+    fresh: read Kodi now (the TV asks this when Home comes back, so what was just watched shows at once);
+    at most every 10 seconds, and the saved list when Kodi doesn't answer."""
+    state = tv_watched_load()
+    if fresh and time.time() - state["updated"] > 10:
+        try:
+            return tv_watched_row_from(tv_watched_refresh())
+        except Exception:
+            log.exception("Reading Kodi's recently watched list failed")
+    if time.time() - state["updated"] > TV_WATCHED_REFRESH_SECS:
+        if background and state["items"]:
+            if not _tv_watched_refreshing.locked():
+                threading.Thread(target=tv_watched_refresh, name="tv-watched", daemon=True).start()
+        else:
+            state = tv_watched_refresh()
+    return tv_watched_row_from(state)
+
+
+def tv_watched_row_from(state: dict) -> dict:
+    keys = ("id", "title", "episode_title", "year", "season", "episode", "runtime", "quality", "watched",
+            "progress", "remaining", "movieid", "episodeid", "lastplayed")
+    items = [{k: it.get(k) for k in keys} | {"poster": f"/api/tv/poster?id={it['id']}"} for it in state["items"]]
+    return {"updated": state["updated"], "items": items}
+
+
 class BackgroundWorker:
     """Sends download alerts and runs saved searches while the server is up."""
 
@@ -2191,6 +2762,7 @@ class BackgroundWorker:
         self._seen: set[str] | None = None
         self._next_history = 0.0
         self._next_tv = 0.0
+        self._next_watched = 0.0
         self._stop = threading.Event()
 
     def start(self) -> None:
@@ -2218,6 +2790,12 @@ class BackgroundWorker:
                 tv_refresh()
             except Exception:
                 log.exception("Refreshing the TV row failed")
+        if now >= self._next_watched:
+            self._next_watched = now + TV_WATCHED_REFRESH_SECS
+            try:
+                tv_watched_refresh()
+            except Exception:
+                log.exception("Refreshing the TV's recently watched row failed")
         due = due_saved_search(settings, now)
         if due:  # one per tick spreads indexer API use out
             run_saved_search(due["id"], notify=True)
@@ -2637,6 +3215,17 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 </section>
 <section id="kodi" class="hidden">
 <div class="row" style="align-items:flex-end"><div><h1>Kodi</h1><p class="lede" id="kodistatus">Loading…</p></div><button class="btn ghost sm" id="kodiscan" style="flex:none;margin-bottom:14px">Scan library</button></div>
+<div id="tvbox" class="hidden">
+<div class="row" id="tvbtns"><button class="btn" id="tvon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true" style="vertical-align:-3px;margin-right:6px"><path d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>TV on + Kodi</button><button class="btn ghost" id="tvkodi">Open Kodi</button></div>
+<p class="hint" id="tvmsg" style="margin:6px 4px 10px"></p>
+<details class="opts" id="tvsetup"><summary><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="5" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>TV setup<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></summary><div class="body">
+<p class="hint" style="margin:0 0 10px">On the Sony TV: <b>Settings › Network › Remote start › On</b>, then <b>Settings › Network › Home network › IP control › Authentication › “Normal and Pre-Shared Key”</b> and set a <b>Pre-Shared Key</b>.</p>
+<label class="label" for="tvhost">TV address</label><input id="tvhost" class="field" placeholder="192.168.1.40" autocomplete="off" autocapitalize="off" inputmode="url">
+<label class="label" for="tvpsk">Pre-Shared Key</label><input id="tvpsk" class="field" type="password" placeholder="The key you set on the TV" autocomplete="off" autocapitalize="off">
+<label class="label" for="tvmac">TV network (MAC) address <span style="color:var(--muted)">· optional, learned automatically</span></label><input id="tvmac" class="field" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off" autocapitalize="characters">
+<button class="btn full" id="tvsave">Save &amp; test</button>
+</div></details>
+</div>
 <div id="kodinow"></div>
 <details class="remotebox hidden" id="kodiremote"><summary><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="3"/><circle cx="12" cy="8" r="2"/><path d="M10 14h4M10 17h4"/></svg>Remote<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></summary><div class="body">
 <div class="rrow"><button data-kact="seek_back" aria-label="Back 15 seconds">−15s</button><button data-kact="playpause" aria-label="Play or pause">Play / Pause</button><button data-kact="seek_fwd" aria-label="Forward 30 seconds">+30s</button></div>
@@ -3047,8 +3636,57 @@ async function renderKodiList(resetPage){
   list.innerHTML=a.slice(0,kodiShown).map(movieRow).join('')||empty(q?'No matches':'Nothing here',q?'Try part of the title.':'No movies fit this view.');hydrateArt(list);
   if(a.length>kodiShown){more.textContent='Show more ('+(a.length-kodiShown)+' left)';more.classList.remove('hidden')}
 }
+
+// ---------- Sony TV: power on + open Kodi ----------
+let tvInfo=null,tvPolling=false;
+async function loadTv(){try{tvInfo=await api('/api/tv')}catch{tvInfo=null}renderTv()}
+function tvSay(t,bad){const m=$('tvmsg');m.textContent=t||'';m.style.color=bad?'var(--red, #ff6b6b)':''}
+function renderTv(){
+  const box=$('tvbox');if(!tvInfo){box.classList.add('hidden');return}
+  box.classList.remove('hidden');
+  $('tvbtns').classList.toggle('hidden',!tvInfo.configured);
+  const ts=$('tvsetup');if(!tvInfo.configured&&!ts.dataset.seen){ts.open=true;ts.dataset.seen='1';ts.dataset.auto='1'}else if(tvInfo.configured&&ts.dataset.auto){ts.open=false;delete ts.dataset.auto}
+  const h=$('tvhost');if(document.activeElement!==h)h.value=tvInfo.host||'';
+  const mc=$('tvmac');if(document.activeElement!==mc)mc.value=tvInfo.mac||'';
+  h.placeholder=tvInfo.auto_host?'Same as Kodi ('+tvInfo.auto_host+')':'192.168.1.40';
+  $('tvpsk').placeholder=tvInfo.psk_set?'•••••• saved (leave blank to keep)':'The key you set on the TV';
+  if(tvPolling)return;
+  if(!tvInfo.configured){tvSay('Set up TV control below to turn the TV on from here.');return}
+  if(tvInfo.error){tvSay(tvInfo.error,true);return}
+  tvSay({on:'TV is on.',standby:'TV is in standby.',off:'TV is off or unreachable.'}[tvInfo.power]||'')
+}
+function tvBusy(b){$('tvon').disabled=b;$('tvkodi').disabled=b}
+async function tvOn(){
+  tvBusy(true);tvPolling=true;tvSay('Turning the TV on…');
+  try{await api('/api/tv/on',{kodi:true})}catch(e){tvPolling=false;tvBusy(false);tvSay(e.message,true);return}
+  const t0=Date.now();
+  while(Date.now()-t0<150000){
+    await new Promise(r=>setTimeout(r,2000));
+    let j;try{j=(await api('/api/tv/job')).job}catch{continue}
+    tvSay(j.message,j.state==='error');
+    if(j.state==='done'){toast(j.message);break}
+    if(j.state==='error'){toast(j.message,true);break}
+  }
+  tvPolling=false;tvBusy(false);
+  if(activeTab==='kodi')refreshKodi()
+}
+async function tvKodi(){
+  tvBusy(true);tvSay('Opening Kodi…');
+  try{await api('/api/tv/kodi',{});toast('Opening Kodi on the TV…');setTimeout(()=>{if(activeTab==='kodi')refreshKodi()},4000)}
+  catch(e){tvSay(e.message,true);toast(e.message,true)}
+  finally{tvBusy(false)}
+}
+async function tvSave(){
+  const b=$('tvsave');b.disabled=true;
+  try{
+    tvInfo=await api('/api/tv/settings',{host:$('tvhost').value.trim(),psk:$('tvpsk').value.trim(),mac:$('tvmac').value.trim()});
+    $('tvpsk').value='';renderTv();
+    if(tvInfo.configured&&!tvInfo.error){toast('TV connected');$('tvsetup').open=false}
+    else if(tvInfo.error)toast(tvInfo.error,true);
+  }catch(e){toast(e.message,true)}finally{b.disabled=false}
+}
 async function refreshKodi(){
-  const st=$('kodistatus');
+  const st=$('kodistatus');loadTv();
   try{
     const d=await api('/api/kodi');
     const off=()=>{$('kodinow').innerHTML='';['kodilib','kodiTV','kodiseg','kodiremote'].forEach(id=>$(id).classList.add('hidden'));kodiOnline=false};
@@ -3240,6 +3878,7 @@ function bind(){
   $('kodiview').addEventListener('change',()=>{LS.set('nzb_mobile_kodiview',$('kodiview').value);window.scrollTo(0,0);renderKodiList(true)});
   $('kodimore').addEventListener('click',()=>{kodiShown+=KODI_PAGE;renderKodiList()});
   $('kodiscan').addEventListener('click',kodiScan);
+  $('tvon').addEventListener('click',tvOn);$('tvkodi').addEventListener('click',tvKodi);$('tvsave').addEventListener('click',tvSave);
   $('searchbtn').addEventListener('click',search);
   $('query').addEventListener('keydown',e=>{if(e.key==='Enter')search()});
   ['sort','minsize','maxsize','mingrabs'].forEach(id=>$(id).addEventListener('input',()=>{savePrefs();renderResults()}));
@@ -3415,6 +4054,10 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, self._home())
         elif path == "/api/kodi":
             self.send_json(200, self._kodi_overview())
+        elif path == "/api/tv":
+            self.send_json(200, self._tv_view(with_power=True))
+        elif path == "/api/tv/job":
+            self.send_json(200, {"job": tv_job_view()})
         elif path == "/api/kodi/now":
             playing = kodi_now_playing() if kodi_configured() else None
             self.send_json(200, {"playing": playing, "volume": kodi_volume() if kodi_configured() else None})
@@ -3475,6 +4118,19 @@ class MobileHandler(BaseHTTPRequestHandler):
             })
         elif path == "/api/tv/recent":
             self.send_json(200, tv_row())
+        elif path == "/api/tv/watched":
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            self.send_json(200, tv_watched_row(fresh=q.get("fresh", [""])[0] == "1"))
+        elif path == "/api/tv/finished":
+            self.send_json(200, tv_finished())
+        elif path == "/api/tv/photos":
+            self.send_json(200, tv_photos_list())
+        elif path == "/api/tv/photo":
+            raw = tv_photo(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
+            if not raw:
+                self.send_json(404, {"error": "No such photo."})
+                return
+            self._send(200, raw, _image_type(raw) or "image/jpeg", {"Cache-Control": "private, max-age=86400"})
         elif path == "/api/tv/poster":
             raw = tv_poster(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
             if not raw:
@@ -3536,9 +4192,11 @@ class MobileHandler(BaseHTTPRequestHandler):
             log.info("kodi play %s resume=%s ip=%s", item, bool(body.get("resume")), self.ip)
             self.send_json(200, {"ok": True})
         elif path == "/api/tv/play":
-            result = tv_play(str(body.get("id") or ""))
+            result = tv_play(str(body.get("id") or ""), from_start=bool(body.get("from_start")))
             log.info("tv play %s ip=%s", result.get("played"), self.ip)
             self.send_json(200, result)
+        elif path == "/api/tv/mark_watched":
+            self.send_json(200, tv_mark_watched(str(body.get("id") or "")))
         elif path == "/api/kodi/control":
             kodi_control(str(body.get("action") or ""), to_int(body.get("playerid"), -1), body.get("value"))
             self.send_json(200, {"ok": True})
@@ -3550,6 +4208,23 @@ class MobileHandler(BaseHTTPRequestHandler):
             if not send_notification("NZB Command Center", "Test alert from your phone app — alerts are working.", tags=("bell",)):
                 raise ValueError("Save an ntfy topic URL first.")
             self.send_json(200, {"ok": True})
+        elif path == "/api/tv/on":
+            if not tv_configured():
+                raise ValueError("Set up TV control first.")
+            started = tv_start(launch_kodi=body.get("kodi", True) is not False)
+            log.info("tv on (kodi=%s) ip=%s", body.get("kodi", True) is not False, self.ip)
+            self.send_json(200, {"ok": True, "started": started, "job": tv_job_view()})
+        elif path == "/api/tv/kodi":
+            if not tv_configured():
+                raise ValueError("Set up TV control first.")
+            if tv_power_state() != "on":
+                raise ValueError("The TV is off. Use “TV on + Kodi” instead.")
+            tv_open_kodi()
+            threading.Thread(target=tv_learn_mac, args=(load_settings(),), daemon=True).start()
+            log.info("tv open kodi ip=%s", self.ip)
+            self.send_json(200, {"ok": True})
+        elif path == "/api/tv/settings":
+            self._post_tv_settings(body)
         elif path == "/api/kodi/scan":
             kodi_call("VideoLibrary.Scan", {"showdialogs": False})
             log.info("kodi scan ip=%s", self.ip)
@@ -3709,6 +4384,50 @@ class MobileHandler(BaseHTTPRequestHandler):
                 "notify_complete": s["notify_complete"], "notify_failed": s["notify_failed"], "notify_saved": s["notify_saved"],
                 "saved_interval_hours": s["saved_interval_hours"], "intervals": list(SAVED_INTERVALS),
                 "autostart": autostart_enabled(), "version": VERSION}
+
+    def _tv_view(self, with_power: bool = False) -> dict:
+        s = load_settings()
+        auto = ""
+        try:
+            auto = urllib.parse.urlsplit(get_config()["kodi"]["url"]).hostname or ""
+        except ConfigError:
+            pass
+        view = {"configured": tv_configured(s), "host": s.get("tv_host") or "", "auto_host": auto,
+                "psk_set": bool(s.get("tv_psk")), "job": tv_job_view()}
+        if with_power and view["configured"]:
+            try:
+                view["power"] = tv_power_state(s)
+            except UpstreamError as exc:
+                view["power"], view["error"] = "unknown", str(exc)
+            if view.get("power") == "on" and not s.get("tv_mac"):
+                threading.Thread(target=tv_learn_mac, args=(s,), daemon=True).start()
+        view["mac"] = s.get("tv_mac") or ""
+        return view
+
+    def _post_tv_settings(self, body: dict) -> None:
+        host = validate_tv_host(body.get("host", ""))
+        key = str(body.get("psk") or "").strip()
+        if key and (len(key) > 64 or any(ch.isspace() for ch in key)):
+            raise ValueError("That Pre-Shared Key doesn't look right.")
+        mac = str(body.get("mac") or "").strip().upper().replace("-", ":")
+        if mac and not MAC_RE.match(mac):
+            raise ValueError("The MAC address should look like AA:BB:CC:DD:EE:FF.")
+
+        def change(st: dict) -> None:
+            old_mac = str(st.get("tv_mac") or "").upper()
+            if host != st.get("tv_host"):
+                st["tv_mac"], st["tv_mac_manual"], st["tv_kodi_uri"] = "", False, ""   # a different TV: forget what was learned
+            st["tv_host"] = host
+            if "mac" in body and mac != old_mac:      # the field comes back pre-filled; only act on a real change
+                st["tv_mac"], st["tv_mac_manual"] = mac, bool(mac)
+            if key:
+                st["tv_psk"] = _dpapi_protect(key)
+            elif body.get("clear"):
+                st["tv_psk"] = ""
+        update_settings(change)
+        view = self._tv_view(with_power=True)
+        log.info("tv settings saved ip=%s", self.ip)
+        self.send_json(200, view)
 
     def _post_settings(self, body: dict) -> None:
         url = validate_ntfy_url(body.get("ntfy_url", ""))

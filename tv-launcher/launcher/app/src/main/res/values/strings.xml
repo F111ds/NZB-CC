@@ -119,7 +119,6 @@
     <string name="library_recent">New · Add to Home</string>
     <string name="library_hint_add">Press to add to Home · Hold for options</string>
     <string name="library_hint_open">Press to open · Hold for options</string>
-    <string name="kodi_row_title" translatable="false">Recently downloaded · Kodi</string>
     <plurals name="kodi_movies">
         <item quantity="one">%d movie</item>
         <item quantity="other">%d movies</item>

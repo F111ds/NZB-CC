@@ -67,6 +67,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
 import android.widget.PopupWindow;
+import android.widget.TextClock;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -94,7 +95,7 @@ import java.util.Set;
 /**
  * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that springs between tiles.
  */
-public class MainActivity extends Activity implements AppAdapter.TileListener, KodiRow.Host {
+public class MainActivity extends Activity implements AppAdapter.TileListener, KodiRow.Host , DownloadNotes.Listener {
     @Override
     protected void attachBaseContext(android.content.Context base) {
         super.attachBaseContext(LauncherLocale.wrap(base));   // locale
@@ -202,11 +203,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     // This build's additions: the weather in the top bar and the Kodi row above the dock.
     private HomeExtras extras;
     private WeatherNow weatherNow;
+    private ExchangeRate exchangeRate;
+    private DownloadNotes downloadNotes;
+    private View readyNote;
+    private final java.util.ArrayDeque<Object[]> readyQueue = new java.util.ArrayDeque<>();
+    private boolean readyShowing;
+    private NewsFeed newsFeed;
+    private TickerView newsTicker;
+    private TextView fxLine;
     private TextView weatherPill;
     private KodiRow kodiRow;
     private View kodiBlock;
     private TextView kodiCount, kodiFocusTitle, kodiFocusMeta;
-    private android.widget.ProgressBar kodiFocusProgress;
     private TextView raceKicker, raceHeadline, raceSessions;
     /** game_day: each team's next game from an add-on, rotating in the race panel; null when the key is off. */
     private GameDay gameDay;
@@ -596,18 +604,35 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         gameDay = GameDay.create(this, cfg.gameDay, handler, this::updatePanel);
         extras = HomeExtras.load(this);
         AppAdapter.tileScale = extras.dockTileScale;
-        AppAdapter.squareTiles = extras.centered;
+        AppAdapter.compactDock = cfg.singleRow && cfg.dockRow;
+        AppAdapter.iconsOnly = extras.dockIconsOnly;
+        SkyView.placeLat = extras.weatherLat;
+        SkyView.placeLon = extras.weatherLon;
+        sky.setIntensity(cfg.skyIntensity);   // draw again with the real sunrise and sunset
+        AppAdapter.homeApps = extras.homeApps;
+        if (AppAdapter.compactDock && hero != null) {
+            // The focused app's name centred above the centred dock, not at the screen's left edge.
+            FrameLayout.LayoutParams hlp = (FrameLayout.LayoutParams) hero.getLayoutParams();
+            hlp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+            hlp.setMarginStart(0);
+            hero.setLayoutParams(hlp);
+            ((LinearLayout) hero).setGravity(Gravity.CENTER_HORIZONTAL);
+        }
         weatherPill = findViewById(R.id.weatherPill);
         if (extras.weather) weatherNow = new WeatherNow(this, extras, handler, this::updateWeatherPill);
+        fxLine = findViewById(R.id.fxLine);
+        if (extras.fx) exchangeRate = new ExchangeRate(this, extras, handler, this::updateFxLine);
+        if (!extras.kodiServer.isEmpty()) downloadNotes = new DownloadNotes(this, extras, handler, this);
+        updateFxLine();
+        newsTicker = findViewById(R.id.newsTicker);
+        if (extras.news && !extras.newsFeeds.isEmpty()) newsFeed = new NewsFeed(this, extras.newsFeeds, handler, this::updateNews);
+        updateNews();
         updateWeatherPill();
         kodiBlock = findViewById(R.id.kodiBlock);
         kodiCount = findViewById(R.id.kodiCount);
         kodiFocusTitle = findViewById(R.id.kodiFocusTitle);
         kodiFocusMeta = findViewById(R.id.kodiFocusMeta);
-        kodiFocusProgress = findViewById(R.id.kodiFocusProgress);
-        View kodiList = findViewById(R.id.kodiRow);   // not in every layout variant (layout-iw)
-        kodiRow = !(kodiList instanceof RecyclerView) || kodiBlock == null ? null
-                : new KodiRow(this, extras, handler, (RecyclerView) kodiList, this);
+        kodiRow = new KodiRow(this, extras, handler, findViewById(R.id.kodiRow), this);
         // The rotation runs on the clock that never jumps: setting the TV's time must not stall or stretch a turn.
         rotationStart = SystemClock.elapsedRealtime();
         showStats = cfg.showStats;
@@ -620,6 +645,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (lunar) lunarDate.setVisibility(View.VISIBLE);
         greetingName = cfg.greetingName;
         if (cfg.dateBelowClock) moveDateBelowClock();
+        oneLineDate();
+        if (!cfg.dateBelowClock) oneLineHeader();
         if (cfg.dateBelowClock && cfg.iconOnlyButtons && !cfg.topMenu
                 && !getResources().getBoolean(R.bool.rtl_menu_bar)) {
             alignDateBelowIconsWithClock();
@@ -719,7 +746,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             grid.setLayoutAnimation(new LayoutAnimationController(
                     AnimationUtils.loadAnimation(this, R.anim.tile_enter), 0.06f));
         }
-        if (extras.centered) setUpCenteredHome();   // before the adapter: the tiles size themselves from the grid's width
         adapter = new AppAdapter(this, this, COLUMNS, cfg);
         dockApps = cfg.dockApps;
         fillDockLeavesSlots = !cfg.fillDock;
@@ -733,8 +759,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         grid.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             int h = b - t;
             // Item height follows the tile size, which follows the columns and the rows that must fit (AppAdapter.tileWidthPx).
-            int inner = (r - l) - grid.getPaddingLeft() - grid.getPaddingRight();
+            int inner = AppAdapter.sizingWidthPx(r - l, grid.getPaddingLeft(), grid.getPaddingRight(), density);
             int tileW = AppAdapter.tileWidthPx(inner, h, COLUMNS, rowsBelowDock, cfg.dockTitle, cfg.dockRow, density);
+            if (AppAdapter.compactDock && adapter != null) {
+                // NZB-CC: the compact row in the middle of the screen; once it is wider than the screen it
+                // scrolls sideways from the usual 10dp sides.
+                int cells = adapter.appCount() + (adapter.isLibraryAt(adapter.appCount()) ? 1 : 0);
+                int rowW = cells * AppAdapter.compactCellPx(tileW, density);
+                int side = Math.max((int) (10 * density), ((r - l) - rowW) / 2);
+                if (grid.getPaddingLeft() != side || grid.getPaddingRight() != side) {
+                    grid.setPadding(side, grid.getPaddingTop(), side, grid.getPaddingBottom());
+                }
+            }
             int itemH = AppAdapter.itemHeightPx(AppAdapter.tileHeightPx(tileW), density);
             int dockRow = itemH + (int) (AppAdapter.DOCK_EXTRA_DP * density);   // item height plus DockDecoration offsets
             int gridRows = itemH * (kodiRowShown() ? 0 : rowsBelowDock);   // the Kodi row: no grid row peeks under the dock
@@ -808,6 +844,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
                 }
             });
         }
+
+        // The Kodi shelf rides up and fades when the grid scrolls below the dock.
+        grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                // A single row only scrolls sideways: the shelf stays put. (Setting the translation from here
+                // used to drop it to the top of the screen, over the clock, whenever the dock scrolled.)
+                if (kodiBlock.getVisibility() != View.VISIBLE || singleRow) return;
+                int shift = rv.canScrollVertically(-1) ? rv.computeVerticalScrollOffset() : 0;
+                kodiBlock.setY(kodiBaseY - shift);
+                kodiBlock.setAlpha(Math.max(0f, 1f - shift / (float) Math.max(1, kodiBlock.getHeight() / 2)));
+            }
+        });
 
         // Liquid feel: soft springs on the highlight's position.
         springX = new SpringAnimation(glass, new FloatPropertyCompat<View>("glassContentX") {
@@ -908,7 +957,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (iconOnlyButtons) {
             if (cfg.wifiLabelWidth > 0) btnWifi.setMaxWidth(Math.round(cfg.wifiLabelWidth * density));
             else makeIconOnly(btnWifi);
-            makeIconOnly((TextView) btnSettings);
+            // NZB-CC: Settings keeps its label, so the bar ends on a word rather than a lone gear.
         }
         if (cfg.iconOnlyInputs) makeIconOnly((TextView) btnInputs);
         iconOnlyVpn = vpnPill && cfg.iconOnlyVpn;
@@ -929,17 +978,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
             if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                // NZB-CC: the Kodi row sits between the bar and the dock, so Down lands on it first.
+                if (kodiRowShown() && kodiRow.focus()) return true;
                 // Back to the dock tile Up came from, not wherever the focus finder lands.
                 focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
                 return true;
             }
-            int firstButton = btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : firstTopButton().getId();
+            int firstButton = weatherPill.getVisibility() == View.VISIBLE ? R.id.weatherPill
+                    : btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : firstTopButton().getId();
             int leftButton = rtlMenuBar ? R.id.btnSettings : firstButton;
             int rightButton = rtlMenuBar ? firstButton : R.id.btnSettings;
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return v.getId() == leftButton;
             return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
         };
         btnInputs.setOnKeyListener(pillKeys);
+        weatherPill.setOnKeyListener(pillKeys);
+        weatherPill.setOnClickListener(v -> showForecast());
         btnWifi.setOnKeyListener(pillKeys);
         btnVpn.setOnKeyListener(pillKeys);
         btnSettings.setOnKeyListener(pillKeys);
@@ -947,7 +1001,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         btnLibraryTop.setOnKeyListener(pillKeys);
         for (View button : topAppButtons) button.setOnKeyListener(pillKeys);
         if (advancedEffects) {
-            List<View> pills = new ArrayList<>(Arrays.asList(btnInputs, btnWifi, btnVpn, btnReorder, btnLibraryTop, btnSettings));
+            List<View> pills = new ArrayList<>(Arrays.asList(weatherPill, btnInputs, btnWifi, btnVpn, btnReorder, btnLibraryTop, btnSettings));
             pills.addAll(topAppButtons);
             for (View button : pills) {
                 button.setOnFocusChangeListener((view, focused) -> view.animate()
@@ -956,6 +1010,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             }
         }
         if (festive) applyFestiveSkin((TextView) btnInputs, (TextView) btnSettings);
+        // NZB-CC: Inputs and Settings as round icons, so the bar is the weather and four icons.
+        if (!topMenu) {
+            if (btnSettings.getLayoutParams().width != Math.round(34 * density)) makeIconOnly((TextView) btnSettings);
+            if (btnInputs.getLayoutParams().width != Math.round(34 * density)) makeIconOnly((TextView) btnInputs);
+        }
+        shrinkPillIcons();
+        insetTopBarLikeClock();
 
         // Hide the glass when focus leaves the tiles.
         // Taken off in onDestroy: recreate() keeps the window, and a listener left on it held every earlier Home.
@@ -1116,6 +1177,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     protected void onResume() {
         super.onResume();
         resumed = true;
+        if (newsTicker != null) newsTicker.start();
+        if (kodiRow != null) kodiRow.refreshNow();   // NZB-CC: what was just watched shows within seconds
         // A festival that started or ended while Home was in the background: rebuild with or without it.
         if (festive != festival.active(LocalDate.now())) {
             recreate();
@@ -1333,6 +1396,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     protected void onPause() {
         super.onPause();
         resumed = false;
+        if (newsTicker != null) newsTicker.stop();
         // No UP reaches a paused Home, so a vendor-key hold it saw go down would still open its app later.
         // Only Home's own share is dropped: a key service that saw the same DOWN keeps its hold.
         RemoteKeys.release(this);
@@ -1418,6 +1482,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         cancelHoldOk();
         if (gameDay != null) gameDay.shutdown();
         if (weatherNow != null) weatherNow.shutdown();
+        if (exchangeRate != null) exchangeRate.shutdown();
+        if (downloadNotes != null) downloadNotes.shutdown();
+        if (newsFeed != null) newsFeed.shutdown();
         if (kodiRow != null) kodiRow.shutdown();
         unregisterReceiver(packageReceiver);
         if (openOnStartOnWake) unregisterReceiver(wakeReceiver);
@@ -1844,11 +1911,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     @Override
     public void onTileFocused(int position, View card) {
-        // The Kodi shelf shows with the dock and steps aside for the rows below it, which scroll up into its place.
-        if (kodiBlock != null && kodiBlock.getVisibility() == View.VISIBLE) {
-            float want = position < COLUMNS ? 1f : 0f;
-            if (kodiBlock.getAlpha() != want) kodiBlock.animate().alpha(want).setDuration(160).start();
-        }
         lastFocused = position;
         lastFocusedKey = adapter.keyAt(position);
         // Focus restored before the first layout (cold start): the tile has no size yet, and the glass
@@ -2040,7 +2102,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
      * scrimPercent of its strength (cinematic_scrim). cinematic_art 0 leaves the artwork out, 0 percent the scrim.
      */
     private void setUpCinematicShelf(int scrimPercent) {
-        heroName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 68f);
+        heroName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);   // NZB-CC: a small label, not a headline
         heroName.setLetterSpacing(-0.025f);
         heroMeta.setVisibility(View.INVISIBLE);   // keeps its height, so the name does not jump when it fills in
         heroDots.setVisibility(heroDotsShown ? View.VISIBLE : View.GONE);
@@ -2487,6 +2549,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             int last = adapter.focusablePosition(count - 1);
             if (forward && position >= last) {
                 if (adapter.isLibraryAt(count)) focusLibrary();
+                // NZB-CC: no pill at the row's end; Right past the last app opens the App library, where the
+                // rest of the apps are (the grid button in the top bar opens it too).
+                else if (appLibraryEnabled) {
+                    grid.playSoundEffect(SoundEffectConstants.NAVIGATION_RIGHT);
+                    onLibraryRequested();
+                }
                 return true;
             }
             return !forward && position == 0;
@@ -2561,6 +2629,37 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         }
     }
 
+    /**
+     * NZB-CC: the whole date on one short line beside the clock, "Sunday, Nov 16" (or the language's own order,
+     * "domingo, 16 nov"), so the top bar never cuts it off.
+     */
+    /** NZB-CC: the time, date and exchange rate on one small line, everything centred on it. */
+    private void oneLineHeader() {
+        centerCompactHeader();
+        int[] ids = {R.id.ampm, R.id.clockDivider, R.id.fxDivider, R.id.fxLine};
+        for (int id : ids) {
+            View v = findViewById(id);
+            LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) v.getLayoutParams();
+            lp.gravity = Gravity.CENTER_VERTICAL;
+            lp.bottomMargin = 0;
+            v.setLayoutParams(lp);
+        }
+    }
+
+    private void oneLineDate() {
+        TextClock date = findViewById(R.id.date);
+        String pattern = android.text.format.DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEEdMMM");
+        date.setFormat12Hour(oneLine(pattern));
+        date.setFormat24Hour(oneLine(pattern));
+        date.setSingleLine(true);
+        date.setMaxLines(1);
+        date.setLineSpacing(0f, 1f);
+    }
+
+    private static CharSequence oneLine(CharSequence format) {
+        return format == null ? null : format.toString().replaceAll("\\s*\n\\s*", ", ");
+    }
+
     /** Centre the one-row header when the greeting and extra date lines are absent (#2265). */
     private void centerCompactHeader() {
         LinearLayout clockRow = (LinearLayout) findViewById(R.id.clock).getParent();
@@ -2624,7 +2723,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private void addTopBarApps(List<String> packages, Map<String, String> launchActions) {
         ViewGroup bar = findViewById(R.id.topButtons);
         PackageManager pm = getPackageManager();
-        int size = Math.round(22 * density);
+        int size = Math.round(PILL_ICON_DP * density);
         for (String pkg : packages) {
             Intent launch = pm.getLeanbackLaunchIntentForPackage(pkg);
             if (launch == null) launch = pm.getLaunchIntentForPackage(pkg);
@@ -2910,35 +3009,133 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     // ---- weather and Kodi row (this build's additions) -------------------------------------------
 
-    /** "☁ 22° · H 24° L 10°" on a line under the date; gone until there is a reading. */
+    /** "☁ 22° · H 24° L 10°" at the start of the top bar; gone until there is a reading. */
     private void updateWeatherPill() {
-        if (weatherPill == null) return;
         boolean on = weatherNow != null && weatherNow.hasReading();
         if (on) weatherPill.setText(weatherNow.pill);
         weatherPill.setVisibility(on ? View.VISIBLE : View.GONE);
     }
 
+    // ---- "Ready to watch" note (NZB-CC) ------------------------------------------------------------
+
+    @Override
+    public void onDownloadReady(String title, Bitmap poster) {
+        readyQueue.add(new Object[]{title, poster});
+        if (!readyShowing) showNextReady();
+    }
+
+    /** A small card under the top bar for about 8 seconds: the poster when there is one, then "READY TO WATCH". */
+    private void showNextReady() {
+        Object[] next = readyQueue.poll();
+        if (next == null || isDestroyed()) {
+            readyShowing = false;
+            return;
+        }
+        readyShowing = true;
+        if (readyNote == null) readyNote = buildReadyNote();
+        ImageView poster = readyNote.findViewWithTag("poster");
+        TextView title = readyNote.findViewWithTag("title");
+        title.setText((String) next[0]);
+        Bitmap bm = (Bitmap) next[1];
+        poster.setImageBitmap(bm);
+        poster.setVisibility(bm != null ? View.VISIBLE : View.GONE);
+        View bar = findViewById(R.id.topButtons);
+        Rect r = new Rect(0, 0, bar.getWidth(), bar.getHeight());
+        root.offsetDescendantRectToMyCoords(bar, r);
+        readyNote.setY(r.bottom + 12 * density);
+        readyNote.setAlpha(0f);
+        readyNote.setTranslationX(16 * density);
+        readyNote.setVisibility(View.VISIBLE);
+        readyNote.animate().alpha(1f).translationX(0f).setDuration(reducedMotion ? Motion.REDUCED_MS : 350).withEndAction(null).start();
+        handler.postDelayed(() -> readyNote.animate().alpha(0f).setDuration(reducedMotion ? Motion.REDUCED_MS : 450)
+                .withEndAction(() -> {
+                    readyNote.setVisibility(View.GONE);
+                    handler.postDelayed(this::showNextReady, 600);
+                }).start(), 8000);
+    }
+
+    private View buildReadyNote() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setBackgroundResource(R.drawable.glass_panel);
+        int p = (int) (8 * density);
+        card.setPadding(p, p, (int) (16 * density), p);
+        card.setElevation(12 * density);
+        card.setFocusable(false);
+        ImageView poster = new ImageView(this);
+        poster.setTag("poster");
+        poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        poster.setClipToOutline(true);
+        poster.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, android.graphics.Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), 4 * density);
+            }
+        });
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams((int) (28 * density), (int) (42 * density));
+        plp.setMarginEnd((int) (12 * density));
+        card.addView(poster, plp);
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        TextView kicker = new TextView(this);
+        kicker.setText("\u2B07  READY TO WATCH");
+        kicker.setTextColor(0xFF7BE3A0);
+        kicker.setTextSize(9.5f);
+        kicker.setLetterSpacing(0.1f);
+        kicker.setTypeface(UiFont.get(this, R.string.font_medium));
+        texts.addView(kicker);
+        TextView title = new TextView(this);
+        title.setTag("title");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(14);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        title.setMaxWidth((int) (300 * density));
+        title.setTypeface(UiFont.get(this, R.string.font_medium));
+        texts.addView(title);
+        card.addView(texts);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
+        lp.setMarginEnd((int) (36 * density));
+        root.addView(card, lp);
+        card.setVisibility(View.GONE);
+        return card;
+    }
+
+    /** "US$1 = 18.42 MXN ▲ 0.06" under the clock; gone until there is a rate. */
+    private void updateFxLine() {
+        boolean on = exchangeRate != null && exchangeRate.hasRate();
+        if (on) fxLine.setText(exchangeRate.line());
+        fxLine.setVisibility(on ? View.VISIBLE : View.GONE);
+        findViewById(R.id.fxDivider).setVisibility(on ? View.VISIBLE : View.GONE);
+        if (kodiBlock != null) root.post(this::layoutKodiRow);
+    }
+
+    /** The ticker's headlines; it scrolls only while Home is resumed. */
+    private void updateNews() {
+        if (newsTicker == null) return;
+        if (newsFeed != null && newsFeed.hasHeadlines()) {
+            newsTicker.setHeadlines(newsFeed.headlines);
+            if (resumed) newsTicker.start();
+        }
+        if (root != null) root.post(this::layoutKodiRow);
+    }
+
     private void refreshExtras() {
         if (!resumed) return;
+        if (downloadNotes != null) downloadNotes.checkIfDue();
+        if (newsFeed != null) newsFeed.refreshIfStale();
         if (weatherNow != null) weatherNow.refreshIfStale();
+        if (exchangeRate != null) exchangeRate.refreshIfStale();
         if (kodiRow != null) kodiRow.refreshIfStale();
     }
 
-    private boolean kodiRowShown() {
-        return kodiRow != null && kodiRow.hasItems() && dockRow && !singleRow;
-    }
+    /** Where layoutKodiRow puts the shelf (screen y); the scroll listener moves it from here. */
+    private float kodiBaseY;
 
-    /**
-     * The centred home: a smaller clock line, and a dock of square tiles in a strip the width of its cells, centred on
-     * the screen (the grid's side padding narrows it, so the tiles size themselves from the cells).
-     */
-    private void setUpCenteredHome() {
-        ((TextView) findViewById(R.id.clock)).setTextSize(TypedValue.COMPLEX_UNIT_SP, 30);
-        hero.setVisibility(View.GONE);   // no big name above the dock: the focused tile's name shows under it
-        int screen = getResources().getDisplayMetrics().widthPixels - (int) (112 * density);   // root's side padding
-        int dock = (int) (COLUMNS * extras.dockCellDp * density);
-        int side = Math.max((int) (10 * density), (screen - dock) / 2);
-        grid.setPadding(side, grid.getPaddingTop(), side, grid.getPaddingBottom());
+    private boolean kodiRowShown() {
+        return kodiRow != null && kodiRow.hasItems() && dockRow;
     }
 
     /** Up from the dock: onto the Kodi row when it shows (true), else the top bar takes it (false). */
@@ -2950,22 +3147,23 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     /** Places the shelf between the clock (or a race or game panel under it) and the name above the dock, and
      *  sizes the posters to the room there. */
+    /**
+     * Places the news ticker and the Kodi shelf in the space between the header (clock, exchange rate, or a race or
+     * game panel) and the app's name above the dock, with even gaps between them (NZB-CC), and sizes the posters to
+     * the room there (175dp tall at most).
+     */
     private void layoutKodiRow() {
         if (kodiBlock == null || isDestroyed()) return;
-        if (!kodiRowShown()) {
-            kodiBlock.setVisibility(View.GONE);
-            return;
-        }
+        boolean kodi = kodiRowShown();
+        boolean news = newsTicker != null && newsFeed != null && newsFeed.hasHeadlines() && dockRow;
+        if (!kodi) kodiBlock.setVisibility(View.GONE);
+        if (newsTicker != null && !news) newsTicker.setVisibility(View.GONE);
+        if (!kodi && !news) return;
         Rect r = new Rect(0, 0, grid.getWidth(), grid.getHeight());
         root.offsetDescendantRectToMyCoords(grid, r);
         int dockTop = r.top + grid.getPaddingTop();
-        int bottom;
-        if (extras.centered) {
-            bottom = dockTop - (int) (18 * density);
-        } else {
-            int heroH = Math.max(hero.getHeight(), (int) (58 * density));
-            bottom = dockTop - (int) (40 * density) - heroH - (int) (8 * density);   // showHero's place for the name
-        }
+        int heroH = Math.max(hero.getHeight(), (int) (24 * density));
+        int bottom = dockTop - (int) (40 * density) - heroH;   // showHero's place for the name
         int top;
         if (racePanel.getVisibility() == View.VISIBLE) {
             top = racePanel.getBottom();
@@ -2973,14 +3171,68 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             Rect c = new Rect(0, 0, clockBlock.getWidth(), clockBlock.getHeight());
             root.offsetDescendantRectToMyCoords(clockBlock, c);
             top = c.bottom;
+            if (fxLine != null && fxLine.getVisibility() == View.VISIBLE) {   // below the exchange-rate line too
+                Rect f = new Rect(0, 0, fxLine.getWidth(), fxLine.getHeight());
+                root.offsetDescendantRectToMyCoords(fxLine, f);
+                top = Math.max(top, f.bottom);
+            }
         }
-        top += (int) (16 * density);
-        // centred: the title line (~16), the cards' margins (8 + 8) and the selected movie under them (~62);
-        // otherwise the shelf padding (9 + 2), the header line (~20) and the cards' margins (8 + 8)
-        int posterH = bottom - top - (int) ((extras.centered ? 96 : 47) * density);
-        kodiRow.setPosterHeight(Math.min(posterH, (int) (190 * density)));
-        kodiBlock.setY(top);
-        kodiCount.setText(getString(R.string.kodi_row_title));
+        int tickerH = news ? (int) (30 * density) : 0;
+        int blocks = (news ? 1 : 0) + (kodi ? 1 : 0);
+        int minGap = (int) (14 * density);
+        // shelf padding (9 + 2), the header line (~20) and the cards' margins (8 + 8)
+        int shelfExtra = (int) (47 * density);
+        int shown = 0;
+        if (kodi) {
+            int room = bottom - top - tickerH - shelfExtra - (blocks + 1) * minGap;
+            shown = Math.min(room, (int) (205 * density));
+            kodiRow.setPosterHeight(shown);
+        }
+        int kodiH = kodi ? shown + shelfExtra : 0;
+        int gap = Math.max(minGap, (bottom - top - tickerH - kodiH) / (blocks + 1));
+        int y = top + gap;
+        if (news) {
+            int cards = kodi ? Math.min(5, Math.max(1, kodiRow.count())) : 5;
+            int posterW = (kodi ? shown : (int) (175 * density)) * 2 / 3;
+            int width = Math.max((int) (360 * density), cards * (posterW + (int) (12 * density)));
+            FrameLayout.LayoutParams tlp = (FrameLayout.LayoutParams) newsTicker.getLayoutParams();
+            if (tlp.width != width) {
+                tlp.width = width;
+                newsTicker.setLayoutParams(tlp);
+            }
+            newsTicker.setY(y);
+            if (newsTicker.getVisibility() != View.VISIBLE) newsTicker.setVisibility(View.VISIBLE);
+            y += tickerH + gap;
+        }
+        if (!kodi) return;
+        if (!news) {
+            // NZB-CC: the same space above "Recently watched" (from the header) as below the posters (to the dock's
+            // top edge), measured from what shows: the shelf's 9dp top padding and its 10dp under the posters
+            // (2dp padding + 8dp card margin) are left out. Never so low that the app's name above the dock
+            // (showHero: 40dp above the dock) touches the posters.
+            int visibleH = shown + shelfExtra - (int) (19 * density);
+            int visibleTop = top + Math.max(minGap, (dockTop - top - visibleH) / 2);
+            int heroTop = dockTop - (int) (40 * density) - heroH;
+            int over = visibleTop + visibleH - (heroTop - (int) (6 * density));
+            if (over > 0) visibleTop = Math.max(top + minGap, visibleTop - over);
+            y = visibleTop - (int) (9 * density);
+        }
+        kodiBaseY = y;
+        // NZB-CC: "KODI  Recently watched" starts right above the first poster's left edge. The posters are
+        // centred in the shelf, each in a cell 12dp wider than the poster (6dp each side).
+        int cards = Math.min(5, Math.max(1, kodiRow.count()));
+        int cell = shown * 2 / 3 + (int) (12 * density);
+        int inner = root.getWidth() - (int) (2 * 46 * density) - kodiBlock.getPaddingLeft() - kodiBlock.getPaddingRight();
+        int headStart = Math.max(0, (inner - cards * cell) / 2 + (int) (6 * density));
+        View head = ((ViewGroup) kodiBlock).getChildAt(0);
+        LinearLayout.LayoutParams hlp = (LinearLayout.LayoutParams) head.getLayoutParams();
+        if (hlp.getMarginStart() != headStart) {
+            hlp.setMarginStart(headStart);
+            head.setLayoutParams(hlp);
+        }
+        int shift = !singleRow && grid.canScrollVertically(-1) ? grid.computeVerticalScrollOffset() : 0;
+        kodiBlock.setY(kodiBaseY - shift);
+        kodiCount.setVisibility(View.GONE);
         if (kodiBlock.getVisibility() != View.VISIBLE) {
             kodiBlock.setVisibility(View.VISIBLE);
             ViewGroup bar = findViewById(R.id.topButtons);
@@ -2994,20 +3246,62 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         hideHero();
         kodiFocusTitle.setText(item.title);
         kodiFocusMeta.setText(item.meta());
-        kodiFocusProgress.setProgress(Math.round(item.resume * 1000));
-        kodiFocusProgress.setVisibility(item.resume > 0 ? View.VISIBLE : View.INVISIBLE);
+    }
+
+    /** NZB-CC: OK held on a poster: resume, play from the start, mark as watched, or take it off the row. */
+    @Override
+    public void onKodiItemMenu(KodiRow.Item item, View anchor) {
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        TextView title = new TextView(this);
+        title.setText(item.title);
+        title.setTextColor(0x99FFFFFF);
+        title.setTextSize(11);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        title.setTypeface(UiFont.get(this, R.string.font_regular));
+        int pad = (int) (12 * density);
+        title.setPadding(pad, (int) (8 * density), pad, (int) (4 * density));
+        rows.addView(title);
+        PopupWindow popup = glassPopup(panel, (int) (240 * density));
+        boolean partway = item.progress > 0f && item.progress < 0.97f;
+        int left = item.minutesLeft();
+        View first = menuRow(rows, popup, partway && left > 0
+                ? "\u25B6  Resume (" + KodiRow.Item.duration(left) + " left)" : "\u25B6  Play", () -> kodiRow.play(item));
+        if (partway) menuRow(rows, popup, "\u21BA  Play from the start", () -> kodiRow.play(item, true));
+        if (item.progress < 0.97f) menuRow(rows, popup, "\u2713  Mark as watched", () -> kodiRow.markWatched(item));
+        menuRow(rows, popup, "\u2715  Remove from this row", () -> kodiRow.remove(item));
+        popup.setOnDismissListener(() -> {
+            if (openPopup == popup) openPopup = null;
+            if (kodiRowShown()) kodiRow.focus();
+        });
+        popup.showAsDropDown(anchor, anchor.getWidth() + (int) (12 * density), -anchor.getHeight() + (int) (24 * density), Gravity.START);
+        first.requestFocus();
+    }
+
+    private View menuRow(LinearLayout rows, PopupWindow popup, String text, Runnable action) {
+        View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
+        row.findViewById(R.id.icon).setVisibility(View.GONE);
+        row.findViewById(R.id.status).setVisibility(View.GONE);
+        row.findViewById(R.id.dot).setVisibility(View.GONE);
+        ((TextView) row.findViewById(R.id.title)).setText(text);
+        row.setOnClickListener(v -> {
+            popup.dismiss();
+            action.run();
+        });
+        rows.addView(row);
+        return row;
     }
 
     @Override
     public void onKodiRowLeft() {
         kodiFocusTitle.setText("");
         kodiFocusMeta.setText("");
-        kodiFocusProgress.setVisibility(View.INVISIBLE);
     }
 
     @Override
     public void onKodiRowDown() {
-        int pos = lastFocused >= 0 && lastFocused < COLUMNS ? lastFocused : 0;
+        int pos = singleRow ? Math.max(0, lastFocused) : lastFocused >= 0 && lastFocused < COLUMNS ? lastFocused : 0;
         focusTile(Math.max(0, Math.min(pos, adapter.appCount() - 1)));
         grid.playSoundEffect(SoundEffectConstants.NAVIGATION_DOWN);
     }
@@ -3142,7 +3436,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         // With a VPN app configured, a VPN that is down matters too: show a red "VPN off" capsule then.
         boolean vpnDown = !vpn && online && !vpnApp.isEmpty();
         if (vpnPill) updateVpnPill(vpn);
-        if ((vpn || vpnDown) && !vpnPill) {
+        int lockState = 0;   // NZB-CC: 0 no lock, 1 VPN on (closed green lock), 2 VPN off (open red lock)
+        if ((vpn || vpnDown) && !vpnPill && NAMELESS_WIFI) {
+            btnWifi.setContentDescription(text + (vpn ? " · VPN on" : " · VPN off"));
+            if (btnWifi.getText().length() > 0) btnWifi.setText(null);
+            lockState = vpn ? 1 : 2;
+        } else if ((vpn || vpnDown) && !vpnPill) {
             // Network name, then the green lock-and-VPN (or red "VPN off") capsule drawn in place of the word.
             String badge = getString(vpn ? R.string.vpn : R.string.vpn_off);
             VpnBadge span = new VpnBadge(vpn ? getDrawable(R.drawable.ic_lock) : null, density);
@@ -3163,10 +3462,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             // so Ethernet always shows the icon and the badge alone.
             // The space stays even then: a line holding only the span gets no font metrics and collapses.
             boolean stub = name.length() < text.length() && name.length() < 5;
-            text = stub || icon == R.drawable.ic_ethernet ? "" : name;
+            // NZB-CC: never the network name, just the icon and the VPN capsule (more room for the clock and date).
+            btnWifi.setContentDescription(text);
+            text = stub || icon == R.drawable.ic_ethernet || NAMELESS_WIFI ? "" : name;
             SpannableString label = new SpannableString(text + " " + badge);
             label.setSpan(span, text.length() + 1, label.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             if (!TextUtils.equals(btnWifi.getText(), label)) btnWifi.setText(label);
+        } else if (NAMELESS_WIFI) {
+            btnWifi.setContentDescription(text);
+            if (btnWifi.getText().length() > 0) btnWifi.setText(null);
         } else if (!TextUtils.equals(btnWifi.getText(), text)) {
             btnWifi.setText(text);
         }
@@ -3182,6 +3486,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             if (icon != wifiIcon) {
                 wifiIcon = icon;
                 btnWifi.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0);
+                shownLockState = -1;   // the lock went with the old icon: set it again below
             }
             ColorStateList tint = online ? wifiOnlineTint : wifiPlainTint;
             // wifi_status_warnings: orange while connected but not validated (a captive portal), red while offline.
@@ -3189,6 +3494,65 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             if (wifiOnlineTint != null && btnWifi.getCompoundDrawableTintList() != tint) {
                 btnWifi.setCompoundDrawableTintList(tint);
             }
+        }
+        if (NAMELESS_WIFI) applyVpnLock(lockState);
+        if (NAMELESS_WIFI && !wifiIconOnly) fitNamelessWifi();
+    }
+
+    private int shownLockState = -1;
+
+    /** The lock after the Wi-Fi icon: closed and green while the VPN is up, open and red while it is down. */
+    private void applyVpnLock(int state) {
+        Drawable[] d = btnWifi.getCompoundDrawablesRelative();
+        boolean has = d[2] != null;
+        if (state == shownLockState && has == (state != 0)) return;
+        shownLockState = state;
+        Drawable lock = null;
+        if (state != 0) {
+            Drawable icon = getDrawable(state == 1 ? R.drawable.ic_lock : R.drawable.ic_lock_open).mutate();
+            icon.setTint(state == 1 ? VpnBadge.GREEN : VpnBadge.RED);
+            lock = new FixedTintDrawable(icon);
+            int px = Math.round(15 * density);
+            lock.setBounds(0, 0, px, px);
+        }
+        btnWifi.setCompoundDrawablesRelative(d[0], d[1], lock, d[3]);
+    }
+
+    /** A drawable that keeps its own colour: the pill's drawableTint would otherwise turn the lock white. */
+    private static final class FixedTintDrawable extends android.graphics.drawable.DrawableWrapper {
+        FixedTintDrawable(Drawable d) {
+            super(d);
+        }
+
+        @Override
+        public void setTintList(android.content.res.ColorStateList tint) {
+        }
+
+        @Override
+        public void setTintMode(android.graphics.PorterDuff.Mode mode) {
+        }
+
+        @Override
+        public void setColorFilter(android.graphics.ColorFilter filter) {
+        }
+    }
+
+    /** NZB-CC: the network pill shows the Wi-Fi (or Ethernet) icon and the VPN capsule, never the network name. */
+    private static final boolean NAMELESS_WIFI = true;
+
+    /** The Wi-Fi pill as a 34dp circle with just its icon, or a snug pill around the icon and the VPN capsule. */
+    private void fitNamelessWifi() {
+        boolean badge = (btnWifi.getText() != null && btnWifi.getText().length() > 0)
+                || btnWifi.getCompoundDrawablesRelative()[2] != null;
+        int pad = Math.round((badge ? 10 : 8) * density);
+        int width = badge ? ViewGroup.LayoutParams.WRAP_CONTENT : Math.round(34 * density);
+        int gap = badge ? Math.round(4 * density) : 0;
+        if (btnWifi.getPaddingStart() != pad || btnWifi.getPaddingEnd() != pad) btnWifi.setPaddingRelative(pad, 0, pad, 0);
+        if (btnWifi.getCompoundDrawablePadding() != gap) btnWifi.setCompoundDrawablePadding(gap);
+        ViewGroup.LayoutParams lp = btnWifi.getLayoutParams();
+        if (lp.width != width) {
+            lp.width = width;
+            btnWifi.setLayoutParams(lp);
         }
     }
 
@@ -3213,14 +3577,77 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private boolean libraryFromVpnPill;
 
     /** Turns a labelled top pill into the round TopButtonIcon shape: no text, the icon centred by even padding. */
+    /** NZB-CC: the top-bar icons, drawn at this size in dp (the vectors are 22dp) to suit the smaller 34dp pills. */
+    private static final int PILL_ICON_DP = 18;
+
+    /**
+     * Keeps every top-bar icon at PILL_ICON_DP, including ones swapped in later (the Wi-Fi/Ethernet state, the
+     * festive skins, the VPN lock): checked before each frame, and only re-set when an icon has the wrong size.
+     */
+    private void shrinkPillIcons() {
+        ViewGroup bar = findViewById(R.id.topButtons);
+        int px = Math.round(PILL_ICON_DP * density);
+        bar.getViewTreeObserver().addOnPreDrawListener(() -> {
+            boolean changed = false;
+            for (int i = 0; i < bar.getChildCount(); i++) {
+                if (!(bar.getChildAt(i) instanceof TextView)) continue;
+                TextView pill = (TextView) bar.getChildAt(i);
+                Drawable[] d = pill.getCompoundDrawablesRelative();
+                Drawable icon = d[0];
+                if (icon == null) continue;
+                int w = icon.getIntrinsicWidth(), h = icon.getIntrinsicHeight();
+                if (w <= 0 || h <= 0) w = h = px;
+                float k = px / (float) Math.max(w, h);
+                int bw = Math.max(1, Math.round(w * k)), bh = Math.max(1, Math.round(h * k));
+                Rect b = icon.getBounds();
+                if (b.width() == bw && b.height() == bh) continue;
+                icon.setBounds(0, 0, bw, bh);
+                pill.setCompoundDrawablesRelative(icon, d[1], d[2], d[3]);
+                changed = true;
+            }
+            return !changed;   // a resized icon re-measures its pill: skip this frame, draw the next
+        });
+    }
+
+    /**
+     * The bar's right edge sits as far from the screen's right edge as the clock's first digit is from the left.
+     * Both share the header's 56dp padding, but a digit's glyph starts a little inside its text box (its side
+     * bearing), so the clock reads further in; the bar moves in by the same amount.
+     */
+    private void insetTopBarLikeClock() {
+        TextView clock = findViewById(R.id.clock);
+        View bar = findViewById(R.id.topButtons);
+        // NZB-CC: icons 36dp from the right edge (20dp into the header's 56dp padding), the time 16dp further left
+        // (40dp from the left edge), and a smaller gap between them, so the whole rate line fits.
+        RelativeLayout.LayoutParams blp = (RelativeLayout.LayoutParams) bar.getLayoutParams();
+        blp.setMarginEnd(-Math.round(20 * density));
+        bar.setLayoutParams(blp);
+        View left = findViewById(R.id.leftBlock);
+        RelativeLayout.LayoutParams llp = (RelativeLayout.LayoutParams) left.getLayoutParams();
+        llp.setMarginStart(-Math.round(16 * density));
+        llp.setMarginEnd(Math.round(8 * density));
+        left.setLayoutParams(llp);
+        Runnable fit = () -> {
+            CharSequence text = clock.getText();
+            if (text == null || text.length() == 0) return;
+            Rect ink = new Rect();
+            clock.getPaint().getTextBounds(text.toString(), 0, 1, ink);
+            // NZB-CC: the icons sit 20dp nearer the right edge, set as a layout margin (in onCreate) so the
+            // time/date/rate line gets the room too; no translation.
+            if (bar.getTranslationX() != 0f) bar.setTranslationX(0f);
+        };
+        clock.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> fit.run());
+        fit.run();
+    }
+
     private void makeIconOnly(TextView pill) {
         pill.setContentDescription(pill.getText());
         pill.setText(null);
         pill.setMaxWidth(Integer.MAX_VALUE);
-        int pad = Math.round(10 * density);
+        int pad = Math.round(8 * density);
         pill.setPaddingRelative(pad, 0, pad, 0);
         pill.setCompoundDrawablePadding(0);
-        pill.getLayoutParams().width = Math.round(42 * density);
+        pill.getLayoutParams().width = Math.round(34 * density);
     }
 
     // ---- festive skin ------------------------------------------------------------------------------
@@ -3564,6 +3991,79 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         return component != null ? new Intent().setComponent(component) : new Intent(inputAction);
     }
 
+    /** NZB-CC: the forecast under the weather pill: now, then today and the next four days. */
+    private void showForecast() {
+        if (weatherNow == null) return;
+        View anchor = weatherPill;
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        int pad = (int) (14 * density);
+        TextView place = new TextView(this);
+        place.setText(extras.weatherPlace.isEmpty() ? "Weather" : extras.weatherPlace);
+        place.setTextColor(Color.WHITE);
+        place.setTextSize(15);
+        place.setTypeface(UiFont.get(this, R.string.font_medium));
+        place.setPadding(pad, (int) (10 * density), pad, 0);
+        rows.addView(place);
+        if (!weatherNow.now.isEmpty()) {
+            TextView now = new TextView(this);
+            now.setText(weatherNow.now);
+            now.setTextColor(0xBFFFFFFF);
+            now.setTextSize(12);
+            now.setTypeface(UiFont.get(this, R.string.font_regular));
+            now.setPadding(pad, (int) (2 * density), pad, (int) (8 * density));
+            rows.addView(now);
+        }
+        addSeparator(rows);
+        java.time.LocalDate today = java.time.LocalDate.now();
+        for (WeatherNow.Day d : weatherNow.days) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(pad, (int) (9 * density), pad, (int) (9 * density));
+            String name;
+            try {
+                java.time.LocalDate date = java.time.LocalDate.parse(d.date);
+                name = date.equals(today) ? "Today" : date.equals(today.plusDays(1)) ? "Tomorrow"
+                        : date.getDayOfWeek().getDisplayName(java.time.format.TextStyle.FULL, Locale.getDefault());
+            } catch (Exception e) {
+                name = d.date;
+            }
+            row.addView(forecastText(name, 13, Color.WHITE, R.string.font_medium), new LinearLayout.LayoutParams((int) (92 * density), -2));
+            row.addView(forecastText(WeatherNow.icon(d.code, true), 16, Color.WHITE, R.string.font_regular), new LinearLayout.LayoutParams((int) (28 * density), -2));
+            row.addView(forecastText(WeatherNow.condition(d.code, true), 12, 0xBFFFFFFF, R.string.font_regular), new LinearLayout.LayoutParams(0, -2, 1f));
+            if (d.rain > 0) row.addView(forecastText("\u2602 " + d.rain + "%", 12, 0xFF8FD3FF, R.string.font_regular), new LinearLayout.LayoutParams(-2, -2));
+            TextView temps = forecastText(d.hi + "°  " + d.lo + "°", 13, Color.WHITE, R.string.font_medium);
+            temps.setGravity(Gravity.END);
+            row.addView(temps, new LinearLayout.LayoutParams((int) (72 * density), -2));
+            rows.addView(row);
+        }
+        // Nothing in it takes focus: OK or Back closes it.
+        panel.setFocusable(true);
+        panel.setOnKeyListener((v, key, event) -> {
+            if (event.getAction() == KeyEvent.ACTION_UP && (key == KeyEvent.KEYCODE_DPAD_CENTER
+                    || key == KeyEvent.KEYCODE_ENTER || key == KeyEvent.KEYCODE_DPAD_UP)) {
+                if (openPopup != null) openPopup.dismiss();
+                return true;
+            }
+            return false;
+        });
+        PopupWindow popup = glassPopup(panel, (int) (380 * density));
+        dropIn(popup, panel, anchor, Gravity.START);
+        panel.requestFocus();
+    }
+
+    private TextView forecastText(String text, float sp, int color, int font) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        t.setSingleLine(true);
+        t.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        t.setTypeface(UiFont.get(this, font));
+        return t;
+    }
+
     /** Dropdown menu under the Inputs pill: HDMI ports (with connection state), AV and Live TV. */
     private void showInputs() {
         // A configured source panel and no Live TV row to offer next to it: the panel is the whole menu.
@@ -3674,10 +4174,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
                     // "Apple TV · HDMI 1": the device's own name (or the one given to it or to its port in
                     // Settings > Inputs), then the port. Opening the device's input also makes it the CEC
                     // active source, which wakes it.
+                    // NZB-CC: with two or more devices on one port (an ARC soundbar or receiver and the box behind
+                    // it, or one box answering CEC as two devices), the port's Settings name ("Set-top box") would
+                    // label them all alike: each uses its own CEC name then, and identical rows show once.
+                    Set<String> shownOnPort = new HashSet<>();
                     for (TvInputInfo device : devices) {
                         CharSequence name = InputNames.tidy(device.loadCustomLabel(this));
-                        if (name == null || name.length() == 0) name = named ? custom : device.loadLabel(this);
+                        if (name == null || name.length() == 0) {
+                            name = named && devices.size() == 1 ? custom : device.loadLabel(this);
+                        }
                         String deviceLabel = name == null || name.length() == 0 ? label : name + " \u00B7 " + label;
+                        if (!shownOnPort.add(deviceLabel)) continue;
                         final String deviceId = device.getId();
                         int state = hdmiStateBogus && !inputsCecStateOnly ? -1 : tim.getInputState(deviceId);
                         View row = addInputRow(rows, popup, R.drawable.ic_input, deviceLabel, state, () -> openInput(deviceId));
@@ -3850,7 +4357,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         // Inputs opens its own list once this one has closed.
         if (showInputsMenuRow) addInputRow(rows, popup, R.drawable.ic_input, getString(R.string.inputs), -1, () -> root.post(this::showInputs));
         addInputRow(rows, popup, R.drawable.ic_wifi, getString(R.string.quick_network), -1, this::openNetworkPill);
-        CharSequence network = wifiIconOnly ? btnWifi.getContentDescription() : btnWifi.getText();
+        CharSequence network = wifiIconOnly || NAMELESS_WIFI ? btnWifi.getContentDescription() : btnWifi.getText();
         if (!TextUtils.isEmpty(network)) {
             TextView status = rows.getChildAt(rows.getChildCount() - 1).findViewById(R.id.status);
             status.setText(network);

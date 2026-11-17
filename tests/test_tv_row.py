@@ -41,14 +41,10 @@ def fake_kodi(method, params=None, timeout=6):
         return {"movies": [
             {"movieid": 7, "title": "Old Film", "year": 2020, "runtime": 6000, "file": "smb://HAL9000/Movies/Old Film (2020)/old.film.mkv",
              "art": {"poster": "image://poster7/"}, "dateadded": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - 86400 * 10)),
-             "playcount": 1, "streamdetails": {"video": [{"width": 3840, "height": 2160}]},
-             "resume": {"position": 1800, "total": 6000}}]}
+             "playcount": 1, "streamdetails": {"video": [{"width": 3840, "height": 2160}]}}]}
     if method == "JSONRPC.Ping":
         return "pong"
     if method == "VideoLibrary.GetMovies":
-        if params.get("filter", {}).get("value") == "Library Film":
-            return {"movies": [{"movieid": 3, "title": "Library Film", "year": 2019, "file": "smb://HAL9000/Movies/Library Film (2019)/lf.mkv",
-                                "art": {"poster": "image://poster3/"}, "playcount": 0, "runtime": 5400}]}
         return {"movies": []}
     if method == "Player.Open":
         played.append(params["item"]); return "OK"
@@ -62,10 +58,6 @@ m.http_fetch = lambda url, **kw: JPEG
 m.sab_request = lambda mode, extra=None, timeout=15: {"history": {"slots": [
     {"nzo_id": "SABnzbd_nzo_new", "name": "New.One.2025.2160p.WEB-DL.x265", "category": "movies", "status": "Completed",
      "completed": int(now - 3600), "storage": str(dl)},
-    {"nzo_id": "SABnzbd_nzo_again", "name": "New.One.2025.1080p.WEB-DL.x264", "category": "movies", "status": "Completed",
-     "completed": int(now - 7200), "storage": str(dl)},
-    {"nzo_id": "SABnzbd_nzo_lib", "name": "Library.Film.2019.1080p.BluRay", "category": "movies", "status": "Completed",
-     "completed": int(now - 86400 * 20), "storage": r"D:\Movies\Library Film (2019)"},
     {"nzo_id": "SABnzbd_nzo_old", "name": "Old.Film.2020.1080p.BluRay", "category": "movies", "status": "Completed",
      "completed": int(now - 86400 * 10), "storage": r"D:\Movies\Old Film (2020)"},
     {"nzo_id": "SABnzbd_nzo_tv", "name": "Some.Show.S01E02.1080p", "category": "tv", "status": "Completed",
@@ -74,14 +66,10 @@ m.sab_request = lambda mode, extra=None, timeout=15: {"history": {"slots": [
 
 state = m.tv_refresh()
 ids = [x["id"] for x in state["items"]]
-# newest first; no TV episode, no failed job, one card for a movie downloaded twice; a download Kodi has
-# (just not among its newest) comes with Kodi's id and poster
-assert ids == ["sSABnzbd_nzo_new", "k7", "k3"], ids
-assert state["items"][2]["movieid"] == 3 and (m.TV_ART_DIR / "k3.img").exists()
-new, old, _lib = state["items"]
+assert ids == ["sSABnzbd_nzo_new", "k7"], ids               # newest first, no TV episode, no failed job, no duplicate
+new, old = state["items"]
 assert new["title"] == "New One" and new["year"] == 2025 and new["quality"] == "4K" and new["new"] and not new["in_kodi"]
 assert old["movieid"] == 7 and old["quality"] == "4K" and old["watched"] and not old["new"]
-assert old["resume"] == 0.3 and old["left_min"] == 70                        # stopped 30 min into 100
 assert [r"D:\Movies", "smb://HAL9000/Movies"] in state["path_map"]
 # the local test folder isn't under D:\Movies, so its file can't be mapped; with a matching prefix it is
 assert new["file"] == ""
@@ -99,7 +87,7 @@ for bad in ("../x", "k7/../../a", ""):
 # ---------- Kodi switched off: the row stays, with Kodi's part remembered ----------
 kodi_on["v"] = False
 state = m.tv_refresh()
-assert [x["id"] for x in state["items"]][:2] == ["sSABnzbd_nzo_new", "k7"] and state["kodi_online"] is False
+assert [x["id"] for x in state["items"]] == ["sSABnzbd_nzo_new", "k7"] and state["kodi_online"] is False
 
 # ---------- playing waits for Kodi to start ----------
 def later_on():

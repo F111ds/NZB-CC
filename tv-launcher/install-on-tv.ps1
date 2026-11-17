@@ -10,7 +10,8 @@ What it does, in order:
   1. checks the phone server (mobile_server.py) answers on this PC, and reads its access code
   2. saves a copy of the TV's current launcher settings (config.json) in .\backup
   3. installs NZB-CC-TV-Launcher.apk over the launcher on the TV
-  4. turns the wallpaper off, turns on the glass dock, and points the Kodi row at this PC
+  4. turns the wallpaper off, sets a single-row glass dock with the date beside the clock, and points the
+     Kodi row (recently watched) at this PC
   5. restarts Home
 
 Needs: Python 3 (py launcher) and Network debugging (ADB) on the TV - the same as CleanYourTV.
@@ -18,14 +19,17 @@ Needs: Python 3 (py launcher) and Network debugging (ADB) on the TV - the same a
 param(
     [Parameter(Mandatory = $true)][string]$TvHost,
     [int]$ServerPort = 8765,
+    # The folder of pictures for the screensaver (saved in tv_photos_folder.txt); default: your Pictures folder.
+    [string]$PhotosFolder = '',
     [string]$Apk = '',
-    [switch]$SettingsOnly
+    # An AllRatesToday key for the live dollar-to-peso rate; saved in ..\fx_api_key.txt (not committed) so later
+    # installs reuse it. Without one the TV shows the daily reference rate.
+    [string]$FxKey = ''
 )
+# Windows PowerShell can leave $PSScriptRoot empty inside param() defaults, so the APK path is set here.
+if (-not $Apk) { $Apk = Join-Path $PSScriptRoot 'NZB-CC-TV-Launcher.apk' }
 $ErrorActionPreference = 'Stop'
-# Windows PowerShell 5.1 can leave $PSScriptRoot empty in a parameter default, so work the folder out here.
-$here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-Set-Location $here
-if (-not $Apk) { $Apk = Join-Path $here 'NZB-CC-TV-Launcher.apk' }
+Set-Location $PSScriptRoot
 $env:TV_HOST = $TvHost
 $pkg = 'com.gathin.tvhome'
 $tvDir = "/sdcard/Android/data/$pkg/files"
@@ -36,11 +40,7 @@ function Step($text) { Write-Host "`n== $text" -ForegroundColor Cyan }
 $py = '.\tools\venv\Scripts\python.exe'
 if (-not (Test-Path $py)) {
     Step 'Setting up the TV tools (once)'
-    # The py launcher can point at a Python that is gone (an old drive letter); fall back to python on PATH.
-    $made = $false
-    try { py -3 -m venv tools\venv 2>$null; $made = ($LASTEXITCODE -eq 0) -and (Test-Path $py) } catch { $made = $false }
-    if (-not $made) { python -m venv tools\venv }
-    if (-not (Test-Path $py)) { throw 'Could not create the Python environment (tried py and python). Install Python 3 from python.org and run this again. Nothing was changed on the TV.' }
+    py -3 -m venv tools\venv
     & .\tools\venv\Scripts\pip.exe install -q -r tools\requirements.txt
     if ($LASTEXITCODE -ne 0) { throw 'Installing the TV tools failed (see above). Nothing was changed on the TV.' }
 }
@@ -58,16 +58,32 @@ if ($LASTEXITCODE -ne 0) {
 
 # ---- the phone server on this PC ------------------------------------------------------------------
 Step 'Checking NZB Command Center''s phone server on this PC'
-$keyFile = Join-Path (Split-Path $here -Parent) 'mobile_access_key.txt'
+$keyFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'mobile_access_key.txt'
 if (-not (Test-Path $keyFile)) {
     throw "No access code at $keyFile. Start the phone server once (python mobile_server.py --install-autostart) and run this again."
 }
 $token = (Get-Content $keyFile -Raw).Trim()
 try {
-    $row = Invoke-RestMethod -Uri "http://127.0.0.1:$ServerPort/api/tv/recent" -Headers @{ 'X-Mobile-Token' = $token } -TimeoutSec 60
-    Write-Host "The phone server answers: $(@($row.items).Count) movies for the Kodi row."
+    $row = Invoke-RestMethod -Uri "http://127.0.0.1:$ServerPort/api/tv/watched" -Headers @{ 'X-Mobile-Token' = $token } -TimeoutSec 60
+    Write-Host "The phone server answers: $(@($row.items).Count) recently watched items for the Kodi row."
 } catch {
+    if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+        throw "The phone server on port $ServerPort is an older version (no /api/tv/watched). Restart it from this folder's parent (pythonw mobile_server.py) and run this again. Nothing was changed on the TV."
+    }
     throw "The phone server isn't answering on port $ServerPort ($($_.Exception.Message)). Start it (python mobile_server.py) and run this again. Nothing was changed on the TV."
+}
+# Screensaver photos: the folder the phone server reads them from.
+if ($PhotosFolder) {
+    if (-not (Test-Path $PhotosFolder -PathType Container)) { throw "No folder at $PhotosFolder. Nothing was changed on the TV." }
+    $photosFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'tv_photos_folder.txt'
+    [IO.File]::WriteAllText($photosFile, (Resolve-Path $PhotosFolder).Path, (New-Object System.Text.UTF8Encoding $false))
+}
+try {
+    $photos = Invoke-RestMethod -Uri "http://127.0.0.1:$ServerPort/api/tv/photos" -Headers @{ 'X-Mobile-Token' = $token } -TimeoutSec 120
+    Write-Host "Screensaver: $($photos.count) photos in your '$($photos.folder)' folder."
+    if ($photos.count -eq 0) { Write-Host "  (No pictures found. Run this again with -PhotosFolder 'D:\Some\Folder' to pick the folder.)" -ForegroundColor Yellow }
+} catch {
+    Write-Host 'Screensaver: the phone server has no photo list yet (restart it from the new mobile_server.py).' -ForegroundColor Yellow
 }
 # This PC's address on the network the TV is on.
 $pcIp = & $py -I -c "import socket,sys; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect((sys.argv[1].split(':')[0], 5555)); print(s.getsockname()[0])" $TvHost
@@ -89,9 +105,6 @@ if ($LASTEXITCODE -eq 0 -and (Test-Path $backup)) {
 }
 
 # ---- install --------------------------------------------------------------------------------------
-if ($SettingsOnly) {
-    Write-Host 'Settings only: the launcher already on the TV is kept.'
-} else {
 Step 'Installing the launcher'
 if (-not (Test-Path $Apk)) { throw "Missing $Apk" }
 & $py -I tools\b64push.py $Apk /data/local/tmp/nzbcc-launcher.apk
@@ -113,7 +126,8 @@ if ($out -match 'INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match') {
 }
 Tv 'rm -f /data/local/tmp/nzbcc-launcher.apk' | Out-Null
 if ($out -notmatch 'Success') { throw 'pm install failed (see above).' }
-}
+$ver = (Tv "dumpsys package $pkg | grep -m1 versionName").Trim()
+Write-Host "Launcher on the TV now: $ver" -ForegroundColor Green
 
 # ---- settings: wallpaper off, glass dock, Kodi row -----------------------------------------------
 Step 'Turning the wallpaper off and pointing the Kodi row at this PC'
@@ -126,18 +140,34 @@ function SetKey($name, $value) {
 SetKey 'wallpaper' $false
 SetKey 'background_color' '#070B14'
 SetKey 'dock_glass' $true
-SetKey 'columns' 7
-SetKey 'centered_home' $true
-SetKey 'uniform_tiles' $true
-SetKey 'show_greeting' $false
-SetKey 'app_library' $true
-SetKey 'library_button' $true
-SetKey 'wifi_label_width' 110
-if ($cfg.PSObject.Properties['dock_tile_scale']) { $cfg.PSObject.Properties.Remove('dock_tile_scale') }
+SetKey 'single_row' $true          # one row of apps along the bottom, nothing peeking below it
+SetKey 'dock_band_all' $true       # the glass band runs behind the whole row
+SetKey 'rows_below_dock' 0
+SetKey 'date_below_clock' $false   # clock and date on one line
+SetKey 'kodi_row_size' 5           # five posters: recently watched
+SetKey 'dock_tile_scale' 0.5       # small app tiles in a compact row, centred
+SetKey 'home_apps' @('com.netflix.ninja|Netflix', 'com.amazon.amazonvideo.livingroom|Prime Video', 'com.google.android.youtube.tv|YouTube', 'org.xbmc.kodi|Kodi')   # only these on Home; the rest are under the grid button
+SetKey 'show_library_pill' $false  # no App library pill after the dock; Right past the last app or the grid button opens it
+SetKey 'library_ok_opens' $true   # App library: OK opens the app; hold OK for Add to Home
+SetKey 'sky_intensity' 70        # time-of-day sky behind Home (0 turns it off)
+SetKey 'news' $false              # news ticker off (true turns it back on)
+SetKey 'icon_only_inputs' $true    # Inputs as a round icon
+SetKey 'vpn_app' 'com.nordvpn.android'   # the VPN lock: closed green while NordVPN is connected, open red while it is off
+SetKey 'dock_icons_only' $true    # the dock shows app icons alone on the glass
 SetKey 'kodi_row' $true
 SetKey 'kodi_row_server' $server
 SetKey 'kodi_row_token' $token
 SetKey 'weather' $true
+$fxKeyFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'fx_api_key.txt'
+if ($FxKey) { [IO.File]::WriteAllText($fxKeyFile, $FxKey.Trim(), (New-Object System.Text.UTF8Encoding $false)) }
+elseif (Test-Path $fxKeyFile) { $FxKey = (Get-Content $fxKeyFile -Raw).Trim() }
+if ($FxKey) {
+    SetKey 'fx_key' $FxKey              # live mid-market rate (AllRatesToday)
+    if (-not $cfg.PSObject.Properties['fx_refresh_minutes']) { SetKey 'fx_refresh_minutes' 10 }
+    Write-Host 'Exchange rate: live (AllRatesToday key set)'
+} else {
+    Write-Host 'Exchange rate: daily (no AllRatesToday key; pass -FxKey to make it live)'
+}
 $newCfg = Join-Path $env:TEMP "nzbcc-config-$stamp.json"
 [IO.File]::WriteAllText($newCfg, ($cfg | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding $false))
 Tv "mkdir -p $tvDir" | Out-Null
@@ -150,6 +180,8 @@ Step 'Restarting Home'
 @(
     "pm grant $pkg android.permission.ACCESS_FINE_LOCATION 2>/dev/null; echo granted",
     "cmd package set-home-activity --user 0 $pkg/.MainActivity",
+    "settings put secure screensaver_components $pkg/.PhotoDream",
+    "settings put secure screensaver_enabled 1",
     "am force-stop $pkg",
     "am start -W -a android.intent.action.MAIN -c android.intent.category.HOME -n $pkg/.MainActivity"
 ) | & $py -I tools\tv.py --batch | Out-Null
