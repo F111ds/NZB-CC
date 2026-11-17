@@ -75,7 +75,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.10.0"
+VERSION = "3.11.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -510,13 +510,14 @@ class ConfigError(RuntimeError):
 _KNOWN_SECRETS: frozenset[str] = frozenset()
 _EXTRA_SECRETS: frozenset[str] = frozenset()  # phone-only secrets (the ntfy access token)
 _JF_SECRETS: frozenset[str] = frozenset()     # the Jellyfin API key in use
+_ARR_SECRETS: frozenset[str] = frozenset()    # the Sonarr / Radarr API keys found on this PC
 _SECRET_QS = re.compile(r"(?i)\b(apikey|api_key|passkey|token|r)=([^&\s'\"<>]+)")
 
 
 def redact(text) -> str:
     """Strips API keys from any text (query-string style, plus every key currently configured)."""
     out = _SECRET_QS.sub(lambda m: f"{m.group(1)}=***", str(text))
-    for secret in _KNOWN_SECRETS | _EXTRA_SECRETS | _JF_SECRETS:  # frozensets that are only ever swapped whole, never mutated
+    for secret in _KNOWN_SECRETS | _EXTRA_SECRETS | _JF_SECRETS | _ARR_SECRETS:  # frozensets that are only ever swapped whole, never mutated
         if secret and len(secret) >= 6:
             out = out.replace(secret, "***")
     return out
@@ -2778,6 +2779,343 @@ def jf_url_allowed(url: str) -> bool:
 
 
 # ==============================================================================
+# 5b3. SONARR & RADARR
+# ==============================================================================
+# Found automatically: each app keeps its port, URL base and API key in config.xml in its data
+# folder, so nothing has to be typed in. Looked for in <drive>:\MediaAutomation\<App>\data (where
+# install_arr_resume.ps1 puts them) and in the standard ProgramData\<App>.
+
+ARR_APPS = {"radarr": "Radarr", "sonarr": "Sonarr"}
+ARR_EXTRA_DIRS: list[Path] = []          # more install folders to look in (holding <App>\data)
+ARR_UPCOMING_DAYS = 14
+ARR_CACHE_SECONDS = 600
+ARR_CONF_SECONDS = 60
+ARR_ART_RE = re.compile(r"/MediaCover/\d{1,9}/(poster|fanart|banner)(-\d{2,4})?\.(jpg|jpeg|png)")
+ARR_REMOTE_ART_HOSTS = {"image.tmdb.org", "artworks.thetvdb.com", "thetvdb.com", "www.thetvdb.com",
+                        "assets.fanart.tv", "static.tvmaze.com"}
+ARR_MONITOR = {"future": "New episodes only", "all": "Every episode", "latestSeason": "Latest season",
+               "firstSeason": "First season", "missing": "Missing episodes"}
+_arr_lock = threading.Lock()
+_arr_conf_cache: dict = {}
+_arr_cache: dict = {}
+_home_arr_down_until = 0.0
+
+
+def _fixed_drive_letters() -> list[str]:
+    if os.name != "nt":
+        return []
+    try:
+        k32 = ctypes.windll.kernel32
+        mask = k32.GetLogicalDrives()
+        return [chr(65 + i) for i in range(26) if mask & (1 << i) and k32.GetDriveTypeW(f"{chr(65 + i)}:\\") == 3]
+    except Exception:
+        return []
+
+
+def arr_config_candidates(app: str) -> list[Path]:
+    name = ARR_APPS[app]
+    roots = list(ARR_EXTRA_DIRS) + [Path(f"{letter}:\\MediaAutomation") for letter in _fixed_drive_letters()]
+    out = [Path(r) / name / "data" / "config.xml" for r in roots]
+    if os.environ.get("ProgramData"):
+        out.append(Path(os.environ["ProgramData"]) / name / "config.xml")
+    return out
+
+
+def _read_arr_config(path: Path) -> dict | None:
+    try:
+        root = safe_xml_fromstring(path.read_bytes())
+    except Exception:
+        return None
+    get = lambda tag: (root.findtext(tag) or "").strip()
+    key, port, base = get("ApiKey"), to_int(get("Port")), get("UrlBase").strip("/")
+    if not re.fullmatch(r"[A-Za-z0-9]{20,64}", key) or not 0 < port < 65536:
+        return None
+    return {"url": f"http://127.0.0.1:{port}" + (f"/{base}" if base else ""), "key": key, "file": str(path)}
+
+
+def arr_conf(app: str) -> dict:
+    global _ARR_SECRETS
+    if app not in ARR_APPS:
+        raise ValueError("Unknown app.")
+    now = time.monotonic()
+    with _arr_lock:
+        hit = _arr_conf_cache.get(app)
+        if hit and now - hit[0] < ARR_CONF_SECONDS:
+            return hit[1]
+    conf = {"url": "", "key": "", "file": ""}
+    for path in arr_config_candidates(app):
+        try:
+            found = _read_arr_config(path) if path.is_file() else None
+        except OSError:
+            found = None
+        if found:
+            conf = found
+            break
+    with _arr_lock:
+        _arr_conf_cache[app] = (now, conf)
+        _ARR_SECRETS = frozenset(c["key"] for _, c in _arr_conf_cache.values() if c["key"])
+    return conf
+
+
+def arr_clear_cache() -> None:
+    with _arr_lock:
+        _arr_conf_cache.clear()
+        _arr_cache.clear()
+
+
+def arr_request(app: str, path: str, params: dict | None = None, body=None, timeout: float = 10):
+    c = arr_conf(app)
+    if not c["key"]:
+        raise ConfigError(f"{ARR_APPS[app]} wasn't found on this PC.")
+    url = c["url"] + "/api/v3" + path + ("?" + urllib.parse.urlencode(params) if params else "")
+    hdrs = {"X-Api-Key": c["key"], "Accept": "application/json"}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        hdrs["Content-Type"] = "application/json"
+    try:
+        raw = http_fetch(url, timeout=timeout, max_bytes=MAX_API_BYTES, data=data, headers=hdrs)
+    except UpstreamError as exc:
+        raise UpstreamError(f"{ARR_APPS[app]}: {exc}") from None
+    if not raw.strip():
+        return {}
+    try:
+        return json.loads(raw)
+    except ValueError:
+        raise UpstreamError(f"{ARR_APPS[app]} sent an answer that isn't JSON.") from None
+
+
+def _arr_cached(key, fn, ttl: float = ARR_CACHE_SECONDS, force: bool = False):
+    with _arr_lock:
+        hit = _arr_cache.get(key)
+        if hit and not force and time.monotonic() - hit[0] < ttl:
+            return hit[1]
+    value = fn()
+    with _arr_lock:
+        _arr_cache[key] = (time.monotonic(), value)
+    return value
+
+
+def _arr_poster(app: str, images) -> str:
+    """An art reference for the page: "a:<app>:<url>". A public TMDB/TVDB picture when there is one
+    (smaller and no key needed), otherwise the copy the app keeps in its MediaCover folder."""
+    local = ""
+    for im in images or []:
+        if not isinstance(im, dict) or str(im.get("coverType", "")).lower() != "poster":
+            continue
+        remote = str(im.get("remoteUrl") or "")
+        if not remote and str(im.get("url") or "").startswith("http"):
+            remote = str(im.get("url"))
+        p = urllib.parse.urlsplit(remote)
+        if p.scheme == "https" and (p.hostname or "").lower() in ARR_REMOTE_ART_HOSTS:
+            return f"a:{app}:" + remote.replace("/t/p/original/", "/t/p/w342/")
+        path = urllib.parse.urlsplit(str(im.get("url") or "")).path
+        i = path.find("/MediaCover/")
+        if i >= 0 and ARR_ART_RE.fullmatch(path[i:]):
+            local = f"a:{app}:" + path[i:]
+    return local
+
+
+def arr_art(ref: str) -> tuple[bytes, str]:
+    app, _, target = str(ref or "").partition(":")
+    if app not in ARR_APPS:
+        raise ValueError("Invalid picture.")
+    if target.startswith("/"):
+        if not ARR_ART_RE.fullmatch(target):
+            raise ValueError("Invalid picture.")
+        c = arr_conf(app)
+        if not c["key"]:
+            raise UpstreamError("Not found.")
+        raw = http_fetch(c["url"] + target, timeout=8, max_bytes=MAX_ART_BYTES, headers={"X-Api-Key": c["key"]})
+    else:
+        p = urllib.parse.urlsplit(target)
+        if p.scheme != "https" or (p.hostname or "").lower() not in ARR_REMOTE_ART_HOSTS:
+            raise ValueError("Invalid picture.")
+        raw = http_fetch(target, timeout=8, max_bytes=MAX_ART_BYTES)
+    ctype = _image_type(raw)
+    if not ctype:
+        raise UpstreamError("Not a picture.")
+    return raw, ctype
+
+
+def arr_app_status(app: str) -> dict:
+    c = arr_conf(app)
+    out = {"app": app, "name": ARR_APPS[app], "configured": bool(c["key"]), "online": False}
+    if not c["key"]:
+        return out
+    out["url"] = c["url"].replace("127.0.0.1", "this PC")
+    try:
+        st = arr_request(app, "/system/status", timeout=5)
+        out.update(online=True, version=str(st.get("version") or ""))
+    except UpstreamError as exc:
+        out["problem"] = str(exc)
+        return out
+    try:
+        out["queue"] = to_int(arr_request(app, "/queue/status", timeout=5).get("totalCount"))
+    except UpstreamError:
+        pass
+    return out
+
+
+def arr_overview() -> dict:
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        apps = list(pool.map(arr_app_status, ARR_APPS))
+    return {"apps": apps, "monitor": ARR_MONITOR}
+
+
+def arr_configured() -> bool:
+    return any(arr_conf(a)["key"] for a in ARR_APPS)
+
+
+_ARR_MOVIE_DATES = (("digitalRelease", "Digital release"), ("physicalRelease", "Blu-ray release"), ("inCinemas", "In cinemas"))
+
+
+def _arr_upcoming_uncached(days: int) -> list[dict]:
+    start, end = date.today(), date.today() + timedelta(days=days)
+    s, e = start.isoformat(), end.isoformat()
+    items: list[dict] = []
+    if arr_conf("sonarr")["key"]:
+        try:
+            for ep in arr_request("sonarr", "/calendar", {"start": s, "end": e, "includeSeries": "true", "unmonitored": "false"}, timeout=12) or []:
+                series = ep.get("series") or {}
+                items.append({"app": "sonarr", "kind": "episode", "title": str(series.get("title") or ep.get("seriesTitle") or ""),
+                              "episode_title": str(ep.get("title") or ""), "season": to_int(ep.get("seasonNumber")),
+                              "episode": to_int(ep.get("episodeNumber")), "when": str(ep.get("airDateUtc") or ep.get("airDate") or ""),
+                              "has_file": bool(ep.get("hasFile")), "network": str(series.get("network") or ""),
+                              "poster": _arr_poster("sonarr", series.get("images"))})
+        except (UpstreamError, ConfigError) as exc:
+            log.info("sonarr calendar: %s", exc)
+    if arr_conf("radarr")["key"]:
+        try:
+            for mv in arr_request("radarr", "/calendar", {"start": s, "end": e, "unmonitored": "false"}, timeout=12) or []:
+                when, label = "", ""
+                for field, text in _ARR_MOVIE_DATES:
+                    d = str(mv.get(field) or "")[:10]
+                    if s <= d <= e:
+                        when, label = d, text
+                        break
+                if not when:
+                    continue
+                items.append({"app": "radarr", "kind": "movie", "title": str(mv.get("title") or ""), "year": to_int(mv.get("year")) or "",
+                              "when": when, "release": label, "has_file": bool(mv.get("hasFile")),
+                              "poster": _arr_poster("radarr", mv.get("images"))})
+        except (UpstreamError, ConfigError) as exc:
+            log.info("radarr calendar: %s", exc)
+    items.sort(key=lambda x: (x["when"], x["title"], x.get("season", 0), x.get("episode", 0)))
+    return items[:200]
+
+
+def arr_upcoming(days: int = ARR_UPCOMING_DAYS, force: bool = False) -> list[dict]:
+    return _arr_cached(("upcoming", days), lambda: _arr_upcoming_uncached(days), force=force)
+
+
+def home_upcoming(limit: int = 5) -> list[dict]:
+    """The next few things coming, for Home. [] when Sonarr/Radarr aren't there or answering."""
+    global _home_arr_down_until
+    if time.monotonic() < _home_arr_down_until:
+        return []
+    try:
+        if not arr_configured():
+            return []
+        week = (date.today() + timedelta(days=7)).isoformat()
+        return [x for x in arr_upcoming() if x["when"][:10] <= week and not x["has_file"]][:limit]
+    except Exception:
+        _home_arr_down_until = time.monotonic() + 60
+        return []
+
+
+def _arr_ext_id(app: str, item: dict) -> int:
+    return to_int(item.get("tmdbId" if app == "radarr" else "tvdbId"))
+
+
+def arr_lookup(app: str, term: str) -> list[dict]:
+    term = " ".join(str(term or "").split())[:120]
+    if app not in ARR_APPS:
+        raise ValueError("Unknown app.")
+    if not term:
+        return []
+    found = arr_request(app, "/movie/lookup" if app == "radarr" else "/series/lookup", {"term": term}, timeout=25) or []
+    out = []
+    for x in found[:25]:
+        ext = _arr_ext_id(app, x)
+        if not ext or not x.get("title"):
+            continue
+        if app == "radarr":
+            extra = [x.get("studio"), _arr_runtime(to_int(x.get("runtime")))]
+        else:
+            seasons = len([s for s in (x.get("seasons") or []) if to_int(s.get("seasonNumber")) > 0])
+            extra = [x.get("network"), f"{seasons} season{'s' if seasons != 1 else ''}" if seasons else "",
+                     "ended" if str(x.get("status")) == "ended" else ""]
+        out.append({"app": app, "ext_id": ext, "title": str(x["title"]), "year": to_int(x.get("year")) or "",
+                    "overview": str(x.get("overview") or "")[:320], "extra": " · ".join(str(v) for v in extra if v),
+                    "in_library": to_int(x.get("id")) > 0, "has_file": bool(x.get("hasFile")),
+                    "poster": _arr_poster(app, x.get("images"))})
+    return out[:20]
+
+
+def _arr_runtime(minutes: int) -> str:
+    if not minutes:
+        return ""
+    return f"{minutes // 60} h {minutes % 60:02d} min" if minutes >= 60 else f"{minutes} min"
+
+
+def arr_options(app: str, force: bool = False) -> dict:
+    if app not in ARR_APPS:
+        raise ValueError("Unknown app.")
+
+    def fetch():
+        profiles = arr_request(app, "/qualityprofile", timeout=8) or []
+        roots = arr_request(app, "/rootfolder", timeout=8) or []
+        return {"profiles": [{"id": to_int(p.get("id")), "name": str(p.get("name") or "")} for p in profiles if p.get("id")],
+                "roots": [{"path": str(r.get("path") or ""), "free": to_int(r.get("freeSpace"))} for r in roots if r.get("path")]}
+    return _arr_cached(("options", app), fetch, force=force)
+
+
+def arr_add(app: str, ext_id: int, profile_id: int = 0, root: str = "", search: bool = True, monitor: str = "future") -> dict:
+    if app not in ARR_APPS:
+        raise ValueError("Unknown app.")
+    ext_id = to_int(ext_id)
+    if ext_id <= 0:
+        raise ValueError("Invalid item.")
+    name = ARR_APPS[app]
+    lookup = "/movie/lookup" if app == "radarr" else "/series/lookup"
+    found = arr_request(app, lookup, {"term": f"{'tmdb' if app == 'radarr' else 'tvdb'}:{ext_id}"}, timeout=25) or []
+    item = next((x for x in found if _arr_ext_id(app, x) == ext_id), None)
+    if not item:
+        raise UpstreamError(f"{name} couldn't find it any more. Search again and retry.")
+    title = str(item.get("title") or "")
+    if to_int(item.get("id")) > 0:
+        return {"ok": True, "already": True, "title": title}
+    opts = arr_options(app, force=True)
+    if not opts["roots"]:
+        raise ConfigError(f"{name} has no media folder yet. In {name} open Settings → Media Management and add a root folder.")
+    if not opts["profiles"]:
+        raise ConfigError(f"{name} has no quality profiles.")
+    pid = profile_id if any(p["id"] == profile_id for p in opts["profiles"]) else opts["profiles"][0]["id"]
+    folder = root if any(r["path"] == root for r in opts["roots"]) else opts["roots"][0]["path"]
+    body = dict(item)
+    body.pop("path", None)
+    body.update(qualityProfileId=pid, rootFolderPath=folder, monitored=True)
+    if app == "radarr":
+        body["minimumAvailability"] = "released"
+        body["addOptions"] = {"searchForMovie": bool(search), "monitor": "movieOnly"}
+        made = arr_request(app, "/movie", body=body, timeout=30)
+    else:
+        monitor = monitor if monitor in ARR_MONITOR else "future"
+        body["seasonFolder"] = True
+        body.setdefault("languageProfileId", 1)          # Sonarr v3 wants one; v4 ignores it
+        body["addOptions"] = {"monitor": monitor, "searchForMissingEpisodes": bool(search) and monitor != "future",
+                              "searchForCutoffUnmetEpisodes": False}
+        made = arr_request(app, "/series", body=body, timeout=30)
+    with _arr_lock:
+        for k in [k for k in _arr_cache if k[0] == "upcoming"]:
+            _arr_cache.pop(k, None)
+    log.info("%s: added %s (search=%s)", app, title, bool(search))
+    return {"ok": True, "already": False, "title": str((made or {}).get("title") or title),
+            "searching": bool(search) and (app == "radarr" or monitor != "future")}
+
+
+# ==============================================================================
 # 5c. PHONE SETTINGS, ALERTS (ntfy), SAVED SEARCHES, STATS, AUTOSTART
 # ==============================================================================
 
@@ -4687,6 +5025,11 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 .qual{font:600 11px var(--mono);padding:3px 7px;border-radius:6px;background:var(--deep);color:var(--text)}.qual.lo{background:#2E2410;color:var(--amber)}
 .jnow .meta{font:500 12px var(--mono);color:var(--soft);margin-top:3px}.tag.tx{background:#2E2410;color:var(--amber)}
 .pills{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}.pills button{border:1px solid var(--line);background:transparent;color:var(--text);border-radius:18px;padding:0 14px;min-height:38px;font-size:13px;font-weight:600}.pills button.on{background:var(--teal);color:var(--ink);border-color:var(--teal)}
+.pov{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.upw{font-size:12px;color:var(--teal);font-weight:600;margin-top:4px}
+.uptag{flex:none;font:800 10px var(--mono);padding:3px 7px;border-radius:6px;background:var(--hover);color:var(--soft)}.uptag.mv{color:#C4B5FD}.uptag.tv{color:var(--teal)}
+.chk{display:flex;gap:10px;align-items:flex-start;margin:4px 2px 14px;font-size:14px;cursor:pointer}.chk input{width:20px;height:20px;margin:1px 0 0;accent-color:var(--teal);flex:none}.chk small{display:block;color:var(--soft);font-size:12px;margin-top:2px}
+.pvrhead .name{font-weight:600;font-size:17px;margin-top:4px;overflow-wrap:anywhere}.pvrhead .sub{font:500 12px var(--mono);color:var(--soft);margin-top:3px}
 </style></head><body>
 <header><div class="brand"><img src="/icon.png" alt="">NZB Command Center</div><button id="alertsbtn" class="hdrbtn hidden" aria-label="Phone alerts"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></button><div id="statusbar" class="statusbar hidden"><span id="sabpill" class="spill"><i></i>SABnzbd</span></div></header>
 <main>
@@ -4701,6 +5044,7 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <div id="homekodi"></div>
 <div id="homejf"></div>
 <div id="homearrived"></div>
+<div id="homeup"></div>
 <div id="homedrives"></div>
 <p class="hint" id="homever" style="text-align:center;margin:22px 0 4px"></p>
 </section>
@@ -4715,6 +5059,7 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 </section>
 <section id="search" class="hidden">
 <h1>Search</h1><p class="lede">Your indexers, from anywhere at home.</p>
+<div class="seg"><button class="on" data-tab="search">Indexers</button><button data-tab="pvr">Movies &amp; shows</button></div>
 <div class="card">
 <label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="query" placeholder="Movie, show or release" enterkeyhint="search" autocomplete="off" aria-label="Search"></label>
 <div class="row"><select id="indexer" class="field" aria-label="Indexer"><option value="*">All indexers</option></select><select id="category" class="field" aria-label="Category"><option value="">All categories</option></select></div>
@@ -4732,6 +5077,11 @@ details.season{border-top:1px solid #10242C}details.season summary{list-style:no
 <p class="hint" style="margin:10px 0 0">Up to 10 at a time. Releases found on several indexers are grouped, and a failed download falls back to the other indexer automatically.</p>
 </div></details>
 <div id="results"></div>
+</section>
+<section id="pvr" class="hidden">
+<h1>Movies &amp; shows</h1><p class="lede" id="pvrstatus">Loading…</p>
+<div class="seg"><button data-tab="search">Indexers</button><button class="on" data-tab="pvr">Movies &amp; shows</button></div>
+<div id="pvrbody"></div>
 </section>
 <section id="queue" class="hidden">
 <h1>Queue</h1><p class="lede" id="queuestatus">Loading…</p>
@@ -4822,7 +5172,7 @@ function toast(msg,isErr){const t=$('toast');t.textContent=msg;t.className='toas
 function skeleton(n,lines){let h='';for(let i=0;i<n;i++)h+='<div class="skel">'+'<i style="width:'+(85-i*7)+'%"></i><i style="width:55%"></i>'+(lines>2?'<i style="width:35%"></i>':'')+'</div>';return h}
 function empty(title,hint){return '<div class="empty">'+EMPTY_ICON+'<b>'+esc(title)+'</b>'+esc(hint)+'</div>'}
 
-const API_TIMEOUTS={'/api/home/play':150000,'/api/jellyfin/missing':90000,'/api/jellyfin/upgrades':60000,'/api/jellyfin/connect':30000,'/api/drives':70000,'/api/drives/check':70000,'/api/search':90000,'/api/add':120000,'/api/add-batch':300000};
+const API_TIMEOUTS={'/api/home/play':150000,'/api/arr/add':90000,'/api/jellyfin/missing':90000,'/api/jellyfin/upgrades':60000,'/api/jellyfin/connect':30000,'/api/drives':70000,'/api/drives/check':70000,'/api/search':90000,'/api/add':120000,'/api/add-batch':300000};
 async function api(path,body){
   const opt={method:body===undefined?'GET':'POST',headers:{'X-Mobile-Token':token}};
   if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body)}
@@ -4861,7 +5211,7 @@ function fillSearchCategories(keep){
 }
 function fillCategories(cats){sabCats=cats;const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Auto (match)</option><option value="*">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(keep==='*'||cats.includes(keep))sel.value=keep}
 
-function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi','drives','jellyfin'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':t;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi();if(t==='drives'){refreshDrives();refreshDriveIO();setTimeout(()=>{if(activeTab==='drives')refreshDriveIO()},3500)}if(t==='jellyfin')refreshJellyfin()}
+function showTab(t){activeTab=t;for(const n of ['home','search','pvr','queue','history','kodi','drives','jellyfin'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':(t==='pvr'?'search':t);document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi();if(t==='drives'){refreshDrives();refreshDriveIO();setTimeout(()=>{if(activeTab==='drives')refreshDriveIO()},3500)}if(t==='jellyfin')refreshJellyfin();if(t==='pvr')refreshPvr()}
 
 function savePrefs(){LS.set('nzb_mobile_prefs',JSON.stringify({sort:$('sort').value,minsize:$('minsize').value,maxsize:$('maxsize').value,mingrabs:$('mingrabs').value,indexer:$('indexer').value,prio:$('prio').value,category:$('category').value}));LS.set('nzb_mobile_cat',$('sabcat').value)}
 function loadPrefs(){try{const p=JSON.parse(LS.get('nzb_mobile_prefs','{}'));if(p.sort)$('sort').value=p.sort;if(p.prio!==undefined)$('prio').value=p.prio;if(p.indexer&&[...$('indexer').options].some(o=>o.value===p.indexer))$('indexer').value=p.indexer;['minsize','maxsize','mingrabs'].forEach(k=>{if(p[k]!==undefined)$(k).value=p[k]})}catch{}}
@@ -5103,7 +5453,7 @@ async function refreshHome(){
     $('homekodi').innerHTML=!k.configured?'':(k.online?nowCard(k.playing,true):'<button class="card kidle" data-tab="kodi">'+ICON.play+'<span>Kodi is offline</span></button>');hydrateArt($('homekodi'));
     const js=d.jellyfin||[];
     $('homejf').innerHTML=js.length?'<div class="section">JELLYFIN · '+js.length+' WATCHING</div>'+js.map(jfNowCard).join(''):'';hydrateArt($('homejf'));
-    renderArrived(d.arrived||[],d.tv_ready);
+    renderArrived(d.arrived||[],d.tv_ready);renderHomeUp(d.upcoming||[]);
     if(d.version)$('homever').textContent='NZB Command Center phone app · v'+d.version;
     loadHomeUsage();loadHomeDrives();
   }catch(e){$('homestatus').className='lede status error';$('homestatus').textContent=e.message}
@@ -5120,7 +5470,7 @@ function pumpArt(){
   while(artActive<4&&artQueue.length){
     const j=artQueue.shift();artActive++;
     // "r:<id>" = a search result's poster (the server picks the source); anything else = Kodi artwork.
-    const src=j.ref.startsWith('t:')?'/api/tv/poster?id='+encodeURIComponent(j.ref.slice(2)):j.ref.startsWith('r:')?'/api/search/art?id='+encodeURIComponent(j.ref.slice(2)):(j.ref.startsWith('j:')?'/api/jellyfin/art?id='+encodeURIComponent(j.ref.slice(2)):'/api/kodi/art?u='+encodeURIComponent(j.ref));
+    const src=j.ref.startsWith('t:')?'/api/tv/poster?id='+encodeURIComponent(j.ref.slice(2)):j.ref.startsWith('r:')?'/api/search/art?id='+encodeURIComponent(j.ref.slice(2)):(j.ref.startsWith('j:')?'/api/jellyfin/art?id='+encodeURIComponent(j.ref.slice(2)):j.ref.startsWith('a:')?'/api/arr/art?ref='+encodeURIComponent(j.ref.slice(2)):'/api/kodi/art?u='+encodeURIComponent(j.ref));
     fetch(src,{headers:{'X-Mobile-Token':token}})
       .then(r=>{if(r.status===404)return null;if(!r.ok)throw new Error('HTTP '+r.status);return r.blob()})
       .then(b=>{if(!b){j.res(null);return}const u=URL.createObjectURL(b);artReady.set(j.ref,u);trimArt();j.res(u)})  // null = no poster: keep the placeholder, don't ask again
@@ -5701,10 +6051,106 @@ async function openAlerts(){
   if($('aloff'))$('aloff').onclick=async()=>{if(!confirm('Turn phone alerts off?'))return;try{await save(true);toast('Alerts turned off');openAlerts()}catch(e){toast(e.message,true)}};
 }
 
+// ---------- Sonarr & Radarr ("Movies & shows") ----------
+let pvr=null,pvrKind='radarr',pvrQuery='',pvrResults=null,pvrUp=null,pvrUpErr='',pvrBusy=false,pvrOpts={},pvrAdding=null,homeUpKey='';
+const SEARCH_SVG='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7F9DA6" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>';
+function pvrPrefs(){try{return JSON.parse(LS.get('nzb_mobile_pvr','{}'))||{}}catch{return {}}}
+function pvrApp(a){return ((pvr&&pvr.apps)||[]).find(x=>x.app===a)||{name:a==='radarr'?'Radarr':'Sonarr'}}
+const pad2=n=>String(n).padStart(2,'0');
+function dayLabel(d){const t=new Date();t.setHours(0,0,0,0);const x=new Date(d);x.setHours(0,0,0,0);const diff=Math.round((x-t)/864e5);
+  if(diff===0)return 'Today';if(diff===1)return 'Tomorrow';if(diff===-1)return 'Yesterday';return x.toLocaleDateString([],{weekday:'short',day:'numeric',month:'short'})}
+function upWhen(x){
+  if(!x.when)return '';
+  if(x.kind==='movie')return dayLabel(new Date(x.when.slice(0,10)+'T12:00:00'));
+  const d=new Date(x.when);if(isNaN(d))return x.when.slice(0,10);
+  const day=dayLabel(d),tm=d.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+  return (day==='Today'&&d.getHours()>=17?'Tonight':day)+' · '+tm;
+}
+function upSub(x){return x.kind==='episode'?'S'+pad2(x.season)+'E'+pad2(x.episode)+(x.episode_title&&!/^TBA$/i.test(x.episode_title)?' · '+x.episode_title:''):(x.release||'Release')+(x.year?' · '+x.year:'')}
+function upRow(x){
+  return '<div class="qrow"><div class="pthumb" style="cursor:default">'+artTag(x.poster)+'</div><div class="info"><div class="t">'+esc(x.title)+'</div><div class="m">'+esc(upSub(x))+'</div><div class="upw">'+esc(upWhen(x))+(x.kind==='movie'?'':(x.network?' · '+esc(x.network):''))+'</div></div>'+
+    (x.has_file?'<span class="badge lib" style="flex:none">✓ Got it</span>':'<span class="uptag '+(x.kind==='movie'?'mv':'tv')+'">'+(x.kind==='movie'?'MOVIE':'TV')+'</span>')+'</div>';
+}
+function renderHomeUp(items){
+  const box=$('homeup'),key=JSON.stringify(items.map(x=>[x.title,x.when,x.season,x.episode]));
+  if(key===homeUpKey)return;homeUpKey=key;
+  box.innerHTML=items.length?'<div class="section">COMING UP</div>'+items.map(upRow).join('')+'<button class="btn ghost full sm" data-tab="pvr" style="margin-top:2px">Movies &amp; shows</button>':'';
+  hydrateArt(box);
+}
+function pvrRow(x){
+  const right=x.in_library?'<span class="badge lib" style="flex:none">✓ '+(x.has_file?'Have it':'Added')+'</span>':'<button class="btn sm" style="flex:none" data-pvradd="'+esc(x.ext_id)+'">Add</button>';
+  return '<div class="qrow" style="align-items:flex-start"><div class="pthumb" style="cursor:default">'+artTag(x.poster)+'</div><div class="info"><div class="t">'+esc(x.title)+'</div><div class="m">'+esc([x.year,x.extra].filter(Boolean).join(' · '))+'</div>'+(x.overview?'<div class="pov">'+esc(x.overview)+'</div>':'')+'</div>'+right+'</div>';
+}
+async function pvrList(){
+  const box=$('pvrlist');if(!box)return;
+  if(!pvrQuery){box.innerHTML='';return}
+  const a=pvrApp(pvrKind);
+  if(!a.online){box.innerHTML=empty(a.name+(a.configured?' isn\'t answering':' wasn\'t found'),a.problem||('Start '+a.name+' on the PC, then pull down to refresh.'));return}
+  if(pvrResults===null){box.innerHTML=skeleton(3,2);
+    try{pvrResults=(await api('/api/arr/lookup?app='+pvrKind+'&q='+encodeURIComponent(pvrQuery))).items||[]}
+    catch(e){box.innerHTML=empty('Couldn\'t look it up',e.message);return}}
+  box.innerHTML='<div class="section">'+pvrResults.length+' FOUND</div>'+(pvrResults.map(pvrRow).join('')||empty('Nothing found','Try another spelling, or add the year.'));
+  hydrateArt(box);
+}
+function renderPvrUp(){
+  const box=$('pvrup');if(!box)return;
+  if(pvrUp===null){box.innerHTML='<div class="section">COMING UP · NEXT 14 DAYS</div>'+skeleton(3,2);return}
+  box.innerHTML='<div class="section">COMING UP · NEXT 14 DAYS</div>'+(pvrUp.length?pvrUp.map(upRow).join(''):(pvrUpErr?empty('Couldn\'t load the calendar',pvrUpErr):empty('Nothing coming up','New episodes of your shows in Sonarr and movies you add to Radarr show up here.')));
+  hydrateArt(box);
+}
+function renderPvr(){
+  const st=$('pvrstatus'),body=$('pvrbody'),apps=(pvr&&pvr.apps)||[];
+  st.className='lede';
+  st.textContent=apps.map(a=>a.name+' '+(a.online?'✓'+(a.queue?' · '+a.queue+' downloading':''):(a.configured?'offline':'not found'))).join(' · ');
+  if(!apps.some(a=>a.configured)){body.innerHTML='<div class="card kidle"><span>Radarr and Sonarr weren\'t found on this PC. The phone server looks in MediaAutomation on each drive (for example Z:\\MediaAutomation) and in C:\\ProgramData. Start them on the PC, then pull down to refresh.</span></div>';return}
+  const kinds=['radarr','sonarr'].map(a=>'<button data-pvrkind="'+a+'"'+(pvrKind===a?' class="on"':'')+'>'+(a==='radarr'?'Movie':'TV show')+'</button>').join('');
+  body.innerHTML='<div class="card"><div class="seg" style="margin:0 0 10px">'+kinds+'</div><label class="search" style="margin:0">'+SEARCH_SVG+'<input id="pvrq" placeholder="'+(pvrKind==='radarr'?'Find a movie to add':'Find a TV show to add')+'" enterkeyhint="search" autocomplete="off" aria-label="Find something to add" value="'+esc(pvrQuery)+'"></label>'+
+    '<p class="hint" style="margin:8px 2px 0">'+(pvrKind==='radarr'?'Radarr':'Sonarr')+' grabs it from your indexers and files it in your library. Looking up costs no indexer hits.</p></div><div id="pvrlist"></div><div id="pvrup"></div>';
+  pvrList();renderPvrUp();
+}
+async function loadPvrUp(force){try{pvrUp=(await api('/api/arr/upcoming'+(force?'?fresh=1':''))).items||[];pvrUpErr=''}catch(e){pvrUp=[];pvrUpErr=e.message}renderPvrUp()}
+async function refreshPvr(force){
+  if(pvrBusy)return;pvrBusy=true;
+  if(!pvr)$('pvrbody').innerHTML=skeleton(3,2);
+  try{pvr=await api('/api/arr'+(force?'?fresh=1':''));if(force){pvrUp=null;pvrOpts={}}renderPvr();if(pvr.apps.some(a=>a.online)&&(pvrUp===null||force))loadPvrUp(force)}
+  catch(e){$('pvrstatus').className='lede status error';$('pvrstatus').textContent=e.message;if(!pvr)$('pvrbody').innerHTML=''}
+  finally{pvrBusy=false}
+}
+async function openPvrAdd(id){
+  const x=(pvrResults||[]).find(r=>String(r.ext_id)===String(id));if(!x)return;
+  const app=x.app,name=app==='radarr'?'Radarr':'Sonarr',panel=$('sheetpanel');
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button><div class="empty"><b>Loading…</b></div>';
+  $('sheet').classList.remove('hidden');document.body.style.overflow='hidden';
+  if(!sheetOpen){sheetOpen=true;try{history.pushState({sheet:1},'')}catch{}}
+  let o;try{o=pvrOpts[app]||(pvrOpts[app]=await api('/api/arr/options?app='+app))}catch(e){panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button>'+empty('Couldn\'t reach '+name,e.message);return}
+  if(!o.roots.length){panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button>'+empty(name+' needs a media folder','In '+name+' on the PC open Settings → Media Management → Add Root Folder, then try again.');delete pvrOpts[app];return}
+  const p=pvrPrefs()[app]||{},sel=(v,cur)=>String(v)===String(cur)?' selected':'';
+  const mons=(pvr&&pvr.monitor)||{future:'New episodes only',all:'Every episode'};
+  pvrAdding=x;
+  panel.innerHTML='<button class="dclose" data-close aria-label="Close">'+ICON.x+'</button>'+
+    '<div class="dbody" style="padding-bottom:18px"><div class="nowrow pvrhead" style="margin:6px 48px 12px 0"><div class="pthumb" style="cursor:default">'+artTag(x.poster)+'</div><div class="info"><div class="kode">ADD TO '+name.toUpperCase()+'</div><div class="name">'+esc(x.title)+'</div><div class="sub">'+esc([x.year,x.extra].filter(Boolean).join(' · '))+'</div></div></div>'+
+    (x.overview?'<p class="hint" style="margin:0 2px 12px">'+esc(x.overview)+'</p>':'')+
+    '<label class="label" for="pvrprof">Quality</label><select id="pvrprof" class="field">'+o.profiles.map(q=>'<option value="'+esc(q.id)+'"'+sel(q.id,p.profile)+'>'+esc(q.name)+'</option>').join('')+'</select>'+
+    (o.roots.length>1?'<label class="label" for="pvrroot">Save to</label><select id="pvrroot" class="field">'+o.roots.map(r=>'<option value="'+esc(r.path)+'"'+sel(r.path,p.root)+'>'+esc(r.path)+(r.free?' ('+fmtBytes(r.free)+' free)':'')+'</option>').join('')+'</select>':'<p class="hint" style="margin:0 2px 10px">Saves to '+esc(o.roots[0].path)+'</p>')+
+    (app==='sonarr'?'<label class="label" for="pvrmon">Get</label><select id="pvrmon" class="field">'+Object.entries(mons).map(([k,v])=>'<option value="'+esc(k)+'"'+sel(k,p.monitor||'future')+'>'+esc(v)+'</option>').join('')+'</select>':'')+
+    '<label class="chk"><input type="checkbox" id="pvrsearch"'+(p.search===false?'':' checked')+'> <span>'+(app==='radarr'?'Look for it now':'Look for the episodes now')+'<small>Checks your indexers once. Otherwise '+name+' waits for new releases.</small></span></label>'+
+    '<button class="btn full" id="pvrgo">Add to '+name+'</button></div>';
+  hydrateArt(panel);
+}
+async function pvrAdd(){
+  const x=pvrAdding;if(!x)return;const b=$('pvrgo');b.disabled=true;b.textContent='Adding…';
+  const body={app:x.app,id:x.ext_id,profile:+$('pvrprof').value,root:$('pvrroot')?$('pvrroot').value:'',monitor:$('pvrmon')?$('pvrmon').value:'future',search:$('pvrsearch').checked};
+  const all=pvrPrefs();all[x.app]={profile:body.profile,root:body.root,monitor:body.monitor,search:body.search};LS.set('nzb_mobile_pvr',JSON.stringify(all));
+  try{const r=await api('/api/arr/add',body);r.title=r.title||x.title;closeSheet();x.in_library=true;
+    toast(r.already?r.title+' is already in '+(x.app==='radarr'?'Radarr':'Sonarr')+'.':'Added '+r.title+(r.searching?'. Looking for it on your indexers now.':'.'));
+    pvrUp=null;homeUpKey='';renderPvr();loadPvrUp(true)}
+  catch(e){toast(e.message,true);b.disabled=false;b.textContent='Try again'}
+}
+
 // ---------- Pull down to refresh ----------
 function refreshActive(){
-  const f={home:()=>{drivesAt=0;usageAt=0;arrivedKey='';refreshHome()},queue:()=>refreshQueue(),history:()=>refreshHistory(),kodi:()=>refreshKodi(),
-    jellyfin:()=>{jfMissing=jfUp=jfResults=null;refreshJellyfin()},drives:()=>refreshDrives(true)}[activeTab];
+  const f={home:()=>{drivesAt=0;usageAt=0;arrivedKey='';homeUpKey='';refreshHome()},queue:()=>refreshQueue(),history:()=>refreshHistory(),kodi:()=>refreshKodi(),
+    jellyfin:()=>{jfMissing=jfUp=jfResults=null;refreshJellyfin()},drives:()=>refreshDrives(true),pvr:()=>{pvrResults=null;refreshPvr(true)}}[activeTab];
   if(f){f();return true}return false;
 }
 function setupPullToRefresh(){
@@ -5754,6 +6200,11 @@ function bind(){
   $('kodysendonly').addEventListener('click',()=>kodiType(false));
   $('kodytext').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();kodiType(true)}});
   $('jfscan').addEventListener('click',jfScan);
+  $('pvr').addEventListener('click',e=>{
+    const k=e.target.closest('[data-pvrkind]');if(k&&k.dataset.pvrkind!==pvrKind){pvrKind=k.dataset.pvrkind;pvrResults=null;return renderPvr()}
+    const a=e.target.closest('[data-pvradd]');if(a)return openPvrAdd(a.dataset.pvradd);
+  });
+  $('pvr').addEventListener('keydown',e=>{if(e.target.id==='pvrq'&&e.key==='Enter'){e.preventDefault();pvrQuery=e.target.value.trim();pvrResults=null;e.target.blur();pvrList()}});
   $('jellyfin').addEventListener('click',e=>{
     const a=e.target.closest('[data-jact]');if(a)return jfAction(a.dataset.sid,a.dataset.jact);
     const m=e.target.closest('[data-jmode]');if(m){jfMode=jfMode===m.dataset.jmode?'':m.dataset.jmode;return renderJellyfin()}
@@ -5782,6 +6233,7 @@ function bind(){
   document.addEventListener('click',e=>{const b=e.target.closest('[data-tvsearch]');if(!b)return;if(e.target.closest('#sheet'))closeSheet();goSearch(b.dataset.tvsearch,{category:'5000'})});
   $('sheet').addEventListener('click',e=>{
     if(e.target===$('sheet')||e.target.closest('[data-close]'))return closeSheet();
+    if(e.target.closest('#pvrgo'))return pvrAdd();
     const v=e.target.closest('[data-view]');if(v&&v.dataset.view)return openViewer(v.dataset.view);
     const p=e.target.closest('[data-dplay]');if(p){playMovie(p.dataset.dplay,p.dataset.resume==='1');closeSheet();return}
     if(e.target.closest('[data-better]')&&detailMovie){
@@ -6043,6 +6495,8 @@ class MobileHandler(BaseHTTPRequestHandler):
             self.send_json(200, self._drives_view())
         elif path == "/api/drives/io":
             self.send_json(200, {"io": drive_activity()})
+        elif path.startswith("/api/arr"):
+            self._get_arr(path)
         elif path.startswith("/api/jellyfin"):
             self._get_jellyfin(path)
         elif path == "/api/saved":
@@ -6189,6 +6643,12 @@ class MobileHandler(BaseHTTPRequestHandler):
             if not send_notification("NZB Command Center", "Test alert from your phone app — alerts are working.", tags=("bell",)):
                 raise ValueError("Save an ntfy topic URL first.")
             self.send_json(200, {"ok": True})
+        elif path == "/api/arr/add":
+            if self._limited(ADD_LIMITER, "add"):
+                return
+            self.send_json(200, arr_add(str(body.get("app") or ""), to_int(body.get("id")), to_int(body.get("profile")),
+                                        str(body.get("root") or "")[:500], bool(body.get("search", True)),
+                                        str(body.get("monitor") or "future")))
         elif path.startswith("/api/jellyfin/"):
             self._post_jellyfin(path, body)
         elif path == "/api/drives/check":
@@ -6227,6 +6687,31 @@ class MobileHandler(BaseHTTPRequestHandler):
             sab_request("config", {"name": "speedlimit", "value": "0" if mbps == 0 else f"{int(round(mbps * 1024))}K"})
             log.info("speed limit %s MB/s ip=%s", mbps, self.ip)
             self.send_json(200, {"ok": True})
+        else:
+            self.send_json(404, {"error": "Not found."})
+
+    def _get_arr(self, path: str) -> None:
+        qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        arg = lambda k: qs.get(k, [""])[0]
+        if path == "/api/arr":
+            if arg("fresh") == "1":
+                arr_clear_cache()
+            self.send_json(200, arr_overview())
+        elif path == "/api/arr/upcoming":
+            self.send_json(200, {"items": arr_upcoming(force=arg("fresh") == "1")})
+        elif path == "/api/arr/lookup":
+            if self._limited(SEARCH_LIMITER, "search"):
+                return
+            self.send_json(200, {"items": arr_lookup(arg("app"), arg("q"))})
+        elif path == "/api/arr/options":
+            self.send_json(200, arr_options(arg("app")))
+        elif path == "/api/arr/art":
+            try:
+                raw, ctype = arr_art(arg("ref"))
+            except (UpstreamError, ConfigError, ValueError):
+                self.send_json(404, {"error": "No picture."})
+                return
+            self._send(200, raw, ctype, {"Cache-Control": "private, max-age=86400"})
         else:
             self.send_json(404, {"error": "Not found."})
 
@@ -6311,8 +6796,9 @@ class MobileHandler(BaseHTTPRequestHandler):
         out: dict = {"sab_ok": True}
         # Kodi is asked in parallel with SABnzbd, so a slow or switched-off Kodi doesn't add
         # its timeout on top of SABnzbd's.
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             kodi_future = pool.submit(self._kodi_brief)
+            up_future = pool.submit(home_upcoming)
             jf_future = pool.submit(home_jellyfin_sessions)
             arrived_future = pool.submit(home_arrived)
             self._home_sab(out)
@@ -6322,6 +6808,7 @@ class MobileHandler(BaseHTTPRequestHandler):
                 out["kodi"] = {"configured": False}
             out["jellyfin"] = jf_future.result()
             out["arrived"] = arrived_future.result()
+            out["upcoming"] = up_future.result()
         out["saved_new"] = sum(len(x.get("new") or []) for x in load_settings()["saved_searches"])
         out["tv_ready"] = tv_configured()
         out["version"] = VERSION
