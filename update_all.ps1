@@ -1,0 +1,163 @@
+<#
+  NZB Command Center - update everything.
+
+  Keep this file in your NZB Command Center folder and right-click it > Run with PowerShell.
+  It:
+    1. downloads the newest program files from GitHub (main) into a temporary folder and checks them,
+    2. asks you to close the desktop apps if they're open,
+    3. stops the phone server,
+    4. replaces only the files that changed; each old copy goes to backup\<date-time>\,
+    5. starts the phone server again (through the startup task if there is one),
+    6. lists what changed.
+  Your settings and data (*.json, mobile_access_key.txt, logs, caches) are never touched.
+  If a download or check fails, nothing is changed.
+  To undo: copy the files from the newest backup\<date-time>\ folder back.
+#>
+param([switch]$Elevated)
+
+$Repo = "F111ds/NZB-CC"; $Branch = "main"
+$TaskName = "NZB Mobile Server"
+
+# Only administrator can stop/start a phone server that runs as administrator (setup_startup.ps1).
+$hasTask = [bool](Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($hasTask -and -not $isAdmin -and $PSCommandPath) {
+    if ($Elevated) { Write-Host "Administrator rights were not granted." -ForegroundColor Red; Read-Host "Press Enter to close"; exit 1 }
+    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Elevated"
+    exit
+}
+
+& {
+$ErrorActionPreference = "Stop"
+function Say($t, $c = "Gray") { Write-Host $t -ForegroundColor $c }
+# Programs run with 'Continue': under 'Stop', Windows PowerShell 5.1 turns a stderr line into a fatal error.
+function Works($p) { if (-not $p) { return $false }; $ErrorActionPreference = 'Continue'; try { $o = & $p -c "print(42)" 2>$null; return ("$o".Trim() -eq "42") } catch { return $false } }
+function Same($a, $b) {  # same content, ignoring Windows/Unix line endings
+    if (-not (Test-Path $a) -or -not (Test-Path $b)) { return $false }
+    $x = [IO.File]::ReadAllBytes($a); $y = [IO.File]::ReadAllBytes($b)
+    if ($x.Length -eq $y.Length -and [Linq.Enumerable]::SequenceEqual($x, $y)) { return $true }
+    if ($a -match '\.(apk|png|ico|jar)$') { return $false }
+    return (([IO.File]::ReadAllText($a)) -replace "`r`n", "`n") -eq (([IO.File]::ReadAllText($b)) -replace "`r`n", "`n")
+}
+try {
+    # --- Folder ---
+    $Folder = $null
+    foreach ($f in @($PSScriptRoot, (Get-Location).Path)) { if ($f -and (Test-Path (Join-Path $f "nzb_manager_config.json"))) { $Folder = $f; break } }
+    if (-not $Folder) { $Folder = (Read-Host "Path to your NZB Command Center folder").Trim('"', ' ') }
+    if (-not (Test-Path (Join-Path $Folder "nzb_manager_config.json"))) { throw "No nzb_manager_config.json in $Folder." }
+    Say "NZB Command Center - update everything" Cyan
+    Say "Folder: $Folder"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    # --- Which files: the program files on GitHub (never tests, sources of the TV app, or settings) ---
+    $paths = $null
+    try {
+        $tree = Invoke-RestMethod "https://api.github.com/repos/$Repo/git/trees/${Branch}?recursive=1" -Headers @{ "User-Agent" = "nzbcc-updater" }
+        $paths = @($tree.tree | Where-Object { $_.type -eq "blob" } | ForEach-Object { $_.path })
+    } catch { Say "Couldn't read the file list from GitHub; using the built-in list." Yellow }
+    if (-not $paths) {
+        $paths = @("mobile_server.py", "nzb_command_center.py", "media_server.py", "media_inspector.py", "kodi_client.py",
+                   "system_command_center.py", "system_monitor.py", "app_icon.ico", "system_center_icon.ico", "README.md",
+                   "update_phone_app.ps1", "update_all.ps1", "setup_startup.ps1")
+    }
+    $wanted = @($paths | Where-Object {
+        ($_ -notmatch '/' -and $_ -match '\.(py|ps1|ico|md)$' -and $_ -ne 'CLAUDE.md') -or
+        ($_ -match '^tv-launcher/[^/]+\.(ps1|apk|md)$') -or ($_ -match '^tv-launcher/tools/[^/]+$')
+    })
+    # The TV tools only if you have the tv-launcher folder.
+    if (-not (Test-Path (Join-Path $Folder "tv-launcher"))) { $wanted = @($wanted | Where-Object { $_ -notmatch '^tv-launcher/' }) }
+
+    # --- 1. Download everything to a temporary folder ---
+    $stage = Join-Path $env:TEMP ("nzbcc-update-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    New-Item -ItemType Directory -Path $stage | Out-Null
+    Say "`nDownloading $($wanted.Count) files..."
+    foreach ($p in $wanted) {
+        $dest = Join-Path $stage ($p -replace '/', '\')
+        New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
+        try { Invoke-WebRequest "https://raw.githubusercontent.com/$Repo/$Branch/$p" -OutFile $dest -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache" } }
+        catch { throw "Download of $p failed ($($_.Exception.Message)). Nothing was changed." }
+        if ((Get-Item $dest).Length -eq 0) { throw "$p downloaded empty. Nothing was changed." }
+    }
+
+    # --- Check the Python files before touching anything ---
+    $python = $null
+    foreach ($c in "py", "python", "python3") { $cmd = Get-Command $c -ErrorAction SilentlyContinue; $p = if ($cmd) { $cmd.Source } else { $null }; if (Works $p) { $python = $p; break } }
+    $pyFiles = @($wanted | Where-Object { $_ -match '\.py$' })
+    if ($python) {
+        foreach ($p in $pyFiles) {
+            $ErrorActionPreference = 'Continue'
+            $out = (& $python -m py_compile (Join-Path $stage ($p -replace '/', '\')) 2>&1 | Out-String).Trim(); $code = $LASTEXITCODE
+            $ErrorActionPreference = 'Stop'
+            if ($code -ne 0) { throw "$p has an error, so nothing was changed:`n$out" }
+        }
+        Say "Checked $($pyFiles.Count) Python files: OK" Green
+    } else { Say "Couldn't run Python to check the files; skipping that check." Yellow }
+    if ((Get-Content (Join-Path $stage "mobile_server.py") -Raw) -notmatch 'class MobileHandler') { throw "The download doesn't look right (maybe a GitHub sign-in page). Nothing was changed." }
+
+    # --- What changed? ---
+    $changed = @(); $new = @()
+    foreach ($p in $wanted) {
+        $src = Join-Path $stage ($p -replace '/', '\'); $dst = Join-Path $Folder ($p -replace '/', '\')
+        if (-not (Test-Path $dst)) { $new += $p } elseif (-not (Same $src $dst)) { $changed += $p }
+    }
+    if (-not ($changed + $new)) { Say "`nEverything is already up to date. Nothing to do." Green; return }
+    Say "`nTo update: $($changed.Count) changed, $($new.Count) new"
+    ($changed + $new) | ForEach-Object { Say "  $_" }
+
+    # --- 2. Desktop apps must be closed (Windows keeps their files in use) ---
+    $deskRx = 'nzb_command_center\.py|system_command_center\.py'
+    while ($true) {
+        $desk = @(Get-CimInstance Win32_Process -Filter "Name LIKE 'python%' OR Name = 'py.exe'" | Where-Object { $_.CommandLine -match $deskRx })
+        if (-not $desk.Count) { break }
+        Say "`nPlease close NZB Command Center / System Command Center, then press Enter." Yellow
+        $null = Read-Host
+    }
+
+    # --- 3. Stop the phone server (remember how it ran) ---
+    $running = @(Get-CimInstance Win32_Process -Filter "Name LIKE 'python%' OR Name = 'py.exe'" | Where-Object { $_.CommandLine -match 'mobile_server\.py' })
+    $args2 = ""; $hidden = $false; $exe = $null
+    if ($running.Count) {
+        $exe = $running[0].ExecutablePath
+        $hidden = ($running | Where-Object { $_.Name -like 'pythonw*' }).Count -gt 0
+        if ($running[0].CommandLine -match 'mobile_server\.py"?\s*(.*)$') { $args2 = $Matches[1].Trim() }
+    }
+    if ($hasTask) { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
+    if ($running.Count) { $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep 2; Say "`nStopped the phone server." }
+
+    # --- 4. Back up and replace ---
+    $backup = Join-Path $Folder ("backup\" + (Get-Date -Format "yyyy-MM-dd_HHmmss"))
+    foreach ($p in $changed + $new) {
+        $src = Join-Path $stage ($p -replace '/', '\'); $dst = Join-Path $Folder ($p -replace '/', '\')
+        if (Test-Path $dst) {
+            $bk = Join-Path $backup ($p -replace '/', '\')
+            New-Item -ItemType Directory -Force -Path (Split-Path $bk) | Out-Null
+            Copy-Item $dst $bk -Force
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+        Copy-Item $src $dst -Force
+    }
+    Say "Updated $($changed.Count + $new.Count) files." Green
+    if ($changed.Count) { Say "Old copies: $backup" }
+    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+
+    # --- 5. Start the phone server again ---
+    if ($hasTask) {
+        Start-ScheduledTask -TaskName $TaskName
+        Say "Phone server started again (as administrator)." Green
+    } elseif ($running.Count) {
+        $run = if ($exe -and (Works (Join-Path (Split-Path $exe) "python.exe"))) { $exe } else { $python }
+        if ($hidden -and $python -and $run -eq $python) { $w = Join-Path (Split-Path $python) "pythonw.exe"; if (Test-Path $w) { $run = $w } }
+        if ($run) {
+            $al = "`"$(Join-Path $Folder 'mobile_server.py')`""; if ($args2) { $al += " $args2" }
+            Start-Process -FilePath $run -ArgumentList $al -WorkingDirectory $Folder
+            Say "Phone server started again." Green
+        } else { Say "Start the phone server the way you usually do." Yellow }
+    } else { Say "The phone server wasn't running; start it the way you usually do." Yellow }
+
+    $v = if ((Get-Content (Join-Path $Folder "mobile_server.py") -Raw) -match 'VERSION = "([\d.]+)"') { $Matches[1] } else { "?" }
+    Say "`nDone. Phone app version $v. Open the desktop apps again, and reopen the app on your phone." Cyan
+} catch {
+    Say "`n$($_.Exception.Message)" Red
+}
+}
+Read-Host "`nPress Enter to close"
