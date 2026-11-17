@@ -36,7 +36,7 @@ if (-not (Test-Path $py)) {
     & .\tools\venv\Scripts\pip.exe install -q -r tools\requirements.txt
     if ($LASTEXITCODE -ne 0) { throw 'Installing the TV tools failed (see above). Nothing was changed on the TV.' }
 }
-$probe = & $py -I tools\tv.py --probe 2>&1 | Out-String
+$ErrorActionPreference = 'Continue'; $probe = & $py -I tools\tv.py --probe 2>&1 | Out-String; $code = $LASTEXITCODE; $ErrorActionPreference = 'Stop'; $global:LASTEXITCODE = $code
 if ($LASTEXITCODE -ne 0) {
     Write-Host $probe.Trim()
     throw 'Could not reach the TV. Check its IP address and that Network debugging is on. Nothing was changed.'
@@ -59,7 +59,7 @@ foreach ($k in $apps.Keys) {
         # Overlay packages may refuse pm disable-user; turning the overlay off covers them.
         $cmd = "pm disable-user --user 0 $k 2>&1; cmd overlay disable $k 2>/dev/null; true"
     }
-    $out = (& $py -I tools\tv.py $cmd 2>&1 | Out-String).Trim()
+    $ErrorActionPreference = 'Continue'; $out = (& $py -I tools\tv.py $cmd 2>&1 | Out-String).Trim(); $code = $LASTEXITCODE; $ErrorActionPreference = 'Stop'; $global:LASTEXITCODE = $code
     if (-not $out) { $out = '(done)' }
     $line = "{0,-52} {1}" -f $k, ($out -replace '\s+', ' ')
     Write-Host $line

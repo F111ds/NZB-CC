@@ -71,7 +71,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.8.1"
+VERSION = "3.8.2"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -3619,9 +3619,9 @@ $r | ConvertTo-Json -Compress -Depth 4
 """
 
 DRIVE_IO_PS = r"""
-$o = @(Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk | Where-Object { $_.Name -ne '_Total' } | ForEach-Object {
+$o = @(Get-CimInstance Win32_PerfRawData_PerfDisk_PhysicalDisk | Where-Object { $_.Name -ne '_Total' } | ForEach-Object {
     @{ name = "$($_.Name)"; read = [double]$_.DiskReadBytesPersec; write = [double]$_.DiskWriteBytesPersec;
-       busy = [double]$_.PercentDiskTime; queue = [double]$_.CurrentDiskQueueLength } })
+       busy = [double]$_.PercentDiskTime; t = [double]$_.Timestamp_Sys100NS; f = [double]$_.Frequency_Sys100NS } })
 ConvertTo-Json -Compress -InputObject $o
 """
 
@@ -3807,34 +3807,53 @@ def _drive_details(disk: dict, info: dict) -> dict:
     }
 
 
-_io_state: dict = {"at": 0.0, "data": None}
+_io_state: dict = {"at": 0.0, "data": None, "prev": {}}
+_io_lock = threading.Lock()  # one PowerShell sample at a time, however many phones are polling
+
+
+def _io_rates(prev: dict, cur: dict) -> dict:
+    """Speeds from two raw samples of the same disk (Windows' raw counters only count up)."""
+    dt = cur["t"] - prev["t"]
+    if dt <= 0:
+        return {}
+    secs = dt / (cur.get("f") or 1e7)
+    return {"read": max(0.0, (cur["read"] - prev["read"]) / secs),
+            "write": max(0.0, (cur["write"] - prev["write"]) / secs),
+            # % Disk Time counts busy 100-ns ticks; can pass 100 with queued I/O, so cap it.
+            "busy": max(0.0, min(100.0, (cur["busy"] - prev["busy"]) * 100 / dt))}
 
 
 def drive_activity() -> dict:
-    """Live read/write speed and busy % per physical disk, keyed by disk number (Windows; cached 3 s)."""
+    """Live read/write speed and busy % per physical disk, keyed by disk number (Windows; cached 3 s).
+
+    Uses the raw counters and the difference from the previous sample: a fresh PowerShell asking
+    for the "formatted" per-second counters mostly gets 0, because Windows needs two readings."""
     if os.name != "nt":
         return {}
-    with _drive_lock:
+    with _io_lock:
         if _io_state["data"] is not None and time.time() - _io_state["at"] < 3:
             return _io_state["data"]
-    import subprocess
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    try:
-        proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", DRIVE_IO_PS],
-                              capture_output=True, text=True, timeout=15, creationflags=flags)
-        rows = _as_list(json.loads(proc.stdout or "[]"))
-    except Exception as exc:
-        log.warning("Drive activity check failed: %s", exc)
-        rows = []
-    out = {}
-    for row in rows:
-        num = str(row.get("name") or "").split(" ", 1)[0]  # e.g. "0 C:" -> "0"
-        if num.isdigit():
-            out[num] = {"read": to_float(row.get("read")), "write": to_float(row.get("write")),
-                        "busy": min(100.0, to_float(row.get("busy"))), "queue": to_float(row.get("queue"))}
-    with _drive_lock:
-        _io_state.update(at=time.time(), data=out)
-    return out
+        import subprocess
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", DRIVE_IO_PS],
+                                  capture_output=True, text=True, timeout=15, creationflags=flags)
+            rows = _as_list(json.loads(proc.stdout or "[]"))
+        except Exception as exc:
+            log.warning("Drive activity check failed: %s", exc)
+            rows = []
+        cur, out = {}, {}
+        for row in rows:
+            num = str(row.get("name") or "").split(" ", 1)[0]  # e.g. "0 C:" -> "0"
+            if num.isdigit():
+                cur[num] = {k: to_float(row.get(k)) for k in ("read", "write", "busy", "t", "f")}
+        prev = _io_state["prev"]
+        for num, sample in cur.items():
+            if num in prev and time.time() - prev[num]["at"] < 120:  # too old: a misleading average
+                out[num] = _io_rates(prev[num], sample)
+            sample["at"] = time.time()
+        _io_state.update(at=time.time(), data=out, prev=cur)
+        return out
 
 
 def drive_report(force: bool = False, with_rate: bool = True) -> dict:
@@ -3917,7 +3936,7 @@ def drive_report(force: bool = False, with_rate: bool = True) -> dict:
             "temp": round(temp) if temp else None, "temp_limit": limit,
             "hours": to_int(disk.get("hours")) or None,
             "wear": to_int(disk.get("wear")) if media == "SSD" and disk.get("wear") not in (None, "") else None,
-            "rpm": to_int(disk.get("spindle")) if media == "HDD" and to_int(disk.get("spindle")) > 1 else None,
+            "rpm": to_int(disk.get("spindle")) if media == "HDD" and 1 < to_int(disk.get("spindle")) < 30000 else None,  # 4294967295 = unknown
             "uses": uses, "days_left": days_left, "daily_bytes": rate if days_left is not None else None,
             "volumes": volumes, "details": _drive_details(disk, dinfo.get(disk_id, {})),
         })
@@ -3973,9 +3992,26 @@ def autostart_path() -> Path | None:
     return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / AUTOSTART_NAME
 
 
+STARTUP_TASK = "NZB Mobile Server"  # created by setup_startup.ps1: starts this server as administrator
+
+
+def startup_task_exists() -> bool:
+    """True if the Task Scheduler task from setup_startup.ps1 is there."""
+    if os.name != "nt":
+        return False
+    import subprocess
+    try:
+        return subprocess.run(["schtasks", "/Query", "/TN", STARTUP_TASK], capture_output=True, timeout=10,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def autostart_enabled() -> bool | None:
     path = autostart_path()
-    return None if path is None else path.exists()
+    if path is None:
+        return None
+    return path.exists() or startup_task_exists()
 
 
 def install_autostart(extra_args: list[str]) -> Path:
@@ -3983,6 +4019,9 @@ def install_autostart(extra_args: list[str]) -> Path:
     path = autostart_path()
     if path is None:
         raise ConfigError("Starting automatically is only available on Windows.")
+    if startup_task_exists():  # a second launcher would start a second server at login
+        raise ConfigError(f"It already starts at login as administrator (Task Scheduler task \"{STARTUP_TASK}\"). "
+                          "Nothing to do. To change that, run setup_startup.ps1 again or delete the task.")
     if getattr(sys, "frozen", False):
         cmd = [sys.executable]
     else:
@@ -4472,7 +4511,7 @@ function fillSearchCategories(keep){
 }
 function fillCategories(cats){sabCats=cats;const sel=$('sabcat'),keep=LS.get('nzb_mobile_cat');sel.innerHTML='<option value="">Auto (match)</option><option value="*">Default</option>'+cats.map(c=>'<option value="'+esc(c)+'">'+esc(c)+'</option>').join('');if(keep==='*'||cats.includes(keep))sel.value=keep}
 
-function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi','drives','jellyfin'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':t;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi();if(t==='drives'){refreshDrives();refreshDriveIO()}if(t==='jellyfin')refreshJellyfin()}
+function showTab(t){activeTab=t;for(const n of ['home','search','queue','history','kodi','drives','jellyfin'])$(n).classList.toggle('hidden',n!==t);const tab=t==='history'?'queue':t;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));updateBatchButton();window.scrollTo(0,0);if(t==='home')refreshHome();if(t==='queue')refreshQueue();if(t==='history')refreshHistory();if(t==='kodi')refreshKodi();if(t==='drives'){refreshDrives();refreshDriveIO();setTimeout(()=>{if(activeTab==='drives')refreshDriveIO()},3500)}if(t==='jellyfin')refreshJellyfin()}
 
 function savePrefs(){LS.set('nzb_mobile_prefs',JSON.stringify({sort:$('sort').value,minsize:$('minsize').value,maxsize:$('maxsize').value,mingrabs:$('mingrabs').value,indexer:$('indexer').value,prio:$('prio').value,category:$('category').value}));LS.set('nzb_mobile_cat',$('sabcat').value)}
 function loadPrefs(){try{const p=JSON.parse(LS.get('nzb_mobile_prefs','{}'));if(p.sort)$('sort').value=p.sort;if(p.prio!==undefined)$('prio').value=p.prio;if(p.indexer&&[...$('indexer').options].some(o=>o.value===p.indexer))$('indexer').value=p.indexer;['minsize','maxsize','mingrabs'].forEach(k=>{if(p[k]!==undefined)$(k).value=p[k]})}catch{}}
@@ -6158,8 +6197,15 @@ def main(argv=None) -> None:
     if args.install_autostart or args.remove_autostart:
         if args.remove_autostart:
             print("Removed: the server will no longer start at login." if remove_autostart() else "It wasn't set to start at login.")
+            if startup_task_exists():
+                print(f"Note: the Task Scheduler task \"{STARTUP_TASK}\" still starts it as administrator. "
+                      "Delete it in Task Scheduler to stop that too.")
         else:
-            path = install_autostart(_autostart_args(args))
+            try:
+                path = install_autostart(_autostart_args(args))
+            except ConfigError as exc:
+                print(exc)
+                return
             print(f"Done: the server will start hidden when you log in.\nLauncher: {path}\n"
                   f"Your access code stays in {ACCESS_KEY_FILE.name}; the log is {LOG_FILE.name}.")
         return

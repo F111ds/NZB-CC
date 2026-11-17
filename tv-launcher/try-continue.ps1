@@ -32,10 +32,10 @@ if (-not (Test-Path $py)) {
     & .\tools\venv\Scripts\pip.exe install -q -r tools\requirements.txt
     if ($LASTEXITCODE -ne 0) { throw 'Installing the TV tools failed (see above). Nothing was changed on the TV.' }
 }
-function Tv([string]$cmd) { return ((& $py -I tools\tv.py $cmd 2>&1) | Out-String) }
+function Tv([string]$cmd) { $ErrorActionPreference = 'Continue'; return ((& $py -I tools\tv.py $cmd 2>&1) | Out-String) }
 
 Step "Connecting to the TV at $TvHost"
-$probe = & $py -I tools\tv.py --probe 2>&1 | Out-String
+$ErrorActionPreference = 'Continue'; $probe = & $py -I tools\tv.py --probe 2>&1 | Out-String; $code = $LASTEXITCODE; $ErrorActionPreference = 'Stop'; $global:LASTEXITCODE = $code
 Write-Host $probe.Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Could not reach the TV. Check its IP address and that Network debugging is on. Nothing was changed.' }
 

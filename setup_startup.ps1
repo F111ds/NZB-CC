@@ -11,13 +11,15 @@
     3. Checks both answer, and prints a summary.
   Safe to run again. To undo the phone part: Task Scheduler > delete "NZB Mobile Server".
 #>
-param([switch]$Elevated)
+param([switch]$Elevated, [string]$ForUser)
 
 # --- Ask for administrator rights (re-runs this script elevated) ---
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     if ($Elevated) { Write-Host "Administrator rights were not granted." -ForegroundColor Red; Read-Host "Press Enter to close"; exit 1 }
-    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Elevated"
+    # Pass on who is running this: if the prompt is answered with a different (administrator)
+    # account, the task must still be for this user, not for that account.
+    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Elevated -ForUser `"$env:USERDOMAIN\$env:USERNAME`""
     exit
 }
 
@@ -25,7 +27,9 @@ if (-not $isAdmin) {
 $ErrorActionPreference = "Stop"
 $TaskName = "NZB Mobile Server"
 function Say($t, $c = "Gray") { Write-Host $t -ForegroundColor $c }
-function Works($p) { if (-not $p) { return $false }; try { $o = & $p -c "print(42)" 2>$null; return ("$o".Trim() -eq "42") } catch { return $false } }
+# Programs are run with 'Continue': under 'Stop', Windows PowerShell 5.1 turns any line a program writes
+# to stderr into a fatal error before its exit code can be checked.
+function Works($p) { if (-not $p) { return $false }; $ErrorActionPreference = 'Continue'; try { $o = & $p -c "print(42)" 2>$null; return ("$o".Trim() -eq "42") } catch { return $false } }
 function Up($url) { try { $null = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 5; return $true } catch { return [bool]$_.Exception.Response } }
 $summary = @()
 try {
@@ -42,7 +46,8 @@ try {
     $running = @(Get-CimInstance Win32_Process -Filter "Name LIKE 'python%' OR Name = 'py.exe'" | Where-Object { $_.CommandLine -match 'mobile_server\.py' })
     $extra = ""
     if ($running.Count -and $running[0].CommandLine -match 'mobile_server\.py"?\s*(.*)$') { $extra = $Matches[1].Trim() }
-    $port = if ($extra -match '--port\s+(\d+)') { $Matches[1] } else { "8765" }
+    $port = if ($extra -match '--port\s+(\d+)') { $Matches[1] } elseif ($env:NZB_MOBILE_PORT) { $env:NZB_MOBILE_PORT } else { "8765" }
+    $probeHost = if ($extra -match '--host\s+(\S+)' -and $Matches[1] -notin @('0.0.0.0', '::')) { $Matches[1] } else { "127.0.0.1" }
 
     # A windowless Python that actually runs (the Microsoft Store one only starts by its command name).
     $python = $null
@@ -56,13 +61,9 @@ try {
     if (-not (Test-Path $pyw)) { $wc = Get-Command $twin -ErrorAction SilentlyContinue; $pyw = if ($wc) { $wc.Source } else { $python } }
     Say "Python: $pyw"
 
-    # Stop what's running now and remove the old Startup-folder launcher.
-    if ($running.Count) { $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep 2; Say "Stopped the running phone server." }
-    $vbs = Join-Path ([Environment]::GetFolderPath("Startup")) "NZB Mobile Server.vbs"
-    if (Test-Path $vbs) { Remove-Item $vbs -Force; Say "Removed the old Startup-folder launcher." }
-
     # The task: at logon of this user, highest privileges, hidden, restarted if it crashes.
-    $user = "$env:USERDOMAIN\$env:USERNAME"
+    $user = if ($ForUser) { $ForUser } else { "$env:USERDOMAIN\$env:USERNAME" }
+    if ($user -ne "$env:USERDOMAIN\$env:USERNAME") { Say "Setting this up for $user (the administrator prompt was answered with another account)." Yellow }
     $argLine = ("`"$Script`" " + $extra).Trim()
     $action = New-ScheduledTaskAction -Execute $pyw -Argument $argLine -WorkingDirectory $Folder
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
@@ -74,8 +75,14 @@ try {
         -Description "Starts NZB Command Center's phone server (mobile_server.py) as administrator when $env:USERNAME logs in." -Force | Out-Null
     Say "Task '$TaskName' created: starts at logon, as administrator, hidden." Green
 
+    # Only now that the task exists: stop what's running and remove the old Startup-folder launcher.
+    if ($running.Count) { $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep 2; Say "Stopped the running phone server." }
+    $vbs = Join-Path ([Environment]::GetFolderPath("Startup")) "NZB Mobile Server.vbs"
+    if (Test-Path $vbs) { Remove-Item $vbs -Force; Say "Removed the old Startup-folder launcher." }
+    elseif ($ForUser -and $user -ne "$env:USERDOMAIN\$env:USERNAME") { Say "If $user has 'NZB Mobile Server.vbs' in their Startup folder, delete it so it doesn't start twice." Yellow }
+
     Start-ScheduledTask -TaskName $TaskName
-    $ok = $false; foreach ($i in 1..15) { Start-Sleep 1; if (Up "http://127.0.0.1:$port/") { $ok = $true; break } }
+    $ok = $false; foreach ($i in 1..15) { Start-Sleep 1; if (Up "http://${probeHost}:$port/") { $ok = $true; break } }
     if ($ok) { Say "Phone server is running (port $port), as administrator." Green; $summary += "Phone server: starts at logon as administrator - running now" }
     else { Say "The task started, but the phone server isn't answering on port $port yet. Check mobile_server.log in $Folder." Yellow; $summary += "Phone server: task created, but not answering yet - see mobile_server.log" }
 
@@ -101,12 +108,23 @@ try {
             $summary += "Jellyfin: not found on this PC - is it installed somewhere else?"
         } else {
             Say "Installed as a program: $exe"
-            $runKeys = @("HKCU:\Software\Microsoft\Windows\CurrentVersion\Run", "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run",
-                         "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run")
-            $inRun = $runKeys | Where-Object { Test-Path $_ } | ForEach-Object { (Get-ItemProperty $_).PSObject.Properties | Where-Object { "$($_.Value)" -match 'jellyfin' } }
-            $inStartup = @([Environment]::GetFolderPath("Startup"), [Environment]::GetFolderPath("CommonStartup")) |
-                         ForEach-Object { Get-ChildItem $_ -ErrorAction SilentlyContinue } | Where-Object { $_.Name -match 'jellyfin' }
-            $inTask = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -match 'jellyfin' }
+            # Startup entries that Task Manager > Startup apps has switched off still exist, but are
+            # marked in StartupApproved (first byte odd = disabled): those don't count.
+            $approvedBase = "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved"
+            function Enabled($hive, $sub, $name) {
+                $k = "${hive}:\$approvedBase\$sub"
+                $v = (Get-ItemProperty $k -Name $name -ErrorAction SilentlyContinue).$name
+                return (-not $v) -or (($v[0] % 2) -eq 0)
+            }
+            $runKeys = @(@("HKCU", "Software\Microsoft\Windows\CurrentVersion\Run", "Run"), @("HKLM", "Software\Microsoft\Windows\CurrentVersion\Run", "Run"),
+                         @("HKLM", "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run", "Run32"))
+            $inRun = foreach ($rk in $runKeys) {
+                $props = Get-ItemProperty "$($rk[0]):\$($rk[1])" -ErrorAction SilentlyContinue
+                if ($props) { $props.PSObject.Properties | Where-Object { "$($_.Value)" -match 'jellyfin' -and (Enabled $rk[0] $rk[2] $_.Name) } }
+            }
+            $inStartup = @(@([Environment]::GetFolderPath("Startup"), "HKCU"), @([Environment]::GetFolderPath("CommonStartup"), "HKLM")) |
+                         ForEach-Object { $hive = $_[1]; Get-ChildItem $_[0] -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'jellyfin' -and (Enabled $hive "StartupFolder" $_.Name) } }
+            $inTask = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -match 'jellyfin' -and $_.State -ne 'Disabled' }
             if ($inRun -or $inStartup -or $inTask) {
                 Say "It's already set to start when you log in." Green
                 $summary += "Jellyfin: program, already starts at logon"
@@ -119,7 +137,12 @@ try {
                 Say "It wasn't set to start with Windows: added task 'Jellyfin Server (at logon)'." Green
                 $summary += "Jellyfin: program - now starts at logon (task 'Jellyfin Server (at logon)')"
             }
-            if (-not (Get-Process -Name "Jellyfin*", "jellyfin" -ErrorAction SilentlyContinue)) { Start-Process $exe -WorkingDirectory (Split-Path $exe); Say "Started Jellyfin." Green }
+            if (-not (Get-Process -Name "Jellyfin*", "jellyfin" -ErrorAction SilentlyContinue)) {
+                # Start it as the normal user, not from this administrator window: a media server
+                # shouldn't run with admin rights (explorer.exe always opens things un-elevated).
+                Start-Process explorer.exe -ArgumentList "`"$exe`""
+                Say "Started Jellyfin." Green
+            }
         }
     }
     $jfUp = $false; foreach ($i in 1..20) { if (Up "http://127.0.0.1:8096/System/Info/Public") { $jfUp = $true; break }; Start-Sleep 1 }

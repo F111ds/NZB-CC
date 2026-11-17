@@ -28,7 +28,9 @@ if ($hasTask -and -not $isAdmin -and $PSCommandPath) {
 $ErrorActionPreference = "Stop"
 $Repo = "F111ds/NZB-CC"; $Branch = "main"
 function Say($t, $c = "Gray") { Write-Host $t -ForegroundColor $c }
-function Works($p) { if (-not $p) { return $false }; try { $o = & $p -c "print(42)" 2>$null; return ("$o".Trim() -eq "42") } catch { return $false } }
+# Programs are run with 'Continue': under 'Stop', Windows PowerShell 5.1 turns any line a program writes
+# to stderr into a fatal error before its exit code can be checked.
+function Works($p) { if (-not $p) { return $false }; $ErrorActionPreference = 'Continue'; try { $o = & $p -c "print(42)" 2>$null; return ("$o".Trim() -eq "42") } catch { return $false } }
 try {
     # --- Find the NZB Command Center folder: this script's folder, else the current one, else ask ---
     $Folder = $null
@@ -77,8 +79,10 @@ try {
     foreach ($r in $running) { if ($r.ExecutablePath) { $cands += (Join-Path (Split-Path $r.ExecutablePath) "python.exe") } }
     foreach ($c in $cands) { $cmd = Get-Command $c -ErrorAction SilentlyContinue; $p = if ($cmd) { $cmd.Source } else { $null }; if (Works $p) { $python = $p; break } }
     if ($python) {
-        $out = & $python -m py_compile $Temp 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "The new file has an error, so nothing was changed: $out" }
+        $ErrorActionPreference = 'Continue'
+        $out = (& $python -m py_compile $Temp 2>&1 | Out-String).Trim(); $code = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($code -ne 0) { throw "The new file has an error, so nothing was changed:`n$out" }
     } else { Say "Couldn't run Python to test the file; skipping that check." Yellow }
 
     # --- 2. Stop, 3. back up, 4. replace ---

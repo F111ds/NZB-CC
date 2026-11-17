@@ -35,12 +35,12 @@ if (-not (Test-Path $py)) {
     & .\tools\venv\Scripts\pip.exe install -q -r tools\requirements.txt
     if ($LASTEXITCODE -ne 0) { throw 'Installing the TV tools failed (see above). Nothing was changed on the TV.' }
 }
-$probe = & $py -I tools\tv.py --probe 2>&1 | Out-String
+$ErrorActionPreference = 'Continue'; $probe = & $py -I tools\tv.py --probe 2>&1 | Out-String; $code = $LASTEXITCODE; $ErrorActionPreference = 'Stop'; $global:LASTEXITCODE = $code
 if ($LASTEXITCODE -ne 0) {
     Write-Host $probe.Trim()
     throw 'Could not reach the TV. Check its IP address and that Network debugging is on. Nothing was changed.'
 }
-function Tv([string]$cmd) { return ((& $py -I tools\tv.py $cmd 2>&1 | Out-String).Trim()) }
+function Tv([string]$cmd) { $ErrorActionPreference = 'Continue'; return ((& $py -I tools\tv.py $cmd 2>&1 | Out-String).Trim()) }
 
 # ---- undo ---------------------------------------------------------------------------------------------
 if ($Undo) {
@@ -83,11 +83,13 @@ $keep = @('com.gathin.tvhome', 'org.xbmc.kodi', 'com.netflix.ninja', 'com.amazon
           'com.google.android.apps.mediashell', 'com.google.android.katniss', 'com.google.android.gms')
 
 Write-Host 'Reading the apps on the TV (nothing is changed yet)...' -ForegroundColor Cyan
+$ErrorActionPreference = 'Continue'
 $listing = @(
     'cmd package query-activities -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER',
     'echo ==THIRD==',
     'pm list packages -3'
 ) | & $py -I tools\tv.py --batch 2>&1 | Out-String
+$code = $LASTEXITCODE; $ErrorActionPreference = 'Stop'; $global:LASTEXITCODE = $code
 $parts = $listing -split '==THIRD=='
 $launchable = [regex]::Matches($parts[0], 'packageName=([A-Za-z0-9_.]+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
 $installed = @{}

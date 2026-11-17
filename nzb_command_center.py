@@ -2273,25 +2273,31 @@ class SettingsDialog(ctk.CTkToplevel):
             self.test_status_lbl.configure(text=msg, text_color=color)
 
     def _run_test_bg(self, label: str, fn) -> None:
+        """Runs a connection test on a worker. Only the main thread touches the dialog: the worker
+        hands its result over through a queue (calling Tk from a worker can crash or hang)."""
         self._set_test_status(f"Testing {label}...", COLORS["sky"])
+        results: queue.Queue = queue.Queue()
 
         def worker():
             try:
-                ok_msg = fn()
-                try:
-                    if self.winfo_exists():
-                        self.after(0, lambda m=ok_msg: self._set_test_status(m, COLORS["green"]))
-                except Exception:
-                    pass
+                results.put((fn(), COLORS["green"]))
             except Exception as exc:
-                err_msg = _format_http_error(exc)
-                try:
-                    if self.winfo_exists():
-                        self.after(0, lambda m=err_msg: self._set_test_status(f"{label} failed: {m}", COLORS["red"]))
-                except Exception:
-                    pass
+                results.put((f"{label} failed: {_format_http_error(exc)}", COLORS["red"]))
+
+        def poll():
+            try:
+                if not self.winfo_exists():
+                    return  # dialog closed meanwhile
+                msg, color = results.get_nowait()
+            except queue.Empty:
+                self.after(150, poll)
+                return
+            except Exception:
+                return
+            self._set_test_status(msg, color)
 
         threading.Thread(target=worker, daemon=True).start()
+        self.after(150, poll)
 
     def _test_sab_connection(self) -> None:
         url = self.sab_url.get().strip()
@@ -2664,6 +2670,7 @@ class NzbManagerApp(ctk.CTk):
         self._watch_after_id = None
         self._watch_dir: Path | None = None
         self._watch_seen: dict[str, float] = {}   # path -> mtime already handled (or present at start)
+        self._watch_retry_at: dict[str, float] = {}  # path -> when to retry a send that failed (SABnzbd down)
         self._watch_in_flight: set[str] = set()
         self._search_ctx: dict | None = None  # query/offsets/modes of the last search, for "Load more"
         self._recent_pos = -1
@@ -4510,6 +4517,8 @@ class NzbManagerApp(ctk.CTk):
             for path, (mtime, size) in self._list_watch_nzbs().items():
                 if path in self._watch_in_flight or self._watch_seen.get(path) == mtime:
                     continue
+                if time.monotonic() < self._watch_retry_at.get(path, 0):
+                    continue
                 if size <= 0 or now - mtime < self.WATCH_SETTLE_S:
                     continue  # still being written; check again next tick
                 self._watch_seen[path] = mtime
@@ -4537,6 +4546,7 @@ class NzbManagerApp(ctk.CTk):
 
         def ok(note):
             self._watch_in_flight.discard(str(path))
+            self._watch_retry_at.pop(str(path), None)
             self._increment_daily_nzb_count()
             self._set_status(f"Auto-sent {path.name} to SABnzbd [cat={cat}]{note}.", log=True, level="OK")
             self._scan_local_folder()
@@ -4544,7 +4554,13 @@ class NzbManagerApp(ctk.CTk):
 
         def err(exc):
             self._watch_in_flight.discard(str(path))
-            self._set_status(f"Auto-send failed for {path.name}: {exc}", log=True, level="ERROR")
+            if "not a valid NZB" in str(exc):
+                self._set_status(f"Auto-send failed for {path.name}: {exc}", log=True, level="ERROR")
+                return  # a bad file stays skipped until it changes
+            # SABnzbd down or busy: forget it was seen, so it is sent again in a minute.
+            self._watch_seen.pop(str(path), None)
+            self._watch_retry_at[str(path)] = time.monotonic() + 60
+            self._set_status(f"Auto-send failed for {path.name}: {exc}. Retrying in a minute.", log=True, level="ERROR")
 
         self._set_status(f"Auto-sending {path.name} to SABnzbd...")
         self._run_bg(task, on_ok=ok, on_err=err)

@@ -31,6 +31,8 @@ system_center_config.json
 
 # TV home row: the phone server's saved row and posters
 tv_recent.json
+tv_watched.json
+tv_photos_folder.txt
 tv_art/
 
 # TV launcher build output

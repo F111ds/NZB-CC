@@ -668,10 +668,12 @@ def probe_media_file(file_path: Path, ffprobe_exe: str, cache_entry: dict | None
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=25,
+            timeout=60,  # big files on a NAS or a disk that has to spin up can take a while
             creationflags=_CREATE_NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
+        # Slow is not broken: report it, but don't call the file corrupt (it isn't cached, so the
+        # next scan tries again).
         item = MediaItem(
             path=file_path,
             filename=file_path.name,
@@ -684,8 +686,8 @@ def probe_media_file(file_path: Path, ffprobe_exe: str, cache_entry: dict | None
             mtime_ns=mtime_ns,
             external_subtitles=ext_subs,
             probed=True,
-            is_corrupt=True,
-            error_reason="ffprobe timed out (>25s).",
+            is_corrupt=False,
+            error_reason="Not checked: ffprobe took longer than 60 s (slow disk or network share).",
         )
         return _apply_parsed_identity(item, parsed), None
     except Exception as exc:
@@ -701,8 +703,8 @@ def probe_media_file(file_path: Path, ffprobe_exe: str, cache_entry: dict | None
             mtime_ns=mtime_ns,
             external_subtitles=ext_subs,
             probed=True,
-            is_corrupt=True,
-            error_reason=f"ffprobe launch failed: {exc}",
+            is_corrupt=False,  # ffprobe couldn't run: says nothing about the file
+            error_reason=f"Not checked: ffprobe couldn't run ({exc}).",
         )
         return _apply_parsed_identity(item, parsed), None
 
@@ -1714,6 +1716,18 @@ class MediaInspectorPanel(ctk.CTkFrame):
         self._emit_status(f"Scanning {len(valid_roots)} media folder(s) in background...", log=True)
 
         def worker():
+            # Any unexpected error must still end the scan, or the UI stays on "Scanning" for good.
+            try:
+                scan()
+            except Exception as exc:
+                def failed(e=exc):
+                    if req_id == self._scan_seq and not self._shutting_down:
+                        self._set_scan_busy(False)
+                        self.scan_progress_lbl.configure(text="Scan failed")
+                        self._emit_status(f"Media scan failed: {e!r}", log=True, level="ERROR")
+                self._post_ui(failed)
+
+        def scan():
             _subtitle_files_in.cache_clear()  # pick up subtitle files added since the last scan
             discovered: list[Path] = []
             seen_paths: set[str] = set()

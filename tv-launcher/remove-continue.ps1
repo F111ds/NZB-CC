@@ -12,7 +12,7 @@ $main = 'com.gathin.tvhome'
 $cfg = "/sdcard/Android/data/$main/files/config.json"
 $py = '.\tools\venv\Scripts\python.exe'
 if (-not (Test-Path $py)) { throw 'The TV tools are not set up here (run try-continue.ps1 or install-on-tv.ps1 once).' }
-function Tv([string]$cmd) { return ((& $py -I tools\tv.py $cmd 2>&1) | Out-String) }
+function Tv([string]$cmd) { $ErrorActionPreference = 'Continue'; return ((& $py -I tools\tv.py $cmd 2>&1) | Out-String) }
 
 Write-Host (Tv 'pm uninstall com.gathin.tvhome.preview').Trim()
 Write-Host (Tv "if [ -f $cfg.before-continue ]; then cp $cfg.before-continue $cfg && rm $cfg.before-continue && echo 'settings restored'; else echo 'no saved settings (nothing to restore)'; fi").Trim()

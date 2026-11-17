@@ -1767,12 +1767,29 @@ def temp_folders() -> list[Path]:
     return out
 
 
+def _is_link_or_junction(path: str) -> bool:
+    """Symlinks, NTFS junctions and other reparse points: never walked into by the temp cleanup."""
+    try:
+        if os.path.islink(path) or (hasattr(os.path, "isjunction") and os.path.isjunction(path)):
+            return True
+        return bool(getattr(os.lstat(path), "st_file_attributes", 0) & 0x400)  # FILE_ATTRIBUTE_REPARSE_POINT
+    except OSError:
+        return True  # can't tell: leave it alone
+
+
 def clean_temp_files(dry_run: bool = True, min_age_hours: float = 24, folders: list[Path] | None = None) -> dict:
-    """Deletes (or, with dry_run, measures) temp files older than min_age_hours. Skips files in use."""
+    """Deletes (or, with dry_run, measures) temp files older than min_age_hours. Skips files in use.
+
+    Never follows symlinks or junctions: one inside Temp can point at real data elsewhere."""
     cutoff = time.time() - min_age_hours * 3600
     found = freed = count = failed = 0
     for root in folders if folders is not None else temp_folders():
-        for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+        if _is_link_or_junction(str(root)):
+            continue
+        visited: list[str] = []
+        for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+            dirnames[:] = [d for d in dirnames if not _is_link_or_junction(os.path.join(dirpath, d))]
+            visited.append(dirpath)
             for fn in filenames:
                 fp = os.path.join(dirpath, fn)
                 try:
@@ -1786,16 +1803,18 @@ def clean_temp_files(dry_run: bool = True, min_age_hours: float = 24, folders: l
                     count += 1
                     continue
                 try:
-                    os.remove(fp)
+                    os.remove(fp)  # a file symlink: removes the link, not its target
                     freed += st.st_size
                     count += 1
                 except OSError:
                     failed += 1
-            if not dry_run and dirpath != str(root):
-                try:
-                    os.rmdir(dirpath)  # only succeeds when empty
-                except OSError:
-                    pass
+        if not dry_run:
+            for dirpath in reversed(visited):  # deepest first
+                if dirpath != str(root):
+                    try:
+                        os.rmdir(dirpath)  # only succeeds when empty
+                    except OSError:
+                        pass
     return {"bytes": found if dry_run else freed, "files": count, "failed": failed}
 
 
@@ -1878,7 +1897,8 @@ def relaunch_as_admin() -> bool:
     if not IS_WINDOWS:
         return False
     script = os.path.abspath(sys.argv[0])
-    params = " ".join(f'"{a}"' for a in [script] + sys.argv[1:])
+    import subprocess
+    params = subprocess.list2cmdline([script] + sys.argv[1:])  # proper Windows quoting (trailing \\, quotes)
     exe = sys.executable
     if exe.lower().endswith("python.exe"):
         pyw = exe[:-10] + "pythonw.exe"
