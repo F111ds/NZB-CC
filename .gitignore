@@ -4,6 +4,8 @@ nzb_manager_config.json
 # Mobile companion pairing code, alert settings (ntfy token) and saved searches
 mobile_access_key.txt
 mobile_settings.json
+# AllRatesToday key for the TV's live exchange rate
+fx_api_key.txt
 # Half-written config/cache files
 *.tmp
 
@@ -26,3 +28,14 @@ screenshots/
 
 # System Command Center: per-machine settings and window position
 system_center_config.json
+
+# TV home row: the phone server's saved row and posters
+tv_recent.json
+tv_art/
+
+# TV launcher build output
+tv-launcher/launcher/.gradle/
+tv-launcher/launcher/build/
+tv-launcher/launcher/app/build/
+tv-launcher/launcher/local.properties
+tv-launcher/tools/venv/

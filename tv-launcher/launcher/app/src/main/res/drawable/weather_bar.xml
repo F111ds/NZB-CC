@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The weather panel's accent bar, in the race panel's place (WeatherNow). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FF3FB8FF" />
+    <corners android:radius="1.5dp" />
+</shape>
