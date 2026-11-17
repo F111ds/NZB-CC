@@ -31,6 +31,13 @@ MOVIES = [
 ]
 
 
+def token_of(headers):
+    """Like Jellyfin 10.11: only the MediaBrowser Authorization header counts (X-Emby-Token is ignored)."""
+    import re as _re
+    mt = _re.search(r'Token="([^"]*)"', headers.get("Authorization") or "")
+    return mt.group(1) if mt and (headers.get("Authorization") or "").startswith("MediaBrowser ") else None
+
+
 class FakeJf(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
@@ -39,16 +46,16 @@ class FakeJf(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("Content-Type", ctype); self.end_headers(); self.wfile.write(b)
 
     def do_POST(self):
-        calls.append(("POST", self.path, self.headers.get("X-Emby-Token")))
-        if self.headers.get("X-Emby-Token") != KEY:
+        calls.append(("POST", self.path, token_of(self.headers)))
+        if token_of(self.headers) != KEY:
             self.send_response(401); self.end_headers(); return
         self.send_response(204); self.end_headers()
 
     def do_GET(self):
         u = urllib.parse.urlsplit(self.path)
         qs = urllib.parse.parse_qs(u.query)
-        calls.append(("GET", self.path, self.headers.get("X-Emby-Token")))
-        if self.headers.get("X-Emby-Token") != KEY:
+        calls.append(("GET", self.path, token_of(self.headers)))
+        if token_of(self.headers) != KEY:
             self.send_response(401); self.end_headers(); self.wfile.write(b"bad key"); return
         p = u.path
         if p == "/System/Info":

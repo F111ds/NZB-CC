@@ -194,6 +194,12 @@ def _format_http_err(exc: Exception, server_name: str = "Server") -> str:
 # 1. JELLYFIN & PLEX API CLIENTS
 # ==============================================================================
 
+def jellyfin_auth_header(api_key: str, client: str = "NZB Command Center", device: str = "Desktop") -> str:
+    """The standard Jellyfin/Emby Authorization header carrying an API key."""
+    return (f'MediaBrowser Client="{client}", Device="{device}", DeviceId="nzbcc-{device.lower()}", '
+            f'Version="1.0", Token="{api_key}"')
+
+
 class JellyfinClient:
     def __init__(self, base_url: str, api_key: str):
         self.base_url = (base_url or "").strip().rstrip("/")
@@ -211,6 +217,9 @@ class JellyfinClient:
             url = f"{url}?{urllib.parse.urlencode(params)}"
 
         headers = {
+            # Jellyfin 10.11+ refuses the legacy X-Emby-Token header by default; the
+            # MediaBrowser Authorization header works on every version, so send both.
+            "Authorization": jellyfin_auth_header(self.api_key),
             "X-Emby-Token": self.api_key,
             "Accept": "application/json",
         }

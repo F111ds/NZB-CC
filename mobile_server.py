@@ -70,7 +70,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.7.2"
+VERSION = "3.7.3"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -2341,6 +2341,13 @@ def jellyfin_configured() -> bool:
     return bool(c["url"] and c["key"])
 
 
+def jf_auth_header(key: str) -> str:
+    """Jellyfin 10.11+ refuses the legacy X-Emby-Token header by default; this standard
+    Authorization header works on every version (both are sent)."""
+    return (f'MediaBrowser Client="NZB Command Center", Device="Phone server", DeviceId="nzbcc-mobile", '
+            f'Version="{VERSION}", Token="{key}"')
+
+
 def jf_request(path: str, params: dict | None = None, *, post: bool = False, timeout: float = 10,
                conf: dict | None = None, raw: bool = False, max_bytes: int = 20_000_000):
     c = conf or jellyfin_conf()
@@ -2348,7 +2355,8 @@ def jf_request(path: str, params: dict | None = None, *, post: bool = False, tim
         raise ConfigError("Jellyfin isn't connected yet.")
     url = c["url"] + path + ("?" + urllib.parse.urlencode(params) if params else "")
     body = http_fetch(url, timeout=timeout, max_bytes=max_bytes, data=b"" if post else None,
-                      headers={"X-Emby-Token": c["key"], "Accept": "application/json" if not raw else "*/*"})
+                      headers={"Authorization": jf_auth_header(c["key"]), "X-Emby-Token": c["key"],
+                               "Accept": "application/json" if not raw else "*/*"})
     if raw:
         return body
     if not body.strip():
