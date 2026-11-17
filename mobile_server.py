@@ -3895,6 +3895,8 @@ def main(argv=None) -> None:
     print()
     print(" Pairing link - open this on the phone once and it connects itself:")
     print(f" http://{local_ip}:{args.port}/#k={token}")
+    print(" Kodi home-screen icon - open this on the phone, then Add to Home Screen:")
+    print(f" http://{local_ip}:{args.port}/kodi#k={token}")
     print()
     if ALLOW_ANY_CLIENT:
         print(" WARNING: --allow-any-client is on; anyone who can reach this port can try the code.")
