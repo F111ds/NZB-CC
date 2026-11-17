@@ -15,6 +15,18 @@ param(
     [string]$PhotosFolder = ''
 )
 $ErrorActionPreference = 'Stop'
+# If setup_startup.ps1 made the phone server start as administrator, only administrator can stop
+# and restart it: ask for that (one Windows prompt) and run this script again elevated.
+$TaskName = 'NZB Mobile Server'
+$hasTask = [bool](Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($hasTask -and -not $isAdmin) {
+    $a = "-NoProfile -ExecutionPolicy Bypass -NoExit -File `"$PSCommandPath`" -TvHost $TvHost"
+    if ($PhotosFolder) { $a += " -PhotosFolder `"$PhotosFolder`"" }
+    Start-Process powershell.exe -Verb RunAs -ArgumentList $a
+    Write-Host 'Continuing in the administrator window that just opened.'
+    exit
+}
 Set-Location $PSScriptRoot
 $env:TV_HOST = $TvHost
 $parent = Split-Path $PSScriptRoot -Parent
@@ -22,12 +34,18 @@ function Step($n, $text) { Write-Host "`n#### $n. $text" -ForegroundColor Magent
 
 # ---- 1. phone server -------------------------------------------------------------------------------
 Step 1 'Restarting the phone server'
+if ($hasTask) { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
 Get-CimInstance Win32_Process -Filter "Name like 'python%'" |
     Where-Object { $_.CommandLine -like '*mobile_server.py*' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-$pyw = Join-Path $parent '.venv\Scripts\pythonw.exe'
-if (-not (Test-Path $pyw)) { $pyw = 'pythonw' }
-Start-Process $pyw -ArgumentList 'mobile_server.py' -WorkingDirectory $parent
+Start-Sleep -Seconds 2
+if ($hasTask) {
+    Start-ScheduledTask -TaskName $TaskName   # same way it starts at logon: hidden, as administrator
+} else {
+    $pyw = Join-Path $parent '.venv\Scripts\pythonw.exe'
+    if (-not (Test-Path $pyw)) { $pyw = 'pythonw' }
+    Start-Process $pyw -ArgumentList 'mobile_server.py' -WorkingDirectory $parent
+}
 $token = (Get-Content (Join-Path $parent 'mobile_access_key.txt') -Raw).Trim()
 $up = $false
 foreach ($i in 1..20) {

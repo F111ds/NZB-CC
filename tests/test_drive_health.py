@@ -65,6 +65,7 @@ m._drive_inventory = lambda: {
          "read_lat": 12, "smart": True, "sector": 512},
         {"id": "1", "name": "WDC WD20EFRX", "media": "3", "bus": "11", "size": 2e12, "health": "1",
          "temp": None, "hours": 21412, "spindle": 5400},
+        {"id": "2", "name": "USB HDD", "media": "3", "bus": "7", "size": 4e12, "health": "0", "spindle": 4294967295},
     ],
     "parts": [{"disk": "0", "letter": "/"}],
     "volumes": [{"letter": "/", "label": "System", "fs": "NTFS", "health": "Healthy"}],
@@ -90,7 +91,11 @@ assert x["style"] == "GPT" and x["boot"] and x["system"] and x["partitions"] == 
 assert x["read_errors"] == 0 and x["starts"] == 1200 and x["read_lat"] == 12 and x["smart"] and x["write_fixed"] is None
 assert ssd["volumes"][0]["label"] == "System" and ssd["volumes"][0]["fs"] == "NTFS" and ssd["volumes"][0]["total"] > 0
 assert hdd["details"]["smart"] is False and hdd["volumes"] == []
+assert by["USB HDD"]["rpm"] is None                                               # 4294967295 = Windows doesn't know
 assert m.drive_activity() == {}                                                   # not Windows: no live counters
+r0 = m._io_rates({"t": 0, "read": 0, "write": 0, "busy": 0, "f": 1e7}, {"t": 2e7, "read": 4e6, "write": 2e6, "busy": 5e6, "f": 1e7})
+assert r0 == {"read": 2e6, "write": 1e6, "busy": 25.0}, r0                        # 2 s apart: 2 MB/s, 1 MB/s, 25 % busy
+assert m._io_rates({"t": 5, "read": 0, "write": 0, "busy": 0}, {"t": 5, "read": 1, "write": 1, "busy": 1}) == {}
 
 # ---------- temperature history: one point per 10 min, 24 h kept, saved to disk ----------
 key = hdd["key"]
@@ -133,7 +138,7 @@ def api(path, body=None):
     except urllib.error.HTTPError as e: return e.code, json.loads(e.read())
 
 st, d = api("/api/drives")
-assert st == 200 and len(d["drives"]) == 2 and d["alerts"] == {"ready": False, "health": True, "hot": True, "low": True, "low_gb": 75}, d
+assert st == 200 and len(d["drives"]) == 3 and d["alerts"] == {"ready": False, "health": True, "hot": True, "low": True, "low_gb": 75}, d
 assert d["temp_alert"] == 55 and d["nvme_temp_alert"] == 70
 st, d = api("/api/drives/alerts", {"notify_drive_hot": False})
 assert st == 200 and d["alerts"]["hot"] is False and d["alerts"]["health"] is True
@@ -155,7 +160,7 @@ def boom():
     raise RuntimeError("PowerShell missing")
 m._drive_inventory = boom
 r2 = m.drive_report(force=True)
-assert len(r2["drives"]) == 2 and "Could not read drive health" in r2["problem"]
+assert len(r2["drives"]) == 3 and "Could not read drive health" in r2["problem"]
 
 # ---------- page wiring ----------
 page = m.PAGE

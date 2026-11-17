@@ -105,6 +105,8 @@ cfg = {"sab_url": f"127.0.0.1:{port(sab)}", "sab_api_key": "plainsabkey123", "ko
 (tmp / "nzb_manager_config.json").write_text(json.dumps(cfg))
 m.CONFIG_FILE = tmp / "nzb_manager_config.json"
 m.SETTINGS_FILE = tmp / "mobile_settings.json"
+# The background worker also saves the TV rows and drive history: keep those out of the project folder.
+m.TV_STATE_FILE, m.TV_WATCHED_FILE, m.DRIVE_HISTORY_FILE = tmp / "tv_recent.json", tmp / "tv_watched.json", tmp / "drive_history.json"
 m._cfg_state.update(mtime=None, data=None)
 m._token_bytes = b"testtoken"
 base = f"http://127.0.0.1:{port(app)}"
@@ -199,7 +201,10 @@ assert sum(d["done"] + d["failed"] for d in stats["days"][:-1]) == 0
 st, s = api("/api/settings"); assert st == 200 and s["ntfy_url"] == "" and s["notify_complete"]
 assert api("/api/settings/test", {})[0] == 400                                                 # nothing set up yet
 assert api("/api/settings", {"ntfy_url": "ftp://x/y", "saved_interval_hours": 6})[0] == 400
+_real_public = m.host_is_public   # answer "ntfy.sh is public" without needing internet DNS here
+m.host_is_public = lambda h: h == "ntfy.sh" or _real_public(h)
 assert api("/api/settings", {"ntfy_url": "http://ntfy.sh/topic", "saved_interval_hours": 6})[0] == 400  # public host needs https
+m.host_is_public = _real_public
 assert api("/api/settings", {"ntfy_url": "https://ntfy.sh/a?b=c", "saved_interval_hours": 6})[0] == 400
 assert api("/api/settings", {"ntfy_url": f"http://127.0.0.1:{port(ntfy)}/home-alerts", "saved_interval_hours": 7})[0] == 400
 st, s = api("/api/settings", {"ntfy_url": f"http://127.0.0.1:{port(ntfy)}/home-alerts", "ntfy_token": "tk_secret123",

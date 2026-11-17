@@ -48,13 +48,18 @@ if (-not (Test-Path $py)) {
     & .\tools\venv\Scripts\pip.exe install -q -r tools\requirements.txt
     if ($LASTEXITCODE -ne 0) { throw 'Installing the TV tools failed (see above). Nothing was changed on the TV.' }
 }
+# Windows PowerShell 5.1 + 'Stop' turns any stderr line from a program run with 2>&1 into a fatal
+# error, before the exit code can be checked. Run programs with 'Continue', then check the exit code.
 function Tv([string]$cmd) {
+    $ErrorActionPreference = 'Continue'
     $out = & $py -I tools\tv.py $cmd 2>&1
     return ($out | Out-String)
 }
 
 Step "Connecting to the TV at $TvHost"
+$ErrorActionPreference = 'Continue'
 $probe = & $py -I tools\tv.py --probe 2>&1 | Out-String
+$ErrorActionPreference = 'Stop'
 Write-Host $probe.Trim()
 if ($LASTEXITCODE -ne 0) {
     throw 'Could not reach the TV. Check its IP address, that Network debugging is on, and accept the prompt on the TV. Nothing was changed.'
@@ -99,8 +104,11 @@ Step 'Saving a copy of the launcher settings on the TV'
 New-Item -ItemType Directory -Force -Path backup | Out-Null
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $backup = "backup\config-$stamp.json"
+$ErrorActionPreference = 'Continue'
 & $py -I tools\tv.py --pull "$tvDir/config.json" $backup 2>&1 | Out-Null
-if ($LASTEXITCODE -eq 0 -and (Test-Path $backup)) {
+$pulled = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+if ($pulled -eq 0 -and (Test-Path $backup)) {
     Write-Host "Saved $backup"
     $cfgText = Get-Content $backup -Raw -Encoding UTF8
 } else {

@@ -24,7 +24,7 @@ if (-not (Test-Path $py)) {
 }
 
 Write-Host "Connecting to the TV at $TvHost (accept 'Allow USB debugging?' on the TV if it asks)..." -ForegroundColor Cyan
-$probe = & $py -I tools\tv.py --probe 2>&1 | Out-String
+$ErrorActionPreference = 'Continue'; $probe = & $py -I tools\tv.py --probe 2>&1 | Out-String; $code = $LASTEXITCODE; $ErrorActionPreference = 'Stop'; $global:LASTEXITCODE = $code
 if ($LASTEXITCODE -ne 0) {
     Write-Host $probe.Trim()
     throw 'Could not reach the TV. Check its IP address and that Network debugging is on. Nothing was changed.'
@@ -43,7 +43,7 @@ $commands = @(
     'echo "== Settings that may relate to ads, usage data or viewing data"; settings list global | grep -i -E "ad_|ads|usage|diagnos|analytic|samba|acr|interactive|promo|recommend" ; settings list secure | grep -i -E "ad_|ads|usage|diagnos|analytic|samba|acr|interactive|promo|recommend"; echo "(end)"'
 )
 # Sent on stdin (batch mode), one command per line: Windows PowerShell mangles quotes inside arguments.
-$out = $commands | & $py -I tools\tv.py --batch 2>&1 | Out-String
+$ErrorActionPreference = 'Continue'; $out = $commands | & $py -I tools\tv.py --batch 2>&1 | Out-String; $code = $LASTEXITCODE; $ErrorActionPreference = 'Stop'; $global:LASTEXITCODE = $code
 if ($LASTEXITCODE -ne 0 -and -not $out.Trim()) { throw 'The TV did not answer the questions (see above). Nothing was changed.' }
 $text = $out.TrimEnd() + "`r`n"
 

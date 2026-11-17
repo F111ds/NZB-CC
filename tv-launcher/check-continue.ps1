@@ -12,7 +12,7 @@ Set-Location $PSScriptRoot
 $env:TV_HOST = $TvHost
 $py = '.\tools\venv\Scripts\python.exe'
 if (-not (Test-Path $py)) { throw 'The TV tools are not set up here (run try-continue.ps1 once).' }
-function Tv([string]$cmd) { return ((& $py -I tools\tv.py $cmd 2>&1) | Out-String) }
+function Tv([string]$cmd) { $ErrorActionPreference = 'Continue'; return ((& $py -I tools\tv.py $cmd 2>&1) | Out-String) }
 
 $out = New-Object System.Text.StringBuilder
 function Section($title, $cmd) {
