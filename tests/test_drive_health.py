@@ -181,7 +181,14 @@ assert d["temp_alert"] == 55 and d["nvme_temp_alert"] == 70
 st, d = api("/api/drives/alerts", {"notify_drive_hot": False})
 assert st == 200 and d["alerts"]["hot"] is False and d["alerts"]["health"] is True
 assert json.loads(m.SETTINGS_FILE.read_text())["notify_drive_hot"] is False
-saved = json.loads(m.SETTINGS_FILE.read_text()); saved["drive_low_gb"] = 100   # saved by an older version
+saved = json.loads(m.SETTINGS_FILE.read_text())
+assert saved == {"notify_drive_hot": False}, saved                                # only what differs from the defaults
+saved["drive_low_gb"] = 100; saved["future_setting"] = {"x": 1}                   # an older version's default; a newer version's key
+m.SETTINGS_FILE.write_text(json.dumps(saved))
+m.update_settings(lambda st: st.update(notify_drive_low=False))
+kept = json.loads(m.SETTINGS_FILE.read_text())
+assert kept["future_setting"] == {"x": 1} and "drive_low_gb" not in kept, kept    # unknown key kept; old default dropped
+saved = kept; saved["drive_low_gb"] = 100
 m.SETTINGS_FILE.write_text(json.dumps(saved))
 assert m.load_settings()["drive_low_gb"] == 75                                    # old default follows the new one
 assert api("/api/drives/io") == (200, {"io": {}})
