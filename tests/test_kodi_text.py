@@ -48,10 +48,10 @@ def api(path, body):
     except urllib.error.HTTPError as e: return e.code, json.loads(e.read())
 
 
-# No text box open: refused with a clear message, nothing typed.
-st, d = api("/api/kodi/text", {"text": "hello"})
-assert st == 400 and "No text box is open" in d["error"], d
-assert not any(c[0] == "Input.SendText" for c in calls)
+# Not Kodi's keyboard (e.g. an add-on's "Connect to server" dialog): still typed into the selected field.
+st, d = api("/api/kodi/text", {"text": "http://192.168.68.60:8096"})
+assert st == 200 and d == {"ok": True, "window": "field"}, d
+assert calls[-1] == ("Input.SendText", {"text": "http://192.168.68.60:8096", "done": True}), calls[-1]
 
 # Keyboard open: typed and confirmed (default), or typed only.
 state["window"] = 10103
