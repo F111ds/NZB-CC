@@ -663,17 +663,34 @@ def safe_float(val, default: float = 0.0) -> float:
         return default
 
 
-def unique_nzb_path(folder: Path, base_title: str) -> Path:
+_reserved_nzb_paths: set[str] = set()   # names handed out whose download hasn't finished yet
+_reserved_lock = threading.Lock()
+
+
+def unique_nzb_path(folder: Path, base_title: str, reserve: bool = False) -> Path:
+    """A free "<title>.nzb" (or "<title> (2).nzb", ...) in folder.
+
+    reserve=True also claims the name until release_nzb_path(): two saves of the same title started
+    at the same moment (a double-click, two indexers) then get different names instead of the second
+    download overwriting the first."""
     safe = "".join(c if c.isalnum() or c in " ._-()" else "_" for c in base_title).strip()
     safe = (safe[:120] or "release").rstrip(" .")
     if safe.lower().endswith(".nzb"):
         safe = safe[:-4]
-    candidate = folder / f"{safe}.nzb"
-    counter = 2
-    while candidate.exists():
-        candidate = folder / f"{safe} ({counter}).nzb"
-        counter += 1
+    with _reserved_lock:
+        candidate = folder / f"{safe}.nzb"
+        counter = 2
+        while candidate.exists() or str(candidate).lower() in _reserved_nzb_paths:
+            candidate = folder / f"{safe} ({counter}).nzb"
+            counter += 1
+        if reserve:
+            _reserved_nzb_paths.add(str(candidate).lower())
     return candidate
+
+
+def release_nzb_path(path: Path) -> None:
+    with _reserved_lock:
+        _reserved_nzb_paths.discard(str(path).lower())
 
 
 FALLBACK_INDEXER_CATEGORIES = [
@@ -1903,8 +1920,19 @@ class NewznabClient:
 
     @staticmethod
     def download_nzb(nzb_url: str, dest_path: Path) -> Path:
+        """Downloads to "<name>.nzb.part" and renames it when complete, so a half-written file is
+        never visible as an .nzb (the watch folder could otherwise send it)."""
         content = NewznabClient.fetch_nzb_bytes(nzb_url)
-        dest_path.write_bytes(content)
+        part = dest_path.with_name(dest_path.name + ".part")
+        try:
+            part.write_bytes(content)
+            os.replace(part, dest_path)
+        except BaseException:
+            try:
+                part.unlink()
+            except OSError:
+                pass
+            raise
         return dest_path
 
 
@@ -5481,10 +5509,17 @@ class NzbManagerApp(ctk.CTk):
     def _save_indexer_nzb(self, item: dict) -> None:
         folder = Path(self.folder_entry.get().strip() or self.config_data["nzb_folder"])
         folder.mkdir(parents=True, exist_ok=True)
-        dest = unique_nzb_path(folder, item["title"])
+        dest = unique_nzb_path(folder, item["title"], reserve=True)
         self._set_status(f"Downloading {dest.name}...")
+
+        def task():
+            try:
+                return NewznabClient.download_nzb(item["nzb_url"], dest)
+            finally:
+                release_nzb_path(dest)  # the file exists now (or the download failed): free the name
+
         self._run_bg(
-            lambda: NewznabClient.download_nzb(item["nzb_url"], dest),
+            task,
             on_ok=lambda p: (
                 self._increment_daily_nzb_count(),
                 self._set_status(f"Saved {p.name}", log=True, level="OK"),

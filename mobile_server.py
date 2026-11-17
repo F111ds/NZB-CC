@@ -72,7 +72,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.9.3"
+VERSION = "3.9.4"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -2729,9 +2729,15 @@ def load_settings() -> dict:
         log.warning("%s could not be read (%s); using defaults.", SETTINGS_FILE.name, exc)
         return settings
     if isinstance(data, dict):
-        for key, default in _default_settings().items():
+        defaults = _default_settings()
+        for key, default in defaults.items():
             if isinstance(data.get(key), type(default)):
                 settings[key] = data[key]
+        # Keep settings this version doesn't know (e.g. written by a newer or another version), so
+        # saving here doesn't wipe them - that is how the TV's key was lost once.
+        for key, value in data.items():
+            if key not in defaults:
+                settings[key] = value
     settings["saved_searches"] = [x for x in settings["saved_searches"] if isinstance(x, dict) and x.get("id")]
     if settings["drive_low_gb"] == 100:  # the old default, saved by 3.6-3.8: follow the new one
         settings["drive_low_gb"] = DRIVE_LOW_GB
@@ -2739,8 +2745,12 @@ def load_settings() -> dict:
 
 
 def save_settings(settings: dict) -> None:
+    """Writes only what differs from the defaults (plus anything this version doesn't know), so a
+    later change to a default reaches everyone who never changed that setting."""
+    defaults = _default_settings()
+    changed = {k: v for k, v in settings.items() if k not in defaults or v != defaults[k]}
     tmp = SETTINGS_FILE.with_name(SETTINGS_FILE.name + ".tmp")
-    tmp.write_text(json.dumps(settings, indent=1, ensure_ascii=False), encoding="utf-8")
+    tmp.write_text(json.dumps(changed, indent=1, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, SETTINGS_FILE)
 
 
