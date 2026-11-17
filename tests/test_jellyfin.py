@@ -152,6 +152,9 @@ assert calls[-1][:2] == ("POST", "/Sessions/sess1/Playing/PlayPause") and calls[
 assert api("/api/jellyfin/control", {"session": "sess1", "action": "shutdown"})[0] == 400
 assert api("/api/jellyfin/control", {"session": "../System", "action": "stop"})[0] == 400
 assert api("/api/jellyfin/scan", {})[0] == 200 and calls[-1][1] == "/Library/Refresh"
+# The Kodi tab's "Scan library" also scans Jellyfin (new downloads reach Kodi through it); Kodi isn't set up here.
+st, d = api("/api/kodi/scan", {})
+assert st == 200 and d["jellyfin"] is True and d["kodi"] is False and calls[-1][1] == "/Library/Refresh", d
 
 # Search with quality.
 st, d = api("/api/jellyfin/search?q=road")
