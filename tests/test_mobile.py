@@ -48,6 +48,23 @@ try:
 except m.UpstreamError as e:
     assert "decrypted" in str(e)
 
+# ---------- an undecryptable SABnzbd key doesn't stop the server either ----------
+cfg2 = dict(cfg, sab_api_key="dpapi:AAAAAAAA")
+p2 = Path(tempfile.mkdtemp()) / "nzb_manager_config.json"; p2.write_text(json.dumps(cfg2))
+c2 = m.load_config(p2)
+assert c2["sab_api_key"] == "" and "decrypted" in c2["sab_key_error"], c2
+try:
+    m._sab_key(c2); raise AssertionError("empty SAB key used")
+except m.UpstreamError as e:
+    assert "re-enter" in str(e)
+cfg3 = dict(cfg, sab_api_key="")  # never set at all: still a clear startup error
+p3 = Path(tempfile.mkdtemp()) / "nzb_manager_config.json"; p3.write_text(json.dumps(cfg3))
+try:
+    m.load_config(p3); raise AssertionError("missing SAB key accepted")
+except m.ConfigError as e:
+    assert "missing" in str(e)
+c = m.load_config(p)  # restore the secrets set the next checks expect
+
 # ---------- redaction swapped atomically ----------
 assert isinstance(m._KNOWN_SECRETS, frozenset) and "goodkey12345" in m._KNOWN_SECRETS
 assert "goodkey12345" not in m.redact("err goodkey12345 / apikey=abc")

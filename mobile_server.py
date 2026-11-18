@@ -75,7 +75,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.11.0"
+VERSION = "3.11.1"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -728,7 +728,17 @@ def load_config(path: Path | None = None) -> dict:
         sab_url = "http://" + sab_url
     if sab_url.endswith("/api"):
         sab_url = sab_url[:-4]
-    sab_key = _dpapi_unprotect(str(data.get("sab_api_key") or "")).strip()
+    # A SABnzbd key Windows can no longer decrypt (its DPAPI keys were reset, e.g. after a password
+    # or sign-in change) must not stop the server: everything else keeps working, and SABnzbd
+    # requests say what to fix. Only a key that was never set at all is a startup error.
+    sab_key_error = ""
+    try:
+        sab_key = _dpapi_unprotect(str(data.get("sab_api_key") or "")).strip()
+    except ConfigError:
+        sab_key = ""
+        sab_key_error = ("The saved SABnzbd API key could not be decrypted on this PC — "
+                         "re-enter it in the desktop app's Settings.")
+        log.warning("SABnzbd API key could not be decrypted; SABnzbd will be unavailable until it is re-entered.")
 
     indexers: list[dict] = []
     seen: set[str] = set()
@@ -766,8 +776,8 @@ def load_config(path: Path | None = None) -> dict:
             "key_error": key_error,
         })
 
-    if not sab_key:
-        raise ConfigError("SABnzbd API key is missing (or could not be decrypted) in nzb_manager_config.json.")
+    if not sab_key and not sab_key_error:
+        raise ConfigError("SABnzbd API key is missing in nzb_manager_config.json.")
 
     kodi_pw = ""
     try:
@@ -779,9 +789,17 @@ def load_config(path: Path | None = None) -> dict:
 
     global _KNOWN_SECRETS
     # Swap in a complete new set at once, so a concurrent redact() never sees an empty/partial set.
-    _KNOWN_SECRETS = frozenset([sab_key] + [ix["api_key"] for ix in indexers if ix["api_key"]]
+    _KNOWN_SECRETS = frozenset(([sab_key] if sab_key else []) + [ix["api_key"] for ix in indexers if ix["api_key"]]
                                + ([kodi_pw] if kodi_pw else []))
-    return {"sab_url": sab_url, "sab_api_key": sab_key, "indexers": indexers, "kodi": kodi}
+    return {"sab_url": sab_url, "sab_api_key": sab_key, "sab_key_error": sab_key_error,
+            "indexers": indexers, "kodi": kodi}
+
+
+def _sab_key(cfg: dict) -> str:
+    """The SABnzbd API key, or a readable error if it couldn't be decrypted."""
+    if not cfg.get("sab_api_key"):
+        raise UpstreamError(cfg.get("sab_key_error") or "SABnzbd API key is missing — set it in the desktop app.")
+    return cfg["sab_api_key"]
 
 
 _cfg_lock = threading.Lock()
@@ -830,7 +848,7 @@ def get_config() -> dict:
 
 def sab_request(mode: str, extra: dict | None = None, timeout: float = 15) -> dict:
     cfg = get_config()
-    params = {"mode": mode, "output": "json", "apikey": cfg["sab_api_key"]}
+    params = {"mode": mode, "output": "json", "apikey": _sab_key(cfg)}
     if extra:
         params.update(extra)
     body = http_fetch(cfg["sab_url"] + "/api?" + urllib.parse.urlencode(params), timeout=timeout, max_bytes=MAX_SAB_BYTES)
@@ -960,7 +978,7 @@ def sab_addfile(nzb_data: bytes, filename: str, category: str = "", priority: st
         "Content-Type: application/x-nzb\r\n\r\n"
     ).encode("utf-8") + nzb_data + f"\r\n--{boundary}--\r\n".encode("ascii")
 
-    params = {"mode": "addfile", "output": "json", "apikey": cfg["sab_api_key"], "nzbname": safe_name[:-4]}
+    params = {"mode": "addfile", "output": "json", "apikey": _sab_key(cfg), "nzbname": safe_name[:-4]}
     if category:
         params["cat"] = category
     if priority != "":
