@@ -1,0 +1,75 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@font-face{font-family:Sora;src:url(sora.ttf);font-weight:100 800}
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:960px;height:540px;overflow:hidden;font-family:Sora;color:#fff;
+ background:radial-gradient(ellipse at 30% 60%,#1d4fb8 0%,#123a8f 35%,#0c2462 70%,#09184a 100%);position:relative}
+.hdr{position:absolute;left:40px;right:36px;top:26px;display:flex;align-items:center;justify-content:space-between}
+.left{display:flex;align-items:flex-end}
+.clock{font-size:36px;font-weight:300;letter-spacing:-0.04em;line-height:1;font-feature-settings:"tnum"}
+.ampm{font-size:11px;font-weight:500;letter-spacing:.08em;margin:0 0 5px 6px;color:#ffffffb3}
+.div{width:1px;height:20px;background:#ffffff33;margin:0 12px 5px}
+.date{font-size:13px;letter-spacing:.06em;color:#ffffffa6;margin-bottom:5px;text-transform:uppercase}
+.bar{display:flex;margin-right:2px}
+.pill{height:34px;margin-left:8px;padding:0 14px 0 12px;border-radius:17px;display:flex;align-items:center;gap:6px;
+ font-size:12px;font-weight:500;background:linear-gradient(#ffffff2e,#ffffff14);border:1px solid #ffffff38;white-space:nowrap}
+.pill svg{width:18px;height:18px;fill:#fff}
+.ico{width:34px;padding:0;justify-content:center}
+.vpn{background:#2bd24a;color:#063;font-size:9px;padding:2px 7px;border-radius:9px;color:#fff}
+.kodi{position:absolute;left:60px;right:60px;top:137px}
+.kh{display:flex;align-items:center;margin-left:6px}
+.chip{background:#17b2e7;font-size:9px;font-weight:500;letter-spacing:.16em;padding:1px 7px;border-radius:8px}
+.kt{font-size:13px;font-weight:500;margin-left:8px}
+.row{display:flex;justify-content:center;margin-top:8px}
+.p{width:117px;height:175px;margin:8px 6px;border-radius:8px;position:relative;overflow:hidden;box-shadow:0 4px 10px #0007;
+ display:flex;align-items:flex-end;padding:8px 7px;font-weight:700;font-size:12px;text-transform:uppercase;line-height:1.15}
+.p .t{position:absolute;left:0;right:0;bottom:0;height:4px;background:#0000008c}
+.p .f{height:100%;background:#17b2e7}
+.p .ck{position:absolute;top:5px;right:5px;width:15px;height:15px;border-radius:50%;background:#0009;font-size:9px;display:flex;align-items:center;justify-content:center}
+.p.focus{transform:scale(1.1);outline:2.5px solid #fff;outline-offset:-2.5px;z-index:2}
+.hero{position:absolute;left:0;right:0;text-align:center;top:399px;font-size:18px;font-weight:300;letter-spacing:-0.02em}
+.dock{position:absolute;left:329px;width:302px;top:449px;height:55px;border-radius:18px;
+ background:linear-gradient(#ffffff24,#ffffff0d);border:1px solid #ffffff40;display:flex;align-items:center;padding:0 11px}
+.tile{width:48px;height:27px;margin:0 11px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:6px;font-weight:700}
+.tile.f{outline:1.5px solid #fff;transform:scale(1.1);box-shadow:0 0 12px #6ec1ff88}
+.note{position:absolute;right:10px;bottom:6px;font-size:8px;color:#ffffff55}
+body{background:#070B14}
+.sky{position:absolute;inset:0;opacity:.7;background:radial-gradient(circle at 84% 80%, rgba(185,152,129,0.22) 0, rgba(185,152,129,0) 55vw),linear-gradient(rgb(10,10,27) 0%,rgb(24,18,47) 55%,rgb(56,30,71) 100%)}.fx{position:absolute;left:58px;top:72px;font-size:12px;color:#ffffffb3;letter-spacing:.02em}.fx b{color:#fff;font-weight:500}.fx .up{color:#7be3a0}.left2{display:flex;align-items:center;font-size:16px;letter-spacing:.06em;color:#ffffffa6}
+.left2 .t{color:#fff;font-weight:400;font-feature-settings:"tnum";letter-spacing:.02em;font-size:18px}
+.left2 .ap{font-size:12px;margin-left:4px;color:#ffffffb3;font-weight:500}
+.left2 .dv{width:1px;height:18px;background:#ffffff33;margin:0 14px}.left2 b{color:#fff;font-weight:500}.left2 .up{color:#7be3a0}
+.kodi{top:134px!important}.p{width:137px!important;height:205px!important;font-size:13px!important}
+.off{position:absolute;left:56px;bottom:10px;font-size:8px;color:#ffffff88;display:flex;align-items:center;gap:6px}
+.off .pill{height:24px;padding:0 8px;gap:4px;margin:0}.off svg{width:13px;height:13px}.kodi .kh{margin-left:54px!important}
+.tile{padding:0!important;overflow:hidden}
+.hero{font-size:15px!important;color:#ffffffcc!important;top:404px!important}
+.p .ck{width:13px!important;height:13px!important;font-size:8px!important;background:#00000059!important;box-shadow:0 1px 3px #0006}
+.p .t{height:3px!important;background:#00000059!important}
+.menu{position:absolute;width:210px;background:linear-gradient(#2A2A2E,#161618);border:1px solid #ffffff33;border-radius:16px;padding:6px;box-shadow:0 12px 30px #000a;z-index:9}
+.menu .it{font-size:13px;padding:9px 12px;border-radius:10px;color:#fff}.menu .it.on{background:#F5FFFFFF;color:#111}
+.menu .sub{font-size:10px;color:#ffffff99;padding:8px 12px 4px}.dock2{position:absolute;left:356px;width:248px;top:451px;height:52px;border-radius:26px;background:linear-gradient(#ffffff24,#ffffff0d);border:1px solid #ffffff40;display:flex;align-items:center;justify-content:space-around;padding:0 10px}
+.ic{width:40px;height:40px;display:flex;align-items:center;justify-content:center}.ic.on{transform:scale(1.12);filter:drop-shadow(0 0 8px #ffffff55)}</style></head><body><div class="sky"></div>
+<div class="hdr">
+ <div class="left2"><span class="t">11:59</span><span class="ap">PM</span><span class="dv"></span><span class="d">Sunday, Nov 15</span><span class="dv"></span><span class="d">US$1 = <b>18.59</b> MXN &nbsp;<span style="color:#ff8a80">▼ 0.10</span></span></div>
+ <div class="bar">
+  <div class="pill">☾ 17° · H24° L8°</div>
+  <div class="pill ico"><svg viewBox="0 0 24 24"><path d="M7 2h10v8l-2 3v9H9v-9l-2-3z"/></svg></div>
+  <div class="pill" style="padding:0 10px;gap:4px"><svg viewBox="0 0 24 24"><path d="M12 18a2 2 0 110 4 2 2 0 010-4zM4.9 12.9a10 10 0 0114.2 0l-1.5 1.5a8 8 0 00-11.2 0zM1.4 9.4a15 15 0 0121.2 0l-1.4 1.4a13 13 0 00-18.4 0z"/></svg><svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:#30D158"><path d="M7 10V7a5 5 0 0110 0v3h1a1 1 0 011 1v9a1 1 0 01-1 1H6a1 1 0 01-1-1v-9a1 1 0 011-1zm2 0h6V7a3 3 0 00-6 0z"/></svg></div>
+  <div class="pill ico"><svg viewBox="0 0 24 24"><path d="M4 4h4v4H4zM10 4h4v4h-4zM16 4h4v4h-4zM4 10h4v4H4zM10 10h4v4h-4zM16 10h4v4h-4zM4 16h4v4H4zM10 16h4v4h-4zM16 16h4v4h-4z"/></svg></div>
+  <div class="pill ico"><svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zm9 5.5v-3l-2.4-.6a7 7 0 00-.8-1.9l1.3-2.1-2.1-2.1-2.1 1.3a7 7 0 00-1.9-.8L12.5 2h-3l-.6 2.4a7 7 0 00-1.9.8L4.9 3.9 2.8 6l1.3 2.1a7 7 0 00-.8 1.9L1 10.5v3l2.4.6c.2.7.4 1.3.8 1.9l-1.3 2.1 2.1 2.1 2.1-1.3c.6.4 1.2.6 1.9.8l.5 2.3h3l.6-2.4c.7-.2 1.3-.4 1.9-.8l2.1 1.3 2.1-2.1-1.3-2.1c.4-.6.6-1.2.8-1.9z"/></svg></div>
+ </div>
+</div>
+<div class="kodi">
+ <div class="kh"><span class="chip">KODI</span><span class="kt">Recently watched</span></div>
+ <div class="row">
+  <div class="p" style="background:linear-gradient(160deg,#c33,#f90 45%,#222)">Back to the Future<div class="t"><div class="f" style="width:6%"></div></div></div>
+  <div class="p" style="background:linear-gradient(160deg,#3a8de0,#e9d9a6 55%,#4a6)">The Money Pit<div class="ck">✓</div><div class="t"><div class="f" style="width:100%"></div></div></div>
+  <div class="p" style="background:linear-gradient(160deg,#d9c8a5,#8a7a5c 60%,#222)">Stop Making Sense<div class="t"><div class="f" style="width:14%"></div></div></div>
+  <div class="p" style="background:linear-gradient(160deg,#6ab0ff,#e8a3c4 40%,#3b8b2a)">The Wizard of Oz<div class="ck">✓</div><div class="t"><div class="f" style="width:100%"></div></div></div>
+  <div class="p" style="background:linear-gradient(160deg,#222,#7b3fb0 45%,#f07a2a)">Short Circuit<div class="ck">✓</div><div class="t"><div class="f" style="width:100%"></div></div></div>
+ </div>
+</div>
+<div class="hero">Netflix</div>
+<div class="dock2"><div class="ic on"><svg viewBox="-24 -24 48 48" width="40" height="40"><rect x="-17" y="-17" width="34" height="34" rx="8" fill="#000"/><path d="M-7 -11 L-2 -11 L3 3 L3 -11 L8 -11 L8 11 L3 11 L-2 -3 L-2 11 L-7 11Z" fill="#e50914"/><rect x="-21" y="-21" width="42" height="42" rx="11" fill="none" stroke="#fff" stroke-width="2.4"/></svg></div><div class="ic"><svg viewBox="-24 -24 48 48" width="40" height="40"><rect x="-17" y="-17" width="34" height="34" rx="8" fill="#1a98ff"/><text x="0" y="1" text-anchor="middle" font-family="Arial" font-weight="700" font-size="9" fill="#fff">prime</text><path d="M-9 5 Q0 10 9 5" stroke="#fff" stroke-width="1.6" fill="none"/></svg></div><div class="ic"><svg viewBox="-24 -24 48 48" width="40" height="40"><rect x="-17" y="-17" width="34" height="34" rx="8" fill="#fff"/><rect x="-11" y="-8" width="22" height="16" rx="4" fill="#f00"/><path d="M-3 -4.5 L5 0 L-3 4.5Z" fill="#fff"/></svg></div><div class="ic"><svg viewBox="-24 -24 48 48" width="40" height="40"><rect x="-17" y="-17" width="34" height="34" rx="8" fill="#17b2e7"/><path d="M-11 0 L0 -11 L11 0 L0 11Z" fill="none" stroke="#fff" stroke-width="3"/><path d="M-4 0 L0 -4 L4 0 L0 4Z" fill="#fff"/></svg></div>
+</div>
+<div class="note">Mock-up · sample numbers</div>
+</body></html>
