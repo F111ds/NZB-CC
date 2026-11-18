@@ -4024,7 +4024,9 @@ class MobileHandler(BaseHTTPRequestHandler):
         if not self._network_ok():
             return
         if path in ("/", "/index.html"):
-            self._send(200, PAGE.replace("__VERSION__", VERSION).encode("utf-8"), "text/html; charset=utf-8")
+            # no-store: phones (iOS home-screen apps above all) otherwise keep showing an old copy after an update
+            self._send(200, PAGE.replace("__VERSION__", VERSION).encode("utf-8"), "text/html; charset=utf-8",
+                       {"Cache-Control": "no-store, must-revalidate"})
             return
         if path == "/manifest.webmanifest":
             self._send(200, MANIFEST, "application/manifest+json", {"Cache-Control": "public, max-age=86400"})
