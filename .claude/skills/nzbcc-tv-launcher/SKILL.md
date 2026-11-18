@@ -95,6 +95,17 @@ Kodi shelf margin 46dp + padding 14dp, poster cell = poster width + 12dp; dock b
 
 ## Installing (what to give the owner)
 
+**Usually just one line.** The owner has `update-nzbcc.ps1` in their NZB Command Center folder. It downloads the
+branch, copies `mobile_server.py` + `tv-launcher\`, restarts the phone server hidden, checks it answers, and installs
+the launcher with `-Tv`:
+
+```powershell
+cd "$env:USERPROFILE\Desktop\NZB Command Center"; powershell -ExecutionPolicy Bypass -File .\update-nzbcc.ps1 -Tv
+```
+
+Leave off `-Tv` when only the phone server changed. If the branch name changes, pass `-Branch`. The longer manual
+commands below are the fallback.
+
 Launcher only:
 
 ```powershell
