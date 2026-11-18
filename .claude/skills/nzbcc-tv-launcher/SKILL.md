@@ -18,7 +18,7 @@ PC with PowerShell commands you hand them. You (a cloud session) can't reach the
 - **Measure, don't eyeball.** They notice uneven spacing and cut-off text. Measure gaps in the mock-up with
   Playwright `getBoundingClientRect()` and quote the numbers; test the longest case (e.g. "Wednesday", "12:59 PM").
 - **Hand them copy-paste PowerShell for Windows PowerShell 5.1**, one command per fenced block (tag `bash` per the
-  harness rule), full paths via `$env:USERPROFILE\Desktop\NZB Command Center`, never `cd .\tv-launcher` relative
+  harness rule), full paths via `$env:USERPROFILE\Desktop\NZB-Command-Center`, never `cd .\tv-launcher` relative
   (they once ended up in `tv-launcher\tv-launcher`). Use a **new download folder name each time**
   (`nzbcc-tv31`, `nzbcc-tv32`, ...) so stale extractions never get reused.
 - Say plainly what you couldn't test (no TV, no PowerShell here, feeds unreachable from the proxy).
@@ -95,12 +95,16 @@ Kodi shelf margin 46dp + padding 14dp, poster cell = poster width + 12dp; dock b
 
 ## Installing (what to give the owner)
 
+The owner's folder is now **`Desktop\NZB-Command-Center`** (dashes; it used to be "NZB Command Center"). The phone
+server autostarts from there at login (`--install-autostart`). Tell them to paste commands exactly as given: they
+have pasted prompts and `python` in front by accident.
+
 **Usually just one line.** The owner has `update-nzbcc.ps1` in their NZB Command Center folder. It downloads the
 branch, copies `mobile_server.py` + `tv-launcher\`, restarts the phone server hidden, checks it answers, and installs
 the launcher with `-Tv`:
 
 ```powershell
-cd "$env:USERPROFILE\Desktop\NZB Command Center"; powershell -ExecutionPolicy Bypass -File .\update-nzbcc.ps1 -Tv
+cd "$env:USERPROFILE\Desktop\NZB-Command-Center"; powershell -ExecutionPolicy Bypass -File .\update-nzbcc.ps1 -Tv
 ```
 
 Leave off `-Tv` when only the phone server changed. If the branch name changes, pass `-Branch`. The longer manual
@@ -109,8 +113,8 @@ commands below are the fallback.
 Launcher only:
 
 ```powershell
-$nzb = "$env:USERPROFILE\Desktop\NZB Command Center"; Invoke-WebRequest https://github.com/F111ds/NZB-CC/archive/refs/heads/<branch>.zip -OutFile "$env:TEMP\nzbcc-tvNN.zip"; Expand-Archive "$env:TEMP\nzbcc-tvNN.zip" "$env:TEMP\nzbcc-tvNN" -Force; $src = (Get-ChildItem "$env:TEMP\nzbcc-tvNN" -Directory | Select-Object -First 1).FullName; Copy-Item "$src\tv-launcher\*" "$nzb\tv-launcher" -Recurse -Force
-cd "$env:USERPROFILE\Desktop\NZB Command Center\tv-launcher"; powershell -ExecutionPolicy Bypass -File .\install-on-tv.ps1 -TvHost <TV IP>
+$nzb = "$env:USERPROFILE\Desktop\NZB-Command-Center"; Invoke-WebRequest https://github.com/F111ds/NZB-CC/archive/refs/heads/<branch>.zip -OutFile "$env:TEMP\nzbcc-tvNN.zip"; Expand-Archive "$env:TEMP\nzbcc-tvNN.zip" "$env:TEMP\nzbcc-tvNN" -Force; $src = (Get-ChildItem "$env:TEMP\nzbcc-tvNN" -Directory | Select-Object -First 1).FullName; Copy-Item "$src\tv-launcher\*" "$nzb\tv-launcher" -Recurse -Force
+cd "$env:USERPROFILE\Desktop\NZB-Command-Center\tv-launcher"; powershell -ExecutionPolicy Bypass -File .\install-on-tv.ps1 -TvHost <TV IP>
 ```
 
 If `mobile_server.py` changed, also copy `"$src\mobile_server.py"` into `$nzb` and restart the server (stop every
