@@ -1,16 +1,10 @@
-﻿{
+{
     "sab_url":  "http://127.0.0.1:8080",
     "sab_api_key":  "",
     "indexers":  [
                      {
-                         "name":  "omgwtfnzbs",
-                         "url":  "https://api.omgwtfnzbs.org",
-                         "api_key":  "",
-                         "enabled":  true
-                     },
-                     {
-                         "name":  "DrunkenSlug",
-                         "url":  "https://drunkenslug.com",
+                         "name":  "NZBGeek",
+                         "url":  "https://api.nzbgeek.info/",
                          "api_key":  "",
                          "enabled":  true
                      }

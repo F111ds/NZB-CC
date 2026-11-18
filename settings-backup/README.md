@@ -1,6 +1,6 @@
 ﻿# Settings backup (keys removed)
 
-Made by backup_settings.ps1 on 2026-11-17 14:17. Every API key, token, password and
+Made by backup_settings.ps1 on 2026-11-18 09:35. Every API key, token, password and
 Pre-Shared Key was removed, as were the ntfy alert address and search history, because this
 repository is public.
 
