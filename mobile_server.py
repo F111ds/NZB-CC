@@ -3527,7 +3527,7 @@ function homeDownload(d){
 }
 async function refreshHome(){
   if(homeBusy)return;homeBusy=true;
-  const hr=new Date().getHours();$('greet').textContent=hr<12?'Good morning':(hr<18?'Good afternoon':'Good evening');
+  const hr=new Date().getHours();$('greet').textContent=hr<12?'Buenos días':(hr<19?'Buenas tardes':'Buenas noches');
   try{
     const d=await api('/api/home');
     if(d.sab_ok){updateStatus(d);$('homestatus').className='lede';$('homestatus').textContent=d.total?d.total+' in queue':'Queue is empty';$('homedl').innerHTML=homeDownload(d)}
