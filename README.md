@@ -38,6 +38,17 @@ run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardware
 **Options > Remote Web Server > Run** (port 8085; the app also reads its WMI feed when that's available).
 Run as administrator to see drive temperatures and wear.
 
+## Fun with HAL
+
+- **Siri and a home-screen widget**: see [docs/siri-and-widget.md](docs/siri-and-widget.md)
+  ("Hey Siri, ask HAL: pause the ads / how hot is it / what's my record...", and `extras/hal_widget.js` for Scriptable).
+- **Morning briefing** (and a weekly summary on the day you pick) to your phone: HAL's settings › Briefings.
+- **HAL's record** on the System tab: lifetime ads blocked, data downloaded, days watching, power cuts,
+  longest uptime, with milestones ("1 million ads blocked, Dave.").
+- **Chess with HAL** (System › For fun), the **wall display** (HAL's eye and live readings, full screen, for a
+  spare tablet), and **Ask HAL to sing**. He also sings when you restart the PC from the app.
+- Try typing "open the pod bay doors" in the search box.
+
 ## Uptime Kuma in HAL
 
 HAL reads Uptime Kuma's monitors (its `/metrics` page). In the app: **Settings › Connections › Uptime Kuma**,
