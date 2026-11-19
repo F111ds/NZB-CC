@@ -153,6 +153,10 @@ body.noscroll{overflow:hidden}
 .dline{display:flex;gap:12px;align-items:center;margin:18px 0 6px;font-style:italic;color:var(--soft);font-size:14px}
 .plot{color:var(--soft);font-size:14px;line-height:1.5}
 .wgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}.wgrid b{display:block;font:600 15px var(--mono);margin-top:2px}
+.cardbtn{display:block;width:100%;text-align:left;border:0;color:inherit;font:inherit}
+.drow{display:flex;align-items:center;gap:10px;margin-top:10px}.drow b{font:700 13px var(--mono);width:26px}.dbar{flex:1;height:6px;border-radius:3px;background:#222227;overflow:hidden}.dbar i{display:block;height:100%;border-radius:3px}
+.dfree{font:12px var(--mono);color:var(--soft);min-width:96px;text-align:right}
+.linkish{background:none;border:0;padding:0;cursor:pointer}
 .cbox{background:var(--card);border-radius:14px;padding:12px 14px;margin-bottom:10px}
 .cbox h3{margin:0 0 2px;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:8px}
 .crow{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
@@ -275,9 +279,9 @@ function issues(){return S?S.issues.filter(i=>LV[i.level]>=2):[]}
 // What HAL says on Home: downloads, the TV, and anything that needs you, in one or two sentences.
 function homeLine(){if(!H&&!S)return'I\'m thinking…';const parts=[],iss=issues(),crit=iss.find(i=>i.level==='critical');
   if(crit)return'I\'m sorry, '+NAME()+'. '+crit.title+'.';
-  const cur=H&&H.current,n=H?H.total||0:0;
+  const cur=DESK&&H&&H.current,n=H?H.total||0:0;
   if(cur&&!H.paused){const s=secsOf(cur.eta);const at=s!=null&&s<86400?' by '+clock(Date.now()+s*1000):'';parts.push(n>1?n+' downloads are on their way'+(at?', the first one'+at:'')+'.':'One download finishes'+(at||' soon')+'.')}
-  else if(H&&H.paused)parts.push('Downloads are paused.');
+  else if(DESK&&H&&H.paused)parts.push('Downloads are paused.');
   const kp=H&&H.kodi&&H.kodi.playing;parts.push(kp?'You\'re watching '+kp.title+'.':'The TV is free.');
   if(iss.length===1)parts.push('There\'s one small thing: '+iss[0].title.charAt(0).toLowerCase()+iss[0].title.slice(1)+'.');
   else if(iss.length>1)parts.push(iss.length+' things need your attention.');
@@ -320,7 +324,18 @@ function systemsList(){if(!S)return'<div class="list"><div class="empty">'+(wind
 /* ---------- tabs ---------- */
 // Home keeps HAL's eye and line in place (so he isn't cut off mid-sentence) and redraws the rest.
 function homeBody(){if(DESK)return'<div class="cols"><div>'+attention(3)+downloadsCard()+arrivedList(5)+totals()+'</div><div>'+tvCard(true)+jfList()+upcomingList(5,'COMING UP')+'</div><div>'+vitals()+systemsList()+'<p class="hint" style="text-align:left">“'+esc(S?S.hal.quote:'')+'”</p></div></div>';
-  return attention(2)+downloadsCard()+tvCard(false)+jfList()+arrivedList(4)+upcomingList(3,'TONIGHT & THIS WEEK')+totals()}
+  // Phone: the PC and the house at a glance. Downloads live on Get.
+  return attention(3)+vitals()+drivesCard()+piholeCard()+tvCard(false)+jfList()+'<div class="sec"><span>EVERYTHING ELSE</span></div>'+systemsList()}
+function drivesCard(){if(!S||!S.drives||!S.drives.length)return'';const lim=100-((S.settings&&S.settings.drive_free_alert)||10);
+  return'<button class="card cardbtn" data-hal="drives"><h3><span class="k">DRIVES</span><span class="k">›</span></h3>'+S.drives.map(d=>{const hot=d.disk&&d.disk.temp&&d.disk.temp_limit&&d.disk.temp>=d.disk.temp_limit,bad=d.disk&&/Warning|Unhealthy/.test(d.disk.health||'');
+    const col=bad||d.pct>=97?'var(--red2)':d.pct>=lim||hot?'var(--amber)':'var(--green)';
+    return'<div class="drow"><b>'+esc(d.mount)+'</b><span class="dbar"><i style="width:'+Math.min(100,d.pct)+'%;background:'+col+'"></i></span><span class="dfree">'+fb(d.free,0)+' free'+(d.disk&&d.disk.temp?' · '+Math.round(d.disk.temp)+'°':'')+'</span></div>'}).join('')+'</button>'}
+function piholeCard(){const p=S&&S.pihole;if(!p||!p.found)return'';
+  if(!p.ok)return'<button class="card cardbtn" data-pihole><h3><span class="k">PI-HOLE</span><span class="mono" style="color:var(--'+(p.need_password?'amber':'red2')+')">● '+(p.need_password?'NEEDS PASSWORD':'NOT ANSWERING')+'</span></h3><div class="sub" style="margin-top:6px">'+esc(p.need_password?'Add it in Settings › Connections.':'Websites may stop loading. Check the Raspberry Pi has power.')+'</div></button>';
+  const on=p.blocking!==false;
+  return'<div class="card"><h3><button class="k linkish" data-pihole>PI-HOLE ›</button><span class="mono" style="color:var(--'+(on?'green':p.timer?'amber':'red2')+')">● '+(on?'BLOCKING':p.timer?'PAUSED · '+mmss(p.timer):'OFF')+'</span></h3>'+
+    '<div class="wgrid" style="margin-top:10px"><div><span class="k">BLOCKED TODAY</span><b>'+big(p.blocked)+'</b></div><div><span class="k">OF LOOKUPS</span><b>'+(p.percent==null?'—':Math.round(p.percent)+'%')+'</b></div><div><span class="k">DEVICES</span><b>'+big(p.clients)+'</b></div></div>'+
+    (on?'<button class="btn wide" style="margin-top:12px" data-phpause="5">Pause blocking 5 min</button>':'<button class="btn r wide" style="margin-top:12px" data-phresume>Turn ad blocking back on</button>')+'</div>'}
 function renderHome(){const el=$('t-home');
   if(!$('heye'))el.innerHTML='<div id="hhead"></div><div class="hero'+(DESK?'':' center')+'"><button class="eye'+(DESK?' big':'')+'" id="heye" aria-label="Hear HAL"></button><div><div class="g" id="hgreet"></div><div class="q" id="hquote"></div></div></div><div id="hbody"></div>';
   $('hhead').innerHTML=topbar('',true);$('hbody').innerHTML=homeBody();$('hgreet').textContent=greeting();
