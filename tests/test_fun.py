@@ -113,10 +113,26 @@ assert "Is it on?" in hs.tv_show(h5, "")["message"]
 assert hs.siri_intent("show yourself on the TV") == "tv_show" and hs.siri_intent("turn on the tv") == "tv_on"
 sc = hs.tv_screen(hal.status())
 for box in ("pc", "net", "pi"):
-    assert len(sc[box]["rows"]) == 6 and all(len(r) == 3 and r[0] for r in sc[box]["rows"]), box
+    assert len(sc[box]["rows"]) == 5 and all(len(r) == 3 and r[0] for r in sc[box]["rows"]), box
 assert [d["mount"] for d in sc["pc"]["drives"]] == ["C", "D", "Z"] and [d for d in sc["pc"]["drives"] if d["warn"]][0]["mount"] == "Z"
 assert sc["pc"]["level"] == "warning" and sc["pc"]["rows"][3][2] == "warning"          # drive Z is filling up
-assert sc["kuma"]["ok"] and len(sc["kuma"]["monitors"]) <= 6 and sc["kuma"]["head"] == "11 of 12 up"
+assert sc["kuma"]["monitors"][0]["status"] == "down"                                  # problems first
+assert sc["downloads"]["state"] == "downloading" and sc["downloads"]["title"] == "The Long Orbit (2025)"
+_q, _t = hs.sab_queue, hs.sab_today
+hs.sab_today = lambda: 3
+hs.sab_queue = lambda: {"ok": True, "paused": False, "count": 3, "speed": "", "kbps": 38000, "name": "The.Long.Orbit.2025.2160p.UHD.BluRay.nzb", "pct": 59, "left": "0:12:05"}
+d = hs.tv_downloads()
+assert d["title"] == "The Long Orbit (2025)" and d["info"].startswith("59% · ") and "2 queued" in d["info"] and "done " in d["info"]
+hs.sab_queue = lambda: {"ok": True, "paused": False, "count": 0, "speed": "", "kbps": 0, "name": "", "pct": 0, "left": ""}
+assert hs.tv_downloads() == {"state": "idle", "title": "Nothing downloading", "info": "3 finished today · SABnzbd ready"}
+hs.sab_queue = lambda: {"ok": True, "paused": True, "count": 2, "speed": "", "kbps": 0, "name": "x", "pct": 0, "left": ""}
+assert hs.tv_downloads()["state"] == "paused"
+hs.sab_queue = lambda: {"ok": False}
+assert hs.tv_downloads()["state"] == "problem"
+hs.sab_queue = lambda: {}
+assert hs.tv_downloads()["state"] == "off"
+hs.sab_queue, hs.sab_today = _q, _t
+assert sc["kuma"]["ok"] and len(sc["kuma"]["monitors"]) <= 5 and sc["kuma"]["head"] == "11 of 12 up"
 assert sc["pi"]["rows"][0][1] == "Pi 4 B · 4 GB" and sc["pi"]["rows"][1][1] == "47°C"
 assert sc["alerts"][0]["title"] and "ads blocked" in sc["record"]
 assert "Z: (Seagate" not in json.dumps(sc["pc"]) and "screen" in hs.tv_brief(hal.status())

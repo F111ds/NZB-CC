@@ -1439,6 +1439,71 @@ def sab_history() -> dict:
             "week_size": str(h.get("week_size") or ""), "day_size": str(h.get("day_size") or ""), "slots": slots}
 
 
+_sab_q_cache: dict = {"t": 0.0, "v": {}}
+_sab_h_cache: dict = {"t": 0.0, "v": {}}
+
+
+def sab_queue() -> dict:
+    """SABnzbd's queue for the TV's downloads strip ({} if SABnzbd isn't set up). Cached for 10 s."""
+    if time.time() - _sab_q_cache["t"] < 10:
+        return _sab_q_cache["v"]
+    cfg = nzb_config()
+    key = dpapi_unprotect(str(cfg.get("sab_api_key") or ""))
+    out: dict = {}
+    if key:
+        base = str(cfg.get("sab_url") or "http://127.0.0.1:8080").strip().rstrip("/")
+        try:
+            q = (http_json(f"{base}/api?mode=queue&output=json&limit=1&apikey={urllib.parse.quote(key)}") or {}).get("queue") or {}
+            slot = (q.get("slots") or [{}])[0]
+            out = {"ok": True, "paused": bool(q.get("paused")), "count": to_int(q.get("noofslots_total") or q.get("noofslots")),
+                   "speed": str(q.get("speed") or "").strip(), "kbps": to_float(q.get("kbpersec"), 0) or 0,
+                   "name": str(slot.get("filename") or ""), "pct": to_int(slot.get("percentage")), "left": str(slot.get("timeleft") or "")}
+        except Exception:  # noqa: BLE001
+            out = {"ok": False}
+    _sab_q_cache.update(t=time.time(), v=out)
+    return out
+
+
+def sab_today() -> int:
+    """Downloads that finished today (SABnzbd history, cached for 5 minutes)."""
+    if time.time() - _sab_h_cache["t"] > 300:
+        _sab_h_cache.update(t=time.time(), v=sab_history())
+    start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    return sum(1 for s in _sab_h_cache["v"].get("slots", []) if s["ok"] and s["t"] >= start)
+
+
+def tv_downloads(demo: bool = False) -> dict:
+    """One line for the TV: what's downloading, or that nothing is."""
+    if demo:
+        return {"state": "downloading", "title": "The Long Orbit (2025)", "pct": 59,
+                "info": "59% · 38 MB/s · done " + (datetime.now() + timedelta(minutes=12)).strftime("%I:%M %p").lstrip("0") + " · 2 queued"}
+    q = sab_queue()
+    if not q:
+        return {"state": "off", "title": "SABnzbd isn't set up", "info": ""}
+    if not q.get("ok"):
+        return {"state": "problem", "title": "SABnzbd isn't answering", "info": ""}
+    done = sab_today()
+    done_txt = f"{done} finished today" if done else ""
+    if q["count"] == 0:
+        return {"state": "idle", "title": "Nothing downloading", "info": " · ".join(x for x in (done_txt, "SABnzbd ready") if x)}
+    if q["paused"]:
+        return {"state": "paused", "title": "Downloads paused", "info": f"{q['count']} in the queue"}
+    title = re.sub(r"[._]+", " ", re.sub(r"\.(nzb|mkv|mp4|avi)$", "", q["name"], flags=re.I)).strip()
+    title = re.sub(r"\s+(2160p|1080p|720p|480p|WEB|BluRay|HDTV|x26[45]|HEVC|H\s?26[45]).*$", "", title, flags=re.I).strip() or q["name"]
+    title = re.sub(r"\s((?:19|20)\d\d)$", r" (\1)", title)
+    bits = [f"{q['pct']}%"]
+    if q["kbps"] > 0:
+        bits.append(sm.fmt_bytes(q["kbps"] * 1024) + "/s")
+    try:
+        h, m, s = (int(x) for x in q["left"].split(":")[-3:])
+        bits.append("done " + (datetime.now() + timedelta(hours=h, minutes=m, seconds=s)).strftime("%I:%M %p").lstrip("0"))
+    except (ValueError, TypeError):
+        pass
+    if q["count"] > 1:
+        bits.append(f"{q['count'] - 1} queued")
+    return {"state": "downloading", "title": title[:60], "pct": q["pct"], "info": " · ".join(bits)}
+
+
 def _size_words(s: str) -> str:
     """'1.2 T' -> '1.2 terabytes' (SABnzbd's short sizes, for speaking)."""
     m = re.fullmatch(r"\s*([\d.]+)\s*([KMGTP]?)B?\s*", s or "")
@@ -1798,8 +1863,7 @@ def tv_screen(st: dict) -> dict:
                    ["Memory", f"{gb(mem.get('used'))} of {(mem.get('total') or 0) / 1073741824:.0f} GB", lvl("ram")],
                    ["Drives", "", lvl("full", "days", "health", "dtemp")],
                    ["Power", ("On battery · " if ups.get("on_battery") else "Mains · ") + f"UPS {ups.get('charge') or 0:.0f}%" if ups else (pw.get("plan") or "Mains"),
-                    lvl("ups_ob", "ups_rb", "ups_load", "ups_err")],
-                   ["Up for", up_txt, "ok"]],
+                    lvl("ups_ob", "ups_rb", "ups_load", "ups_err")]],
           "drives": drives}
     loss = n.get("loss")
     ph = st.get("pihole") or {}
@@ -1815,13 +1879,12 @@ def tv_screen(st: dict) -> dict:
                      lvl("pihole", "pihole_off")],
                     ["Tailscale", "on" if n.get("tailscale") else "off", "ok"],
                     ["Security", "all on" if dfd.get("rtp") and fw_on else ("Defender off" if dfd and not dfd.get("rtp") else "firewall off" if not fw_on else "checking"),
-                     lvl("defender", "firewall")],
-                    ["DNS", "answering" if n.get("dns") is not False else "not answering", lvl("dns")]]}
+                     lvl("defender", "firewall")]]}
     km = st.get("kuma") or {}
     kmon = [{"name": m["name"], "status": m["status"], "ms": m.get("ms")} for m in (km.get("monitors") or [])]
     kuma = {"level": lvl("kuma"), "found": bool(km.get("found")), "ok": bool(km.get("ok")),
             "head": f"{km.get('up', 0)} of {len(kmon)} up" if km.get("ok") else ("needs a key" if km.get("need_key") else "not answering" if km.get("found") else "not set up"),
-            "monitors": kmon[:6]}
+            "monitors": sorted(kmon, key=lambda m: m["status"] == "up")[:5]}
     hw = ph.get("hw") or {}
     model = re.sub(r"\s+Rev\s+[\d.]+$", "", str(hw.get("model") or "")).replace("Raspberry Pi", "Pi").replace(" Model ", " ")
     pi = {"level": lvl("pi_temp", "pi_mem", "pihole"), "found": bool(ph.get("found")),
@@ -1829,8 +1892,7 @@ def tv_screen(st: dict) -> dict:
                    ["Temperature", f"{hw['temp']:.0f}°C" if hw.get("temp") is not None else "—", lvl("pi_temp")],
                    ["CPU", (f"{hw['cpu_pct']:.0f}%" if hw.get("cpu_pct") is not None else "—") + (f" · load {hw['load'][0]:.2f}" if hw.get("load") else ""), "ok"],
                    ["Memory", f"{hw['mem_pct']:.0f}% used" if hw.get("mem_pct") is not None else "—", lvl("pi_mem")],
-                   ["Up for", _dur(hw.get("uptime")) if hw.get("uptime") else "—", "ok"],
-                   ["Pi-hole", (hw.get("version") or "—") + (" · update ready" if hw.get("update") else " · up to date" if hw.get("version") else ""),
+                   ["Pi-hole", (hw.get("version") or "—") + (" · update ready" if hw.get("update") else " · current" if hw.get("version") else ""),
                     "info" if hw.get("update") else lvl("pihole")]]}
     rec = st.get("record") or {}
     ads = rec.get("ads") or 0
@@ -1845,7 +1907,8 @@ def tv_screen(st: dict) -> dict:
                                      f"{rec.get('power_cuts', 0)} power cut{'s' if rec.get('power_cuts') != 1 else ''} survived",
                                      f"longest uptime {(rec.get('longest_up') or 0) // 86400} days" if rec.get("longest_up") else "") if x)
     full_alerts = [{"level": i["level"], "title": i["title"], "detail": i.get("detail", "")} for i in issues if i["level"] != "info"]
-    return {"pc": pc, "net": net, "kuma": kuma, "pi": pi, "record": record, "alerts": full_alerts[:4]}
+    return {"pc": pc, "net": net, "kuma": kuma, "pi": pi, "record": record, "alerts": full_alerts[:4],
+            "downloads": tv_downloads(st.get("demo", False))}
 
 
 def tv_brief(st: dict) -> dict:
@@ -3057,7 +3120,7 @@ class Hal(FunMixin):
                             "count": f"{kv['up']} / {len(kv['monitors'])}" if kv["ok"] and kv["monitors"] else ""})
         name = s["name"]
         return {
-            "version": VERSION, "host": socket.gethostname(), "now": now, "uptime": snap.get("uptime"), "boot": snap.get("boot"),
+            "version": VERSION, "host": socket.gethostname(), "demo": self.demo, "now": now, "uptime": snap.get("uptime"), "boot": snap.get("boot"),
             "admin": snap.get("admin"), "windows": IS_WINDOWS or self.demo,
             "hal": {"level": level, "quote": hal_quote(issues, name, now), "greeting": greeting(name), "name": name},
             "issues": [{k: v for k, v in i.items() if k != "sustain"} for i in sorted(issues, key=lambda i: -LEVELS[i["level"]])],
