@@ -33,7 +33,6 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.TextClock;
 import android.widget.TextView;
 
 import org.json.JSONArray;
@@ -55,9 +54,9 @@ import java.util.concurrent.Executors;
  * NZB-CC: HAL 9000's screen, on demand. Opened from the HAL tile on Home, or by the PC (the phone app's
  * "Show HAL on the TV": adb am start, with an optional message to say in the extra "say_b64").
  *
- * <p>HAL's eye, the clock, weather and the exchange rate, HAL's line (a different one every few minutes), what just
- * boxes for the PC (with its drives), the network, Uptime Kuma and the Raspberry Pi, an alert bar only when something
- * needs you, and HAL's record. HAL says his line
+ * <p>HAL's eye in the middle with his line (and an alert under it when something needs you), boxes for the PC and the
+ * network on the left and Uptime Kuma and the Raspberry Pi on the right, and what SABnzbd is doing along the bottom.
+ * HAL says his line
  * (or the message) when the screen opens; OK on the remote makes him talk again; Back closes it.
  */
 public class HalActivity extends Activity {
@@ -72,7 +71,10 @@ public class HalActivity extends Activity {
 
     private LinearLayout page;
     private EyeView eye;
-    private TextView quote, weather, weatherSub, fx, record, alertTitle, alertMore;
+    private TextView quote, alertTitle, alertMore, dlKey, dlTitle, dlInfo;
+    private LinearLayout dlStrip;
+    private FrameLayout dlBar;
+    private View dlFill;
     private LinearLayout alertBar;
     /** The four boxes: PC, network, Uptime Kuma, Raspberry Pi. */
     private Box pcBox, netBox, kumaBox, piBox;
@@ -98,7 +100,6 @@ public class HalActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON | WindowManager.LayoutParams.FLAG_FULLSCREEN);
         extras = HomeExtras.load(this);
         setContentView(build());
-        ClockFormat.apply(getWindow().getDecorView(), Config.load(this).clockFormat);
         takeMessage(getIntent());
         tts = new TextToSpeech(this, status -> {
             if (status != TextToSpeech.SUCCESS || tts == null) return;
@@ -226,140 +227,134 @@ public class HalActivity extends Activity {
     }
 
     private View build() {
-        Typeface light = UiFont.get(this, R.string.font_light), regular = UiFont.get(this, R.string.font_regular);
+        Typeface regular = UiFont.get(this, R.string.font_regular);
         Typeface mono = Typeface.MONOSPACE;
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
         page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(dp(48), dp(24), dp(48), dp(24));
-        page.setGravity(Gravity.CENTER_VERTICAL);
+        page.setPadding(dp(40), dp(26), dp(40), dp(22));
         root.addView(page, new FrameLayout.LayoutParams(-1, -1));
 
-        // Top: eye, clock and date; weather and the exchange rate on the right.
-        LinearLayout top = new LinearLayout(this);
-        top.setOrientation(LinearLayout.HORIZONTAL);
-        top.setGravity(Gravity.CENTER_VERTICAL);
-        page.addView(top, new LinearLayout.LayoutParams(-1, -2));
+        // Boxes left and right, HAL's eye in the middle.
+        LinearLayout middle = new LinearLayout(this);
+        middle.setOrientation(LinearLayout.HORIZONTAL);
+        middle.setGravity(Gravity.CENTER_VERTICAL);
+        page.addView(middle, new LinearLayout.LayoutParams(-1, 0, 1f));
+        LinearLayout left = column(middle);
+        LinearLayout centre = new LinearLayout(this);
+        centre.setOrientation(LinearLayout.VERTICAL);
+        centre.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(dp(250), -1);
+        cl.leftMargin = dp(18);
+        cl.rightMargin = dp(18);
+        middle.addView(centre, cl);
+        LinearLayout right = column(middle);
+
         eye = new EyeView(this);
-        top.addView(eye, new LinearLayout.LayoutParams(dp(92), dp(92)));
-        LinearLayout clockBox = new LinearLayout(this);
-        clockBox.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams cbl = new LinearLayout.LayoutParams(0, -2, 1f);
-        cbl.leftMargin = dp(24);
-        top.addView(clockBox, cbl);
-        TextClock clock = new TextClock(this);
-        clock.setFormat12Hour("h:mm a");
-        clock.setFormat24Hour("HH:mm");
-        clock.setTextSize(TypedValue.COMPLEX_UNIT_SP, 60);
-        clock.setTextColor(Color.WHITE);
-        clock.setTypeface(light);
-        clock.setIncludeFontPadding(false);
-        clockBox.addView(clock);
-        TextClock date = new TextClock(this);
-        String pattern = android.text.format.DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEEdMMMM");
-        date.setFormat12Hour(pattern);
-        date.setFormat24Hour(pattern);
-        date.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        date.setTextColor(0xFFA1A1AA);
-        date.setTypeface(regular);
-        LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(-2, -2);
-        dl.topMargin = dp(6);
-        clockBox.addView(date, dl);
-        LinearLayout side = new LinearLayout(this);
-        side.setOrientation(LinearLayout.VERTICAL);
-        side.setGravity(Gravity.END);
-        top.addView(side, new LinearLayout.LayoutParams(-2, -2));
-        weather = text(36, Color.WHITE, light);
-        weather.setGravity(Gravity.END);
-        weather.setSingleLine(true);
-        side.addView(weather);
-        weatherSub = text(12, 0xFFA1A1AA, UiFont.get(this, R.string.font_regular));
-        weatherSub.setGravity(Gravity.END);
-        weatherSub.setSingleLine(true);
-        LinearLayout.LayoutParams wsl = new LinearLayout.LayoutParams(-2, -2);
-        wsl.topMargin = dp(5);
-        side.addView(weatherSub, wsl);
-        fx = text(13, 0xFFA1A1AA, mono);
-        fx.setGravity(Gravity.END);
-        LinearLayout.LayoutParams fl = new LinearLayout.LayoutParams(-2, -2);
-        fl.topMargin = dp(10);
-        side.addView(fx, fl);
-
+        centre.addView(eye, new LinearLayout.LayoutParams(dp(196), dp(196)));
         quote = text(16, 0xFFD4D4D8, Typeface.create(regular, Typeface.ITALIC));
-        quote.setLineSpacing(0, 1.15f);
-        quote.setMaxLines(1);
+        quote.setLineSpacing(0, 1.2f);
+        quote.setGravity(Gravity.CENTER);
+        quote.setMaxLines(3);
         quote.setEllipsize(TextUtils.TruncateAt.END);
-        quote.setText("“I'm reading the PC, Dave.”");
+        quote.setText("\u201cI'm reading the PC, Dave.\u201d");
         LinearLayout.LayoutParams ql = new LinearLayout.LayoutParams(-1, -2);
-        ql.topMargin = dp(20);
-        page.addView(quote, ql);
-
-        // Only when something needs you: the first alert, and how many more.
+        ql.topMargin = dp(22);
+        centre.addView(quote, ql);
+        // Only when something needs you: the first alert under HAL's line, and how many more.
         alertBar = new LinearLayout(this);
-        alertBar.setOrientation(LinearLayout.HORIZONTAL);
-        alertBar.setGravity(Gravity.CENTER_VERTICAL);
-        alertBar.setPadding(dp(14), dp(9), dp(14), dp(9));
+        alertBar.setOrientation(LinearLayout.VERTICAL);
+        alertBar.setGravity(Gravity.CENTER_HORIZONTAL);
+        alertBar.setPadding(dp(12), dp(8), dp(12), dp(8));
         LinearLayout.LayoutParams abl = new LinearLayout.LayoutParams(-1, -2);
         abl.topMargin = dp(14);
-        page.addView(alertBar, abl);
-        alertTitle = text(12.5f, 0xFFFDE68A, regular);
-        alertTitle.setSingleLine(true);
+        centre.addView(alertBar, abl);
+        alertTitle = text(12, 0xFFFDE68A, regular);
+        alertTitle.setGravity(Gravity.CENTER);
+        alertTitle.setMaxLines(3);
         alertTitle.setEllipsize(TextUtils.TruncateAt.END);
-        alertBar.addView(alertTitle, new LinearLayout.LayoutParams(0, -2, 1f));
-        alertMore = text(9.5f, 0xFFA1A1AA, mono);
-        alertBar.addView(alertMore);
+        alertBar.addView(alertTitle, new LinearLayout.LayoutParams(-1, -2));
+        alertMore = text(9, 0xFFA1A1AA, mono);
+        alertMore.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams aml = new LinearLayout.LayoutParams(-1, -2);
+        aml.topMargin = dp(4);
+        alertBar.addView(alertMore, aml);
         alertBar.setVisibility(View.GONE);
 
-        // The four boxes, side by side, rows spread evenly.
-        LinearLayout boxes = new LinearLayout(this);
-        boxes.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams bxl = new LinearLayout.LayoutParams(-1, dp(232));
-        bxl.topMargin = dp(22);
-        page.addView(boxes, bxl);
-        pcBox = new Box("THE PC", 1.15f, boxes, false);
-        netBox = new Box("NETWORK", 1f, boxes, true);
-        kumaBox = new Box("UPTIME KUMA", 1f, boxes, true);
-        piBox = new Box("RASPBERRY PI", 1f, boxes, true);
+        pcBox = new Box("THE PC", left, false);
+        netBox = new Box("NETWORK", left, true);
+        kumaBox = new Box("UPTIME KUMA", right, false);
+        piBox = new Box("RASPBERRY PI", right, true);
 
-        record = text(9.5f, 0xFF71717A, mono);
-        record.setSingleLine(true);
-        record.setEllipsize(TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams rl2 = new LinearLayout.LayoutParams(-1, -2);
-        rl2.topMargin = dp(16);
-        page.addView(record, rl2);
-        showLocal();
+        // Along the bottom: what SABnzbd is doing.
+        dlStrip = new LinearLayout(this);
+        dlStrip.setOrientation(LinearLayout.HORIZONTAL);
+        dlStrip.setGravity(Gravity.CENTER_VERTICAL);
+        dlStrip.setPadding(dp(14), dp(9), dp(14), dp(9));
+        GradientDrawable dbg = card();
+        dbg.setStroke(Math.max(1, dp(0.5f)), 0xFF17171C);
+        dlStrip.setBackground(dbg);
+        LinearLayout.LayoutParams dsl = new LinearLayout.LayoutParams(-1, -2);
+        dsl.topMargin = dp(14);
+        page.addView(dlStrip, dsl);
+        dlKey = key("DOWNLOADS");
+        dlStrip.addView(dlKey);
+        dlTitle = text(13, 0xFFE4E4E7, regular);
+        dlTitle.setSingleLine(true);
+        dlTitle.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams dtl = new LinearLayout.LayoutParams(-2, -2);
+        dtl.leftMargin = dp(12);
+        dlStrip.addView(dlTitle, dtl);
+        dlBar = new FrameLayout(this);
+        GradientDrawable track = new GradientDrawable();
+        track.setColor(0xFF1F1F25);
+        track.setCornerRadius(dp(3));
+        dlBar.setBackground(track);
+        dlFill = new View(this);
+        GradientDrawable fd = new GradientDrawable();
+        fd.setColor(0xFFFF6A4D);
+        fd.setCornerRadius(dp(3));
+        dlFill.setBackground(fd);
+        dlBar.addView(dlFill, new FrameLayout.LayoutParams(0, -1));
+        LinearLayout.LayoutParams dbl = new LinearLayout.LayoutParams(dp(110), dp(5));
+        dbl.leftMargin = dp(12);
+        dlStrip.addView(dlBar, dbl);
+        View spring = new View(this);
+        dlStrip.addView(spring, new LinearLayout.LayoutParams(0, 1, 1f));
+        dlInfo = text(11, 0xFFA1A1AA, mono);
+        dlInfo.setSingleLine(true);
+        dlStrip.addView(dlInfo);
+        dlBar.setVisibility(View.GONE);
         return root;
     }
 
-    /** Weather and the exchange rate, as Home last read them (kept on the TV). */
-    private void showLocal() {
-        // "☀  23°  ·  H 27°  L 14°" (Home's pill) -> "☀ 23°" big, and "High 27° · Low 14° · Sunny" under it.
-        SharedPreferences w = getSharedPreferences("weather_now", MODE_PRIVATE);
-        String pill = w.getString("pill", "").trim();
-        String now = w.getString("now", "").trim();
-        String[] parts = pill.split("\\s*\u00b7\\s*", 2);
-        weather.setText(parts[0].replaceAll("\\s+", " "));
-        String hl = parts.length > 1 ? parts[1].replaceAll("\\s+", " ").replace("H ", "High ").replace(" L ", " \u00b7 Low ") : "";
-        String cond = now.split("\\s*\u00b7\\s*")[0];
-        weatherSub.setText(hl.isEmpty() ? cond : cond.isEmpty() ? hl : hl + " \u00b7 " + cond);
-        SharedPreferences p = getSharedPreferences("exchange_rate", MODE_PRIVATE);
-        String pair = extras.fxFrom + ">" + extras.fxTo;
-        double rate = Double.longBitsToDouble(p.getLong("rate", Double.doubleToLongBits(Double.NaN)));
-        double change = Double.longBitsToDouble(p.getLong("change", Double.doubleToLongBits(Double.NaN)));
-        if (!p.getString("pair", "").equals(pair) || Double.isNaN(rate)) {
-            fx.setText("");
-            return;
+    /** A column of two boxes beside HAL's eye. */
+    private LinearLayout column(LinearLayout parent) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        parent.addView(c, new LinearLayout.LayoutParams(0, -1, 1f));
+        return c;
+    }
+
+    /** The downloads strip: what's downloading (with a bar), or that nothing is. */
+    private void showDownloads(JSONObject d) {
+        if (d == null) return;
+        String st = d.optString("state");
+        boolean busy = "downloading".equals(st);
+        dlKey.setText(busy ? "DOWNLOADING" : "DOWNLOADS");
+        dlTitle.setText(d.optString("title"));
+        dlTitle.setTextColor("problem".equals(st) || "paused".equals(st) ? 0xFFFBBF24 : 0xFFE4E4E7);
+        dlInfo.setText(d.optString("info"));
+        dlBar.setVisibility(busy ? View.VISIBLE : View.GONE);
+        if (busy) {
+            final int pct = Math.max(0, Math.min(100, d.optInt("pct")));
+            dlBar.post(() -> {
+                FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) dlFill.getLayoutParams();
+                lp.width = Math.round(dlBar.getWidth() * pct / 100f);
+                dlFill.setLayoutParams(lp);
+            });
         }
-        String text = extras.fxFrom + " → " + extras.fxTo + "  " + String.format(Locale.US, "%.2f", rate);
-        if (Double.isNaN(change) || Math.abs(change) < 0.005) {
-            fx.setText(text);
-            return;
-        }
-        String arrow = String.format(Locale.US, "  %s %.2f", change > 0 ? "▲" : "▼", Math.abs(change));
-        SpannableString s = new SpannableString(text + arrow);
-        s.setSpan(new ForegroundColorSpan(change > 0 ? 0xFF34D399 : 0xFFFF8A80), text.length(), s.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        fx.setText(s);
     }
 
     // ---- data -----------------------------------------------------------------------------------
@@ -422,7 +417,6 @@ public class HalActivity extends Activity {
     }
 
     private void show(JSONObject j) {
-        showLocal();
         if (j == null) {
             eye.setLevel("");
             if (!speaking) quote.setText("“I can't reach the PC right now. I'll keep trying.”");
@@ -445,18 +439,19 @@ public class HalActivity extends Activity {
             if (km != null) kumaBox.monitors(km);
             JSONObject pi = sc.optJSONObject("pi");
             if (pi != null) piBox.rows(pi.optJSONArray("rows"), pi.optString("level"), null);
-            record.setText(sc.optString("record", "").isEmpty() ? "" : "HAL'S RECORD   " + sc.optString("record"));
+            showDownloads(sc.optJSONObject("downloads"));
             JSONArray al = sc.optJSONArray("alerts");
             if (al != null && al.length() > 0) {
                 JSONObject a = al.optJSONObject(0);
                 boolean crit = "critical".equals(a.optString("level"));
                 int col = crit ? 0xFFFF6A4D : 0xFFFBBF24;
-                SpannableString s = new SpannableString("●  " + a.optString("title") + "   " + a.optString("detail"));
+                SpannableString s = new SpannableString("\u25CF  " + a.optString("title") + "\n" + a.optString("detail"));
                 int titleEnd = 3 + a.optString("title").length();
                 s.setSpan(new ForegroundColorSpan(col), 0, titleEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 s.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), 0, titleEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 alertTitle.setText(s);
                 alertMore.setText(al.length() > 1 ? "+" + (al.length() - 1) + " more in the app" : "");
+                alertMore.setVisibility(al.length() > 1 ? View.VISIBLE : View.GONE);
                 GradientDrawable bg = new GradientDrawable();
                 bg.setColor(crit ? 0x1AFF2A1F : 0x14FBBF24);
                 bg.setStroke(dp(1), crit ? 0x66FF6A4D : 0x59FBBF24);
@@ -615,14 +610,16 @@ public class HalActivity extends Activity {
     }
 
     /** One box: a title with a status in the corner, and six rows sharing the height evenly. */
+    private static final int ROWS = 5;
+
     private class Box {
         final LinearLayout body;
         final TextView status;
-        final LinearLayout[] rows = new LinearLayout[6];
-        final TextView[] labels = new TextView[6], values = new TextView[6];
+        final LinearLayout[] rows = new LinearLayout[ROWS];
+        final TextView[] labels = new TextView[ROWS], values = new TextView[ROWS];
         final String okWord;
 
-        Box(String title, float weight, LinearLayout parent, boolean gap) {
+        Box(String title, LinearLayout parent, boolean gap) {
             okWord = "OK";
             LinearLayout box = new LinearLayout(HalActivity.this);
             box.setOrientation(LinearLayout.VERTICAL);
@@ -630,8 +627,8 @@ public class HalActivity extends Activity {
             GradientDrawable bg = card();
             bg.setStroke(Math.max(1, dp(0.5f)), 0xFF17171C);
             box.setBackground(bg);
-            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(0, -1, weight);
-            if (gap) bl.leftMargin = dp(11);
+            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(-1, 0, 1f);
+            if (gap) bl.topMargin = dp(12);
             parent.addView(box, bl);
             LinearLayout head = new LinearLayout(HalActivity.this);
             head.setOrientation(LinearLayout.HORIZONTAL);
@@ -646,7 +643,7 @@ public class HalActivity extends Activity {
             bdl.topMargin = dp(4);
             box.addView(body, bdl);
             Typeface regular = UiFont.get(HalActivity.this, R.string.font_regular);
-            for (int i = 0; i < 6; i++) {
+            for (int i = 0; i < ROWS; i++) {
                 if (i > 0) {
                     View line = new View(HalActivity.this);
                     line.setBackgroundColor(0xFF1A1A20);
@@ -656,12 +653,12 @@ public class HalActivity extends Activity {
                 r.setOrientation(LinearLayout.HORIZONTAL);
                 r.setGravity(Gravity.CENTER_VERTICAL);
                 body.addView(r, new LinearLayout.LayoutParams(-1, 0, 1f));
-                TextView l = text(12.5f, 0xFFF4F4F5, regular);
+                TextView l = text(12, 0xFFF4F4F5, regular);
                 l.setSingleLine(true);
                 r.addView(l, new LinearLayout.LayoutParams(-2, -2));
                 View spring = new View(HalActivity.this);
                 r.addView(spring, new LinearLayout.LayoutParams(0, 1, 1f));
-                TextView v = text(10.5f, 0xFFA1A1AA, Typeface.MONOSPACE);
+                TextView v = text(11, 0xFFD4D4D8, Typeface.MONOSPACE);
                 v.setSingleLine(true);
                 v.setEllipsize(TextUtils.TruncateAt.END);
                 r.addView(v);
@@ -680,14 +677,14 @@ public class HalActivity extends Activity {
         /** rows: [[label, value, level], ...] */
         void rows(JSONArray a, String level, String okText) {
             int problems = 0;
-            for (int i = 0; i < 6; i++) {
+            for (int i = 0; i < ROWS; i++) {
                 JSONArray row = a == null ? null : a.optJSONArray(i);
                 rows[i].setVisibility(row == null ? View.INVISIBLE : View.VISIBLE);
                 if (row == null) continue;
                 String lv = row.optString(2, "ok");
                 labels[i].setText(row.optString(0, ""));
                 values[i].setText(row.optString(1, ""));
-                values[i].setTextColor("ok".equals(lv) ? 0xFFA1A1AA : levelColor(lv));
+                values[i].setTextColor("ok".equals(lv) ? 0xFFD4D4D8 : levelColor(lv));
                 if (!"ok".equals(lv) && !"info".equals(lv)) problems++;
             }
             setStatus(level, okText == null ? okWord : okText, problems <= 1 ? "1 ALERT" : problems + " ALERTS");
@@ -735,7 +732,7 @@ public class HalActivity extends Activity {
         void monitors(JSONObject km) {
             JSONArray ms = km.optJSONArray("monitors");
             boolean ok = km.optBoolean("ok");
-            for (int i = 0; i < 6; i++) {
+            for (int i = 0; i < ROWS; i++) {
                 JSONObject m = ms == null ? null : ms.optJSONObject(i);
                 if (!ok && i == 0) {
                     rows[0].setVisibility(View.VISIBLE);
@@ -752,7 +749,7 @@ public class HalActivity extends Activity {
                 s.setSpan(new ForegroundColorSpan(dot), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 labels[i].setText(s);
                 values[i].setText("up".equals(st) ? (m.isNull("ms") ? "up" : m.optInt("ms") + " ms") : st);
-                values[i].setTextColor("up".equals(st) ? 0xFFA1A1AA : dot);
+                values[i].setTextColor("up".equals(st) ? 0xFFD4D4D8 : dot);
             }
             String lv = km.optString("level", "ok");
             status.setText("● " + km.optString("head").toUpperCase(Locale.US));
