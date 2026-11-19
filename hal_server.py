@@ -867,6 +867,180 @@ $r | ConvertTo-Json -Compress
 # 10. HAL: watches everything in background threads
 # ==============================================================================
 
+# ==============================================================================
+# 9b. WINDOWS EVENT LOG: only what you'd need to see
+# ==============================================================================
+# Each query is run on its own (a provider that isn't on this PC must not spoil the others). Drive
+# warnings are included (retries and resets are early signs of a failing drive or cable); everything
+# else only at Error and Critical. DCOM and the other everyday noise never match these filters.
+
+EVENTLOG_PS = r"""
+$since = (Get-Date).AddDays(-30)
+$out = New-Object System.Collections.ArrayList
+function Q($f, $cat, $max) {
+  try { Get-WinEvent -FilterHashtable $f -MaxEvents $max -ErrorAction Stop | ForEach-Object {
+      $m = ("" + $_.Message) -replace '\s+', ' '; if ($m.Length -gt 500) { $m = $m.Substring(0, 500) + '...' }
+      [void]$out.Add(@{ t = $_.TimeCreated.ToUniversalTime().ToString('o'); lvl = [int]$_.Level; src = $_.ProviderName; id = [int]$_.Id; cat = $cat; msg = $m }) } } catch {}
+}
+foreach ($p in 'disk', 'Ntfs', 'Microsoft-Windows-Ntfs', 'stornvme', 'storahci', 'storport', 'Microsoft-Windows-StorPort', 'volmgr', 'partmgr', 'iaStorA', 'iaStorAC', 'iaStorAVC', 'iaStorV', 'nvstor', 'amd_sata', 'amd_xata', 'USBSTOR') {
+  Q @{ LogName = 'System'; ProviderName = $p; Level = 1, 2, 3; StartTime = $since } 'drives' 150 }
+Q @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-Power'; Id = 41; StartTime = $since } 'crashes' 50
+Q @{ LogName = 'System'; ProviderName = 'EventLog'; Id = 6008; StartTime = $since } 'crashes' 50
+Q @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WER-SystemErrorReporting'; Id = 1001; StartTime = $since } 'crashes' 50
+Q @{ LogName = 'System'; ProviderName = 'BugCheck'; Id = 1001; StartTime = $since } 'crashes' 50
+Q @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WHEA-Logger'; Level = 1, 2, 3; StartTime = $since } 'hardware' 100
+Q @{ LogName = 'System'; ProviderName = 'Service Control Manager'; Id = 7000, 7001, 7009, 7011, 7023, 7024, 7031, 7034; StartTime = $since } 'services' 100
+Q @{ LogName = 'Application'; ProviderName = 'Application Error'; Id = 1000; StartTime = $since } 'apps' 100
+Q @{ LogName = 'Application'; ProviderName = 'Application Hang'; Id = 1002; StartTime = $since } 'apps' 60
+Q @{ LogName = 'Application'; ProviderName = '.NET Runtime'; Id = 1026; StartTime = $since } 'apps' 60
+Q @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WindowsUpdateClient'; Id = 20; StartTime = $since } 'updates' 30
+Q @{ LogName = 'Microsoft-Windows-Windows Defender/Operational'; Id = 1116, 1117, 1118, 1119, 5001, 5010, 5012; StartTime = $since } 'security' 60
+Q @{ LogName = 'System'; Level = 1; StartTime = $since } 'other' 50
+@{ events = $out } | ConvertTo-Json -Compress -Depth 4
+"""
+
+EVENT_CATS = {"drives": "Drives", "crashes": "Crashes", "hardware": "Hardware", "services": "Services",
+              "apps": "App crashes", "updates": "Updates", "security": "Security", "other": "Other critical"}
+STORAGE_IDS_SERIOUS = {("disk", 7), ("disk", 11), ("disk", 51), ("disk", 52), ("disk", 154), ("ntfs", 55), ("ntfs", 137),
+                       ("ntfs", 140), ("ntfs", 50), ("ntfs", 57), ("stornvme", 11)}
+_RESET_SRC = ("stornvme", "storahci", "storport", "iastora", "iastorac", "iastoravc", "iastorv", "nvstor", "amd_sata", "amd_xata")
+
+
+def _ev_drive(msg: str, disks: dict) -> str:
+    """'Drive Z: (Seagate IronWolf)' from a message naming \\Device\\Harddisk2 or a volume letter."""
+    m = re.search(r"Harddisk(\d+)\\DR", msg) or re.search(r"\bdisk (\d+)\b", msg, re.I)
+    if m and m.group(1) in disks:
+        d = disks[m.group(1)]
+        return ("Drive " + ", ".join(d["letters"]) if d["letters"] else f"Disk {m.group(1)}") + (f" ({d['name']})" if d.get("name") else "")
+    m = re.search(r"(?:volume|VolumeId:)\s*([A-Z]:)", msg)
+    if m:
+        return f"Drive {m.group(1)}"
+    if m := re.search(r"Harddisk(\d+)", msg):
+        return f"Disk {m.group(1)}"
+    return ""
+
+
+def friendly_event(e: dict, disks: dict) -> dict:
+    """Adds a plain-English title, an explanation, the drive or app it concerns, and how serious it is."""
+    src = str(e.get("src") or "")
+    s, eid, msg = src.lower().replace("microsoft-windows-", ""), to_int(e.get("id")), str(e.get("msg") or "")
+    lvl = {1: "critical", 2: "error", 3: "warning"}.get(to_int(e.get("lvl")), "error")
+    who = _ev_drive(msg, disks) if e.get("cat") == "drives" else ""
+    d = who or "a drive"
+    title, explain = "", ""
+    if s == "disk":
+        title, explain, lvl = {
+            7: (f"Bad block on {d}", "The drive reported a damaged area. That's an early sign of a failing drive: back up what's on it and check its health on the Drives page.", "critical"),
+            11: (f"Controller error on {d}", "Often a loose or failing SATA/power cable, sometimes the drive itself. Reseat or replace the cable first.", "error"),
+            15: (f"{d} wasn't ready", "The drive didn't answer in time: power saving, a cable, or a failing drive.", "error"),
+            51: (f"Read/write error on {d}", "Windows couldn't read or write the drive while swapping memory. Usually a cable or a failing drive.", "error"),
+            52: (f"{d} predicts it will fail", "The drive's own health check (SMART) says it's about to fail. Back it up now and replace it.", "critical"),
+            153: (f"{d} had to retry", "Windows had to retry a read or write. Once in a while is harmless; many in a row point to a failing drive, cable or power.", "warning"),
+            154: (f"Hardware error on {d}", "The drive reported a hardware fault. Back it up and check its health.", "error"),
+            157: (f"{d} disconnected", "The drive disappeared for a moment: a loose cable, a USB drive unplugged, or power saving.", "warning"),
+        }.get(eid, ("", "", lvl))
+    elif s == "ntfs":
+        title, explain = {
+            55: (f"File system damage on {d}", f"Windows found corruption on the drive. Run 'chkdsk {who.split()[1] if who.startswith('Drive ') else 'X:'} /f' (it may need a restart)."),
+            137: (f"File system damage on {d}", "Windows couldn't repair the file system by itself. Run chkdsk on that drive."),
+            140: (f"Couldn't save data to {d}", "Usually the drive vanished for a moment (cable, power, USB). Files being written may be damaged."),
+            50: (f"Write failed on {d}", "Data may have been lost. Check the drive's cable and health."),
+            57: (f"Write failed on {d}", "Data may have been lost. Check the drive's cable and health."),
+            98: (f"{d} needs a check", "Windows wants to check this drive's file system (chkdsk)."),
+        }.get(eid, ("", ""))
+    elif s.startswith(_RESET_SRC):
+        if eid == 129:
+            title, explain, lvl = (f"{who or 'A drive'} stopped answering and was reset",
+                                   "Windows reset the drive controller. A few are harmless; repeated resets point to cables, power or drive firmware.", "warning")
+        elif eid == 11:
+            title, explain = (f"Controller error ({src})", "The drive controller reported an error. Check cables and drive health.")
+    elif s == "kernel-power" and eid == 41:
+        title, explain, lvl = ("The PC shut down unexpectedly", "It restarted without shutting down properly: a power cut, a crash, or the power button held down.", "critical")
+    elif s == "eventlog" and eid == 6008:
+        title, explain = ("The previous shutdown was unexpected", "Windows didn't shut down cleanly last time: a power cut or a crash.")
+    elif eid == 1001 and s in ("bugcheck", "wer-systemerrorreporting"):
+        m = re.search(r"bugcheck was:\s*(0x[0-9a-fA-F]+)", msg)
+        title, explain, lvl = ("Blue screen", "Windows crashed" + (f" (stop code {m.group(1)})" if m else "") + ". One is bad luck; repeats usually mean a driver, RAM or overheating.", "critical")
+    elif s == "whea-logger":
+        fatal = lvl in ("critical", "error") and "corrected" not in msg.lower()
+        title = "Fatal hardware error" if fatal else "Corrected hardware error"
+        explain = ("The CPU, memory or a PCIe card reported an error. Occasional corrected errors are usually fine; "
+                   "frequent or fatal ones point to an unstable overclock, RAM or a failing card.")
+        m = re.search(r"Component:\s*(.+?)(?=\s+Error Source:|[,.;]|$)", msg)
+        who = m.group(1).strip() if m else ""
+    elif s == "service control manager":
+        m = re.search(r"The (.+?) service", msg)
+        who = m.group(1) if m else ""
+        if eid in (7031, 7034):
+            title, explain = (f"Service crashed: {who or 'unknown'}", "It stopped unexpectedly. Windows may have restarted it.")
+        else:
+            title, explain = (f"Service didn't start: {who or 'unknown'}", "Windows tried to start it and it failed.")
+    elif s in ("application error", "application hang", ".net runtime"):
+        m = re.search(r"(?:Faulting application name|Application|The program)\s*:?\s*([\w .\-]+?\.exe)", msg, re.I)
+        who = m.group(1).strip() if m else ""
+        title = (f"{who or 'An app'} stopped responding" if s == "application hang" else f"{who or 'An app'} crashed")
+        explain = "Windows recorded the crash. Once is nothing to worry about; if it keeps happening, the app may need updating."
+    elif s == "windowsupdateclient" and eid == 20:
+        m = re.search(r"(KB\d+)", msg)
+        title, explain, lvl = (f"Update {m.group(1)} failed to install" if m else "A Windows update failed to install",
+                               "Windows Update will usually try again. If it keeps failing, run Windows Update by hand.", "warning")
+    elif s == "windows defender":
+        title, explain, lvl = {
+            1116: ("Defender found a threat", "Microsoft Defender detected malware. Open Windows Security › Protection history.", "critical"),
+            1117: ("Defender dealt with a threat", "Microsoft Defender acted on malware it found. Check Windows Security › Protection history.", "critical"),
+            1118: ("Defender couldn't remove a threat", "Open Windows Security › Protection history and run a full scan.", "critical"),
+            1119: ("Defender couldn't remove a threat", "Open Windows Security › Protection history and run a full scan.", "critical"),
+            5001: ("Real-time protection was turned off", "Microsoft Defender stopped watching files as they open.", "critical"),
+            5010: ("Defender scanning was turned off", "Scanning for malware and spyware is off.", "warning"),
+            5012: ("Defender virus scanning was turned off", "Scanning for viruses is off.", "warning"),
+        }.get(eid, ("", "", lvl))
+    if not title:
+        first = re.split(r"(?<=[.!?])\s", msg, 1)[0].strip()
+        title = (first[:90] + "…") if len(first) > 90 else (first or f"{src} event {eid}")
+    t = sm.parse_date(e.get("t"))
+    serious = e.get("cat") == "drives" and ((s, eid) in STORAGE_IDS_SERIOUS or lvl == "critical")
+    return {"t": t, "cat": e.get("cat") or "other", "level": lvl, "title": title, "explain": explain, "who": who,
+            "src": src, "id": eid, "msg": msg, "serious": serious}
+
+
+def parse_winevents(raw, disks: dict) -> list[dict]:
+    seen, out = set(), []
+    for e in sm.as_list((raw or {}).get("events") if isinstance(raw, dict) else raw):
+        if not isinstance(e, dict):
+            continue
+        key = (e.get("t"), e.get("src"), e.get("id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        if e.get("cat") == "other" and str(e.get("src")) == "Microsoft-Windows-Kernel-Power" and to_int(e.get("id")) == 41:
+            continue  # already listed as a crash
+        ev = friendly_event(e, disks)
+        if ev["t"]:
+            out.append(ev)
+    out.sort(key=lambda x: -x["t"])
+    return out
+
+
+def event_summary(events: list[dict], now: float | None = None, days: int = 7) -> dict:
+    now = time.time() if now is None else now
+    recent = [e for e in events if now - e["t"] <= days * 86400]
+    cats = {c: sum(1 for e in recent if e["cat"] == c) for c in EVENT_CATS}
+    # per drive (grouped by letter): flagged when any serious error, or 5+ retries/resets in the period
+    groups: dict[str, dict] = {}
+    for e in recent:
+        if e["cat"] != "drives":
+            continue
+        m = re.search(r"([A-Z]:)", e["who"] or "")
+        g = groups.setdefault(m.group(1) if m else (e["who"] or "?"), {"name": "", "n": 0, "serious": 0})
+        g["n"] += 1
+        g["serious"] += 1 if e["serious"] else 0
+        if len(e["who"] or "") > len(g["name"]):
+            g["name"] = e["who"]
+    per_drive = {(g["name"] or "A drive"): g["n"] for g in groups.values() if g["serious"] or g["n"] >= 5}
+    return {"total": len(recent), "cats": cats, "serious_drives": per_drive,
+            "critical": sum(1 for e in recent if e["level"] == "critical")}
+
+
 ISSUE_GROUPS = {"router": "net", "internet": "net", "loss": "net", "dns": "net"}
 
 
@@ -885,7 +1059,7 @@ def recovery_title(key: str, issue: dict) -> str:
              "days": f"Drive {arg} isn't filling up so fast any more", "health": f"Drive {arg} reports healthy again",
              "dtemp": f"Drive {arg} has cooled down", "defender": "Defender protection is back on",
              "sig": "Defender is up to date again", "firewall": "The firewall is back on",
-             "logons": "Failed sign-ins have stopped", "unexpected": "No unexpected shutdowns this week",
+             "logons": "Failed sign-ins have stopped", "evdrive": "No drive errors in the last 7 days", "unexpected": "No unexpected shutdowns this week",
              "ups_rb": "The UPS battery is fine again", "ups_load": "UPS load is back to normal",
              "ups_err": "The UPS is talking to me again"}
     return fixed.get(kind, f"All clear: {title}")
@@ -916,6 +1090,7 @@ class Hal:
         self.ups: dict | None = None
         self.ups_error = ""
         self.cleanup: dict = {}
+        self.winevents: dict = {"events": [], "t": 0.0, "busy": False}
         self.jobs: dict[str, dict] = {}       # restarts in progress
         self.restarts: dict[str, list] = {}   # restart times per service (auto-restart limit)
         self.pending: dict[str, float] = {}   # issue key -> first seen
@@ -1287,6 +1462,7 @@ class Hal:
                 if isinstance(res, dict):
                     with self.lock:
                         self.security = {**res, "t": now}
+                self.refresh_winevents(wait=True)
             if IS_WINDOWS and now - self.started > 120 and now - last_upd >= 6 * 3600:
                 last_upd = now
                 res = sm.check_windows_updates()
@@ -1358,6 +1534,45 @@ class Hal:
     def _mean(vals):
         vals = [v for v in vals if v is not None]
         return round(sum(vals) / len(vals), 1) if vals else None
+
+    # ---- Windows event log ----
+    def disk_map(self) -> dict:
+        inv = (self.monitor.snapshot() if self.monitor else {}).get("inventory") or {}
+        out = {}
+        for d in inv.get("disks") or []:
+            out[str(d.get("id"))] = {"name": d.get("name") or "", "letters": []}
+        for p in inv.get("parts") or []:
+            out.setdefault(str(p.get("disk")), {"name": "", "letters": []})["letters"].append(str(p.get("letter")).upper() + ":")
+        return out
+
+    def refresh_winevents(self, wait: bool = False) -> None:
+        if not IS_WINDOWS or self.demo:
+            return
+        with self.lock:
+            if self.winevents.get("busy"):
+                return
+            self.winevents["busy"] = True
+
+        def run():
+            try:
+                raw = sm.run_powershell_json(EVENTLOG_PS, timeout=180)
+                if raw is not None:
+                    evs = parse_winevents(raw, self.disk_map())
+                    with self.lock:
+                        self.winevents = {"events": evs, "t": time.time(), "busy": False}
+            finally:
+                with self.lock:
+                    self.winevents["busy"] = False
+        if wait:
+            run()
+        else:
+            threading.Thread(target=run, daemon=True).start()
+
+    def winevents_view(self) -> dict:
+        with self.lock:
+            w = dict(self.winevents)
+        return {"events": w.get("events", [])[:400], "t": w.get("t"), "busy": w.get("busy"), "windows": IS_WINDOWS or self.demo,
+                "summary": event_summary(w.get("events", [])), "cats": EVENT_CATS}
 
     # ---- cleanup sizes ----
     def cleanup_info(self, refresh: bool = False) -> dict:
@@ -1477,6 +1692,9 @@ class Hal:
         sec = self.security
         if (sec.get("failed") or 0) >= 10:
             add("logons", "warning", f"{sec['failed']} failed sign-ins in 24 hours", "Someone may be guessing your password.", "shield")
+        for who, n in event_summary(self.winevents.get("events", []), now).get("serious_drives", {}).items():
+            add(f"evdrive:{who}", "warning", f"{who[:1].upper() + who[1:]} logged {n} error{'s' if n > 1 else ''} this week",
+                "Windows recorded drive errors. Open the Windows events page to see what they mean.", "events")
         if (sec.get("unexpected7") or 0) >= 1:
             add("unexpected", "warning", "The PC shut down unexpectedly this week", f"{sec['unexpected7']} time(s) in 7 days.", "shield")
         if snap.get("pending_reboot"):
@@ -1566,6 +1784,7 @@ class Hal:
             "updates_checked": self.updates.get("t"), "failed": self.security.get("failed"), "unexpected": self.security.get("unexpected"),
             "bsod": self.security.get("bsod"), "disk_errors": self.security.get("disk_errors"), "admin": snap.get("admin"),
             "av": inv.get("av") or [],
+            "events": event_summary(self.winevents.get("events", []), now) if self.winevents.get("t") else None,
         }
         plan = next((p["name"] for p in snap.get("power_plans") or [] if p.get("active")), None)
         ups = dict(self.ups) if self.ups else None
@@ -1708,6 +1927,23 @@ def make_demo_hal(ups_mode: str = "online") -> Hal:
     hal.net = {"gateway": "192.168.68.1", "gateway_ms": 1.0, "gw_fails": 0, "dns": True, "tailscale": "100.101.12.7", "t": now}
     hal.security = {"failed": 0, "unexpected": 0, "unexpected7": 0, "bsod": 0, "disk_errors": 0, "t": now}
     hal.updates = {"ok": True, "updates": [{"title": "2026-11 Cumulative Update for Windows 11", "reboot": True}], "t": now - 3600}
+    def iso(sec_ago):
+        return datetime.utcfromtimestamp(now - sec_ago).isoformat() + "Z"
+    raw = {"events": [
+        {"t": iso(3600 * 3), "lvl": 3, "src": "disk", "id": 153, "cat": "drives", "msg": "The IO operation at logical block address 0x1d2c3e10 for Disk 2 (PDO name: \\Device\\00000034) was retried."},
+        {"t": iso(3600 * 3 + 40), "lvl": 3, "src": "disk", "id": 153, "cat": "drives", "msg": "The IO operation at logical block address 0x1d2c3e18 for Disk 2 (PDO name: \\Device\\00000034) was retried."},
+        {"t": iso(3600 * 27), "lvl": 2, "src": "disk", "id": 7, "cat": "drives", "msg": "The device, \\Device\\Harddisk2\\DR2, has a bad block."},
+        {"t": iso(3600 * 30), "lvl": 3, "src": "storahci", "id": 129, "cat": "drives", "msg": "Reset to device, \\Device\\RaidPort0, was issued."},
+        {"t": iso(86400 * 2), "lvl": 2, "src": "Ntfs", "id": 140, "cat": "drives", "msg": "The system failed to flush data to the transaction log. Corruption may occur in VolumeId: Z:, DeviceName: \\Device\\HarddiskVolume7. (A device which does not exist was specified.)"},
+        {"t": iso(86400 * 3), "lvl": 3, "src": "disk", "id": 153, "cat": "drives", "msg": "The IO operation at logical block address 0x88 for Disk 2 was retried."},
+        {"t": iso(86400 * 2 + 600), "lvl": 2, "src": "Service Control Manager", "id": 7031, "cat": "services", "msg": "The Jellyfin Server service terminated unexpectedly. It has done this 1 time(s)."},
+        {"t": iso(86400 * 4), "lvl": 2, "src": "Application Error", "id": 1000, "cat": "apps", "msg": "Faulting application name: Sonarr.exe, version: 4.0.11.2680, time stamp: 0x6744f1e2 Faulting module name: coreclr.dll"},
+        {"t": iso(86400 * 12), "lvl": 1, "src": "Microsoft-Windows-Kernel-Power", "id": 41, "cat": "crashes", "msg": "The system has rebooted without cleanly shutting down first. This error could be caused if the system stopped responding, crashed, or lost power unexpectedly."},
+        {"t": iso(86400 * 12 - 60), "lvl": 2, "src": "EventLog", "id": 6008, "cat": "crashes", "msg": "The previous system shutdown at 3:01:12 AM on 11/7/2026 was unexpected."},
+        {"t": iso(86400 * 9), "lvl": 3, "src": "Microsoft-Windows-WindowsUpdateClient", "id": 20, "cat": "updates", "msg": "Installation Failure: Windows failed to install the following update with error 0x800f0922: 2026-11 Cumulative Update for Windows 11 (KB5049999)."},
+        {"t": iso(86400 * 6), "lvl": 3, "src": "Microsoft-Windows-WHEA-Logger", "id": 17, "cat": "hardware", "msg": "A corrected hardware error has occurred. Component: PCI Express Root Port Error Source: Advanced Error Reporting (PCI Express)"},
+    ]}
+    hal.winevents = {"events": parse_winevents(raw, hal.disk_map()), "t": now, "busy": False}
     hal.cleanup = {"recycle": 31 * G, "recycle_items": 212, "temp": 17 * G, "temp_files": 8312, "t": now}
     hist = []
     for i in range(120):
@@ -2095,6 +2331,10 @@ class HalHandler(BaseHTTPRequestHandler):
                                      "push_from_phone_app": bool(url) and not hal.settings.get("ntfy_url"),
                                      "services": [{"id": s["id"], "name": s["name"]} for s in SERVICES],
                                      "restart_methods": {sid: hal.restart_method(sid) for sid in SERVICE_IDS} if q.get("methods") else {}})
+            elif path == "/api/winevents":
+                if q.get("refresh"):
+                    hal.refresh_winevents()
+                self.send_json(200, hal.winevents_view())
             elif path == "/api/cleanup":
                 self.send_json(200, hal.cleanup_info(refresh=bool(q.get("refresh"))))
             else:
@@ -2219,7 +2459,17 @@ button.eye{border:0;padding:0;cursor:pointer}
 .row .m{font:600 12px var(--mono);color:var(--soft);text-align:right;flex:none}
 .s{width:9px;height:9px;border-radius:50%;flex:none;background:var(--green);box-shadow:0 0 8px var(--green)}
 .s.warning,.s.restarting,.s.checking{background:var(--amber);box-shadow:0 0 8px var(--amber)}
-.s.critical,.s.down{background:var(--red);box-shadow:0 0 10px var(--red)}
+.s.critical,.s.down,.s.error{background:var(--red);box-shadow:0 0 10px var(--red)}
+details.ev{border-top:1px solid var(--line)}.list>details.ev:first-child{border-top:0}
+details.ev summary{list-style:none;display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer}
+details.ev summary::-webkit-details-marker{display:none}
+details.ev summary .t{flex:1;min-width:0}details.ev summary b{display:block;font-weight:600;font-size:14px}
+details.ev summary span.sub2{display:block;font:12px var(--mono);color:var(--soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+details.ev .body{padding:0 14px 14px 35px;font-size:13px;color:var(--text)}
+details.ev .raw{font:12px var(--mono);color:var(--muted);margin-top:8px;word-break:break-word}
+.chiprow{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:10px;scrollbar-width:none}
+.chiprow button{flex:none;border:0;border-radius:999px;padding:7px 12px;background:var(--card);color:var(--soft);font-weight:600;font-size:13px}
+.chiprow button.on{background:#3a0d0a;color:#ffd9d2}.chiprow button i{font-style:normal;color:var(--muted);margin-left:5px}
 .s.off,.s.ignored,.s.info{background:#3f3f46;box-shadow:none}.s.info{background:var(--sky);box-shadow:0 0 8px var(--sky)}
 .alert{display:flex;gap:12px;align-items:flex-start;width:100%;text-align:left;background:linear-gradient(90deg,#2a1d05,#17140b);border:1px solid #4a3609;border-radius:14px;padding:12px 14px;margin-bottom:10px}
 .alert.critical{background:linear-gradient(90deg,#300908,#170b0b);border-color:#5a1410}
@@ -2302,6 +2552,7 @@ input.field,select.field{width:100%;background:var(--card);border:1px solid #262
   <section id="t-drives" class="hidden"></section>
   <section id="t-shield" class="hidden"></section>
   <section id="t-log" class="hidden"></section>
+  <section id="t-events" class="hidden"></section>
 </main>
 
 <nav class="tabs hidden" id="tabs">
@@ -2552,7 +2803,12 @@ function rShield(){
   x+=row(sc.pending_reboot?'warning':(sc.updates?'info':''),'Windows Update',(sc.updates==null?'Not checked yet':sc.updates?sc.updates+' update'+(sc.updates>1?'s':'')+' available':'Up to date')+(sc.pending_reboot?' · restart needed':''),S.windows?'<button class="btn" data-act="check_updates">Check</button>':'');
   x+=row(sc.failed>=10?'warning':(sc.failed==null?'off':''),'Sign-ins',sc.failed==null?(sc.admin===false?'Needs administrator to read':'Checking…'):sc.failed+' failed attempt'+(sc.failed===1?'':'s')+' in 24 h');
   x+=row(sc.unexpected?'warning':(sc.unexpected==null?'off':''),'Crashes & power losses',sc.unexpected==null?'Checking…':(sc.unexpected||0)+' unexpected shutdown'+(sc.unexpected===1?'':'s')+' · '+(sc.bsod||0)+' blue screen'+(sc.bsod===1?'':'s')+' in 30 days');
-  if(sc.disk_errors!=null)x+=row(sc.disk_errors?'warning':'','Disk errors in the event log',sc.disk_errors+' in 7 days');
+  const es=sc.events;
+  if(es){const dn=es.cats.drives||0,dl=Object.keys(es.serious_drives||{}).length;
+    x+='<button class="row" data-evgo="drives"><span class="s '+(dl?'warning':'')+'"></span><span class="t"><b>Drive errors from Windows</b><span>'+(dn?dn+' in 7 days'+(dl?' · '+esc(Object.keys(es.serious_drives)[0])+' needs a look':''):'None in 7 days')+'</span></span><span class="m">›</span></button>'+
+       '<button class="row" data-evgo="all"><span class="s '+(es.critical?'critical':es.total?'warning':'')+'"></span><span class="t"><b>Windows errors &amp; events</b><span>'+(es.total?es.total+' worth knowing about in 7 days':'Nothing worth worrying about in 7 days')+'</span></span><span class="m">›</span></button>'}
+  else if(sc.disk_errors!=null)x+='<button class="row" data-evgo="drives"><span class="s '+(sc.disk_errors?'warning':'')+'"></span><span class="t"><b>Drive errors from Windows</b><span>'+sc.disk_errors+' in 7 days</span></span><span class="m">›</span></button>';
+  else if(S.windows)x+='<button class="row" data-evgo="all"><span class="s off"></span><span class="t"><b>Windows errors &amp; events</b><span>Reading the event logs…</span></span><span class="m">›</span></button>';
   x+='</div><div class="sec"><span>NETWORK</span></div><div class="list">';
   x+=row(n.loss>=50?'critical':n.loss>=10?'warning':'','Internet',(n.host||'')+' · '+f0(n.ping_ms)+' ms · '+f0(n.loss,'%')+' loss');
   x+=row(n.dns===false?'warning':'','DNS',n.dns===false?'Names aren\'t resolving':'Resolving names');
@@ -2574,6 +2830,7 @@ function rLog(){
   x+='<div class="hold" data-hold="restart"><div class="fill"></div><span>Hold to restart HAL 9000</span></div>'+
      '<div class="hold amber" data-hold="shutdown" style="margin-top:10px"><div class="fill"></div><span>Hold to shut down</span></div>'+
      '<p class="hint">“I\'m afraid I can\'t do that, '+esc(S.hal.name)+'” — unless you hold for 2 seconds. You get 60 seconds to cancel.</p>';
+  if(S.windows)x+='<div class="list" style="margin-top:14px"><button class="row" data-evgo="all"><span class="t"><b>Windows errors &amp; events</b><span>Drive errors, crashes, failed services and updates</span></span><span class="m">›</span></button></div>';
   x+='<p class="hint" style="margin-top:18px;font-style:normal">HAL 9000 v'+esc(S.version)+' · '+esc(S.host)+'</p>';
   return x}
 
@@ -2626,6 +2883,11 @@ document.addEventListener('click',async e=>{
   const go=e.target.closest('[data-go]');if(go){show(go.dataset.go);return}
   const r=e.target.closest('[data-range]');if(r){range=r.dataset.range;hist=null;render();loadHist(true);return}
   const a=e.target.closest('[data-act]');if(a){if(a.dataset.confirm&&!confirm(a.dataset.confirm))return;act(a.dataset.act);return}
+  const eg=e.target.closest('[data-evgo]');if(eg){evCat=eg.dataset.evgo;show('events');return}
+  const ec=e.target.closest('[data-evcat]');if(ec){evCat=ec.dataset.evcat;render();return}
+  const ed=e.target.closest('[data-evdays]');if(ed){evDays=Number(ed.dataset.evdays);render();return}
+  if(e.target.closest('[data-evrefresh]')){if(evData)evData.busy=true;render();loadEv(true);return}
+  const ek=e.target.closest('[data-evk]');if(ek){const k=ek.dataset.evk;setTimeout(()=>{const d=ek.parentElement;if(d.open)evOpen.add(k);else evOpen.delete(k)},0);return}
   const rs=e.target.closest('[data-restart]');if(rs){if(!confirm((rs.textContent==='Start'?'Start ':'Restart ')+rs.dataset.name+'?'))return;
     try{const d=await api('/api/service/restart',{id:rs.dataset.restart});toast(d.message,!d.ok);refresh()}catch(err){toast(err.message,true)}return}
   if(e.target.closest('[data-settings]'))openSettings();
@@ -2633,16 +2895,42 @@ document.addEventListener('click',async e=>{
 });
 $('tabs').onclick=e=>{const b=e.target.closest('button');if(b)show(b.dataset.tab)};
 
+/* ---------- Windows events (errors worth knowing about) ---------- */
+let evData=null,evCat='all',evDays=7;const evOpen=new Set();
+const evKey=e=>e.t+'|'+e.src+'|'+e.id;
+function rEvents(){
+  let x='<div class="top"><button class="back" data-go="shield">‹ Shield</button><div class="eye sm '+(S?S.hal.level:'')+'"></div></div><h1>Windows events</h1>';
+  if(!evData){return x+'<div class="list"><div class="empty">I\'m reading Windows\' event logs…</div></div>'}
+  if(!evData.windows)return x+'<div class="list"><div class="empty">The event log is only on Windows.</div></div>';
+  const now=Date.now()/1000,inRange=evData.events.filter(e=>now-e.t<=evDays*86400);
+  const cats=Object.keys(evData.cats).filter(c=>inRange.some(e=>e.cat===c));
+  if(evCat!=='all'&&!evData.cats[evCat])evCat='all';
+  const list=inRange.filter(e=>evCat==='all'||e.cat===evCat);
+  x+='<div class="seg">'+[[1,'24 h'],[7,'7 days'],[30,'30 days']].map(r=>'<button data-evdays="'+r[0]+'" class="'+(evDays===r[0]?'on':'')+'">'+r[1]+'</button>').join('')+'</div>';
+  x+='<div class="chiprow"><button data-evcat="all" class="'+(evCat==='all'?'on':'')+'">All<i>'+inRange.length+'</i></button>'+
+     Object.keys(evData.cats).map(c=>{const n=inRange.filter(e=>e.cat===c).length;return n||evCat===c?'<button data-evcat="'+c+'" class="'+(evCat===c?'on':'')+'">'+esc(evData.cats[c])+'<i>'+n+'</i></button>':''}).join('')+'</div>';
+  const crit=list.filter(e=>e.level==='critical').length,name=S?S.hal.name:'Dave',per=evDays===1?'today':'in the last '+evDays+' days';
+  let q;if(!list.length)q='I\'ve read Windows\' logs, '+name+'. Nothing '+(evCat==='all'?'':'here ')+'you need to worry about '+per+'.';
+  else{const top={};list.forEach(e=>{const k=e.who||e.title;top[k]=(top[k]||0)+1});const w=Object.entries(top).sort((a,b)=>b[1]-a[1])[0];
+    q='I\'ve found '+list.length+' thing'+(list.length>1?'s':'')+' worth knowing about '+per+(crit?', '+crit+' of them serious':'')+'. '+(w[1]>1?'Most are about '+w[0]+'.':'')}
+  x+='<p class="quote" style="margin:4px 4px 14px;min-height:0;text-align:left">“'+esc(q)+'”</p>';
+  if(list.length){x+='<div class="list">'+list.slice(0,150).map(e=>{const k=evKey(e);return'<details class="ev"'+(evOpen.has(k)?' open':'')+'><summary data-evk="'+esc(k)+'"><span class="s '+e.level+'"></span><span class="t"><b>'+esc(e.title)+'</b><span class="sub2">'+esc(ago(e.t)+(e.who&&!e.title.includes(e.who)?' · '+e.who:'')+' · '+evData.cats[e.cat])+'</span></span></summary>'+
+    '<div class="body">'+(e.explain?esc(e.explain):'')+'<div class="raw">'+esc(e.msg)+'</div><div class="raw">Event '+e.id+' · '+esc(e.src)+' · '+esc(new Date(e.t*1000).toLocaleString())+'</div></div></details>'}).join('')+'</div>'}
+  x+='<button class="btn wide" data-evrefresh style="margin-top:4px">'+(evData.busy?'Reading the logs…':'Check again')+'</button>';
+  x+='<p class="hint">Only what you\'d need to see: drive errors and retries, crashes and power losses, hardware errors, services and apps that crashed, failed updates and Defender alerts.'+(evData.t?' Checked '+esc(ago(evData.t))+'.':'')+(S&&S.security.admin===false?' Run HAL as administrator to read everything.':'')+'</p>';
+  return x}
+async function loadEv(refresh){try{evData=await api('/api/winevents'+(refresh?'?refresh=1':''));if(tab==='events')render();if(evData.busy||(!evData.t&&evData.windows)){loadEv.tries=(loadEv.tries||0)+1;if(loadEv.tries<40)setTimeout(()=>loadEv(false),3000)}else loadEv.tries=0}catch(e){}}
+
 /* ---------- navigation, refresh ---------- */
-function show(t){tab=t;['status','vitals','services','drives','shield','log'].forEach(k=>$('t-'+k).classList.toggle('hidden',k!==t));
-  document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.tab===(t==='log'?'status':t)));
+function show(t){tab=t;['status','vitals','services','drives','shield','log','events'].forEach(k=>$('t-'+k).classList.toggle('hidden',k!==t));
+  document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.tab===(t==='log'?'status':t==='events'?'shield':t)));if(t==='events')loadEv(false);
   window.scrollTo(0,0);if(t==='log'){events=null;loadEvents()}if(t==='vitals')loadHist(true);if(t==='drives')loadCleanup();render()}
-function render(){if(!S)return;if(tab==='status'){renderStatus();return}const f={vitals:rVitals,services:rServices,drives:rDrives,shield:rShield,log:rLog}[tab];
+function render(){if(!S)return;if(tab==='status'){renderStatus();return}const f={vitals:rVitals,services:rServices,drives:rDrives,shield:rShield,log:rLog,events:rEvents}[tab];
   const el=$('t-'+tab);el.innerHTML=f();el.querySelectorAll('[data-hold]').forEach(bindHold)}
 async function loadEvents(){try{events=(await api('/api/events')).events;if(S)S.unread=0;if(tab==='log')render()}catch(e){}}
 async function loadHist(force){if(!force&&range!=='live'&&Date.now()-histAt<60000)return;try{hist=(await api('/api/history?range='+range)).series;histAt=Date.now();if(tab==='vitals')render()}catch(e){}}
 async function loadCleanup(){try{cleanup=await api('/api/cleanup');if(tab==='drives')render();if(cleanup.busy||!cleanup.t)setTimeout(loadCleanup,4000)}catch(e){}}
-async function refresh(){if(busy)return;busy=true;try{S=await api('/api/status');lastOk=Date.now();render();if(tab==='vitals')loadHist(range==='live')}catch(e){if(!token)return;lastOk=0}finally{busy=false}}
+async function refresh(){if(busy)return;busy=true;try{S=await api('/api/status');lastOk=Date.now();if(tab!=='events')render();if(tab==='vitals')loadHist(range==='live')}catch(e){if(!token)return;lastOk=0}finally{busy=false}}
 function start(){$('app').classList.remove('hidden');$('tabs').classList.remove('hidden');refresh();
   if(!start.t)start.t=setInterval(()=>{if(!document.hidden&&token)refresh()},3000)}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&token)refresh()});

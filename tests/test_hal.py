@@ -442,4 +442,48 @@ assert hs.STATE_FILE.read_text() == before   # demo never writes
 print("state ok")
 
 mock.shutdown()
+
+# ---------------- Windows events: plain-English, drive letters, summary ----------------
+disks = {"2": {"name": "Seagate IronWolf 4TB", "letters": ["Z:"]}, "0": {"name": "Samsung 990", "letters": ["C:"]}}
+raw = {"events": [
+    {"t": "2026-11-18T10:00:00Z", "lvl": 2, "src": "disk", "id": 7, "cat": "drives", "msg": "The device, \\Device\\Harddisk2\\DR2, has a bad block."},
+    {"t": "2026-11-18T10:00:00Z", "lvl": 2, "src": "disk", "id": 7, "cat": "drives", "msg": "duplicate"},
+    {"t": "2026-11-18T09:00:00Z", "lvl": 3, "src": "disk", "id": 153, "cat": "drives", "msg": "The IO operation at logical block address 0x1 for Disk 2 (PDO name: \\Device\\00000034) was retried."},
+    {"t": "2026-11-18T08:00:00Z", "lvl": 2, "src": "Ntfs", "id": 55, "cat": "drives", "msg": "A corruption was discovered in the file system structure on volume Z:."},
+    {"t": "2026-11-17T08:00:00Z", "lvl": 2, "src": "Service Control Manager", "id": 7031, "cat": "services", "msg": "The Jellyfin Server service terminated unexpectedly."},
+    {"t": "2026-11-17T07:00:00Z", "lvl": 2, "src": "Application Error", "id": 1000, "cat": "apps", "msg": "Faulting application name: Sonarr.exe, version: 4.0"},
+    {"t": "2026-11-16T07:00:00Z", "lvl": 1, "src": "Microsoft-Windows-Kernel-Power", "id": 41, "cat": "crashes", "msg": "The system has rebooted without cleanly shutting down first."},
+    {"t": "2026-11-16T07:00:00Z", "lvl": 1, "src": "Microsoft-Windows-Kernel-Power", "id": 41, "cat": "other", "msg": "same, from the catch-all"},
+    {"t": "2026-11-15T07:00:00Z", "lvl": 2, "src": "Microsoft-Windows-WHEA-Logger", "id": 17, "cat": "hardware", "msg": "A corrected hardware error has occurred. Component: PCI Express Root Port Error Source: AER"},
+    {"t": "2026-11-15T06:00:00Z", "lvl": 1, "src": "Microsoft-Windows-Windows Defender", "id": 1116, "cat": "security", "msg": "Malware detected"},
+    {"t": "2026-11-14T06:00:00Z", "lvl": 2, "src": "SomethingNew", "id": 9, "cat": "other", "msg": "First sentence here. Second sentence."},
+    {"t": "", "lvl": 2, "src": "x", "id": 1, "cat": "other", "msg": "no time"},
+]}
+evs = hs.parse_winevents(raw, disks)
+titles = [e["title"] for e in evs]
+assert titles[0] == "Bad block on Drive Z: (Seagate IronWolf 4TB)" and evs[0]["level"] == "critical" and evs[0]["serious"], titles
+assert "Drive Z: (Seagate IronWolf 4TB) had to retry" in titles and "File system damage on Drive Z:" in titles
+assert "chkdsk Z: /f" in next(e for e in evs if e["id"] == 55)["explain"]
+assert "Service crashed: Jellyfin Server" in titles and "Sonarr.exe crashed" in titles
+assert titles.count("The PC shut down unexpectedly") == 1                 # catch-all duplicate dropped
+assert next(e for e in evs if e["cat"] == "hardware")["who"] == "PCI Express Root Port"
+assert "Defender found a threat" in titles and "First sentence here." in titles
+assert len(evs) == 9 and all(evs[i]["t"] >= evs[i + 1]["t"] for i in range(len(evs) - 1))
+now_ = evs[0]["t"] + 3600
+sm_ = hs.event_summary(evs, now_)
+assert sm_["cats"]["drives"] == 3 and sm_["serious_drives"] == {"Drive Z: (Seagate IronWolf 4TB)": 3}, sm_
+assert hs.event_summary(evs, now_ + 40 * 86400)["total"] == 0
+# five retries alone flag a drive; one doesn't
+retry = lambda i: {"t": f"2026-11-18T0{i}:00:00Z", "lvl": 3, "src": "disk", "id": 153, "cat": "drives", "msg": "for Disk 2 was retried."}
+one = hs.parse_winevents({"events": [retry(1)]}, disks)
+assert hs.event_summary(one, one[0]["t"])["serious_drives"] == {}
+five = hs.parse_winevents({"events": [retry(i) for i in range(1, 6)]}, disks)
+assert list(hs.event_summary(five, five[0]["t"])["serious_drives"].values()) == [5]
+# demo: issue raised, events API answers
+dh = hs.make_demo_hal()
+assert any(i["key"].startswith("evdrive:") and i["tab"] == "events" for i in dh.status()["issues"])
+v = dh.winevents_view()
+assert v["windows"] and v["summary"]["cats"]["drives"] == 6 and v["events"] and "drives" in v["cats"]
+json.dumps(v)
+print("windows events ok")
 print("\nALL HAL TESTS PASSED")

@@ -70,6 +70,10 @@ Pair with the **same access code as the NZB phone app**, then add it to your hom
 - **Shield**: the **UPS** (charge, runtime, load in % and watts, input/output voltage, the last hour, power cuts),
   Defender, firewall, Windows Update, pending restart, failed sign-ins, crashes and unexpected shutdowns, disk errors
   in the event log, internet / DNS / throughput.
+- **Windows events** (Shield > Windows errors & events): only what you'd need to see from the event logs, in plain
+  English with the drive letter: drive errors and retries, crashes and power losses, blue screens, hardware (WHEA)
+  errors, services and apps that crashed, failed updates, Defender alerts. 24 h / 7 days / 30 days, by category; tap one
+  for what it means and the original message. Drive errors this week also raise an alert.
 - **Log & controls** (the bell): everything HAL noticed, and the pod bay controls: Lock, Sleep, Fix network (flush
   DNS, renew the address), Test alert, and *hold for 2 seconds* to restart or shut down the PC (60 seconds to cancel).
 - **Phone alerts** through ntfy: the NZB phone app's topic is used automatically (or set HAL's own in Settings).
