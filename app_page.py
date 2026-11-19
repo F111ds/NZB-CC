@@ -131,6 +131,28 @@ aside.side{display:none}
 .sw small{display:block;color:var(--muted);font-size:12px}
 .fld{display:block;font-size:12px;color:var(--soft);margin:10px 0 5px}
 .inp{width:100%;background:var(--card2);border:1px solid #26262b;border-radius:10px;padding:11px 12px;font:16px var(--mono);color:var(--white)}
+.row button.t{background:none;border:0;padding:0;text-align:left;color:inherit;font:inherit}
+#player{position:fixed;inset:0;z-index:9;background:#000;overflow-y:auto;padding-top:env(safe-area-inset-top)}
+body.noscroll{overflow:hidden}
+.phead{display:flex;justify-content:space-between;align-items:center;padding:6px 12px 10px;max-width:900px;margin:0 auto}
+.pbtn{width:40px;height:40px;border:0;border-radius:12px;background:var(--card);color:var(--soft);font-size:18px}
+.pvid{background:#000;width:100%;aspect-ratio:16/9;max-height:70vh}.pvid video{width:100%;height:100%;display:block;background:#000}
+.pbody{padding:14px 16px calc(30px + env(safe-area-inset-bottom));max-width:640px;margin:0 auto}
+.pctl{display:flex;justify-content:center;gap:22px;margin:0 0 16px}.pctl button{border:0;background:var(--card);color:var(--white);border-radius:999px;padding:10px 16px;font-weight:600;min-width:64px}
+.ihead{display:flex;gap:14px;margin:6px 0 14px}
+.ipost{position:relative;width:118px;height:176px;border-radius:12px;flex:none;overflow:hidden;background:linear-gradient(160deg,#36485f,#121826 60%,#2a1010);display:flex;align-items:flex-end;padding:10px;font:700 12px var(--mono);letter-spacing:.06em;text-transform:uppercase}
+.ipost img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.iinfo{min-width:0}.ititle{font-size:23px;font-weight:700;line-height:1.15}.isub{color:var(--text);margin-top:4px;font-weight:600}.imeta{color:var(--soft);margin-top:6px}
+.ichips{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.ichips span,.ichips button{padding:5px 10px;border-radius:999px;background:var(--card2);font-size:13px;color:var(--text);border:0}
+.okc{color:var(--green);font-size:14px}.warnc{color:var(--amber);font-size:14px}
+.mono{font:600 12px var(--mono);color:var(--soft)}
+.pbar{height:4px;border-radius:2px;background:#ffffff22;margin-top:10px;overflow:hidden}.pbar i{display:block;height:100%;background:var(--red)}
+.btn.big{font-size:16px;padding:15px;margin-top:4px}.btn.r.big{background:var(--red);color:#fff}.btn.r.big:disabled{background:var(--card2);color:var(--muted);opacity:1}
+.btn.half{flex:1;width:auto}
+.away{color:var(--amber);font-size:13px;text-align:center;margin-top:8px}
+.dline{display:flex;gap:12px;align-items:center;margin:18px 0 6px;font-style:italic;color:var(--soft);font-size:14px}
+.plot{color:var(--soft);font-size:14px;line-height:1.5}
+.wgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}.wgrid b{display:block;font:600 15px var(--mono);margin-top:2px}
 .cbox{background:var(--card);border-radius:14px;padding:12px 14px;margin-bottom:10px}
 .cbox h3{margin:0 0 2px;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:8px}
 .crow{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
@@ -175,6 +197,7 @@ aside.side{display:none}
   <button data-tab="watch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M10 9l5 2-5 2z"/></svg>Watch</button>
   <button data-tab="system"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>System</button>
 </nav>
+<div id="player" class="hidden"></div>
 <div id="sheet" class="sheet hidden"><div class="panel" id="panel"></div></div>
 <div id="updbar" class="hidden">Updating… I'll be back in about a minute.</div>
 <div id="toast"></div>
@@ -348,7 +371,8 @@ async function loadLib(kind){try{if(kind==='movies'&&!(LIB&&LIB.movies))LIB=Obje
   if(kind==='shows'&&!(LIB&&LIB.shows))LIB=Object.assign(LIB||{},{shows:(await api('/api/kodi/shows')).shows||[]});
   if(kind==='missing')MISSING=(await api('/api/kodi/missing')).missing||[];render()}catch(e){toast(e.message,true)}}
 async function openShow(id){libView='show';SHOW=null;render();window.scrollTo(0,0);try{SHOW=await api('/api/kodi/show?id='+encodeURIComponent(id));render()}catch(e){toast(e.message,true);libView='shows';render()}}
-function rLibrary(){let x='<div class="narrow">'+topbar('')+'<div class="top" style="min-height:0"><button class="btn" data-libback>‹ '+(libView==='show'?'Shows':'Watch')+'</button></div>';
+function rLibrary(){let x='<div class="narrow">'+topbar('')+'<div class="top" style="min-height:0"><button class="btn" data-libback>‹ '+(libView==='item'?(libPrev==='show'?esc((SHOW&&SHOW.title)||'Show'):libPrev==='movies'?'Movies':'Watch'):libView==='show'?'Shows':'Watch')+'</button></div>';
+  if(libView==='item')return x+rItem()+'</div>';
   if(libView!=='show')x+='<h1>Library</h1><div class="seg">'+[['movies','Movies'],['shows','Shows'],['missing','Missing']].map(v=>'<button data-lib="'+v[0]+'" class="'+(libView===v[0]?'on':'')+'">'+v[1]+'</button>').join('')+'</div>';
   if(libView==='movies'){const all=(LIB&&LIB.movies)||null;if(!all)return x+'<div class="list"><div class="empty">I\'m asking Kodi…</div></div></div>';
     const f=libFilter.toLowerCase(),list=all.filter(m=>!f||m.title.toLowerCase().includes(f)).sort((a,b)=>String(b.added).localeCompare(String(a.added)));
@@ -363,12 +387,91 @@ function rLibrary(){let x='<div class="narrow">'+topbar('')+'<div class="top" st
   else if(libView==='show'){if(!SHOW)return x+'<div class="list"><div class="empty">I\'m asking Kodi…</div></div></div>';
     x+='<h1 style="margin-top:6px">'+esc(SHOW.title||'')+'</h1>'+(SHOW.next?'<div class="card"><h3><span class="k">NEXT EPISODE</span><button class="btn r" data-ep="'+SHOW.next.id+'">▶ TV</button></h3><div class="tt">S'+SHOW.next.season+' E'+SHOW.next.episode+' · '+esc(SHOW.next.title)+'</div></div>':'');
     (SHOW.seasons||[]).slice().reverse().forEach(se=>{x+='<div class="sec"><span>'+(se.season?'SEASON '+se.season:'SPECIALS')+'</span><span>'+se.episodes.filter(e=>e.watched).length+' / '+se.episodes.length+'</span></div><div class="list">'+
-      se.episodes.map(e=>'<div class="row"><span class="s'+(e.watched?' off':'')+'"></span><span class="t"><b>'+esc('E'+e.episode+' · '+e.title)+'</b><span>'+esc(e.watched?'watched':e.resume?'started':'')+'</span></span><button class="btn r" data-ep="'+e.id+'">▶ TV</button></div>').join('')+
+      se.episodes.map(e=>'<div class="row"><span class="s'+(e.watched?' off':'')+'"></span><button class="t" data-item="episode:'+e.id+'"><b>'+esc('E'+e.episode+' · '+e.title)+'</b><span>'+esc(e.watched?'watched':e.resume?'started':'tap for phone or TV')+'</span></button><button class="btn r" data-ep="'+e.id+'">▶ TV</button></div>').join('')+
       (se.missing&&se.missing.length?'<div class="row"><span class="s warning"></span><span class="t"><b>Missing: '+esc(se.missing.map(n=>'E'+n).join(', '))+'</b></span><button class="btn g" data-sopen="'+esc((SHOW.title||'')+' S'+String(se.season).padStart(2,'0')+'E'+String(se.missing[0]).padStart(2,'0'))+'" data-scat="5000">Find</button></div>':'')+'</div>'})}
   return x+'</div>'}
+// ---- Watch on the phone (home Wi-Fi only; Jellyfin streams it through the PC) ----
+let ITEM=null,libPrev=null,PL=null;const posters={};
+async function openItem(kind,id){if(libView!=='item')libPrev=libView;libView='item';ITEM=null;render();window.scrollTo(0,0);
+  try{ITEM=await api('/api/watch/item?kind='+kind+'&id='+id);render();loadPoster(ITEM)}catch(e){toast(e.message,true);libView=libPrev;render()}}
+async function loadPoster(it){const k=it&&it.poster;if(!k||posters[k])return;try{const r=await fetch('/api/jellyfin/art?id='+encodeURIComponent(k.slice(2)),{headers:{'X-Mobile-Token':token}});
+  if(!r.ok)return;posters[k]=URL.createObjectURL(await r.blob());if(ITEM===it)render()}catch(e){}}
+function itemLine(it){const n=NAME();if(!it.matched)return it.jellyfin?'I can\'t find this one in Jellyfin, '+n+'. The TV can still play it.':'Jellyfin isn\'t connected, '+n+'. The TV can still play it.';
+  if(!it.home)return'I\'m afraid I can\'t stream that out here, '+n+'. It would eat your data. It\'ll be waiting when you get home.';
+  if(it.start>=30)return'You stopped at the good part, '+n+'. Shall I pick up where we left off?';
+  if(it.watched)return'You\'ve seen this one, '+n+'. I don\'t mind watching it again.';return'An excellent choice, '+n+'.'}
+function rItem(){const it=ITEM;if(!it)return'<div class="list"><div class="empty">I\'m looking it up…</div></div>';
+  const ep=it.kind==='episode',name=ep?it.show:it.title,meta=[it.year,it.runtime?mins(it.runtime):'',it.mpaa].filter(Boolean).join(' · ');
+  let x='<div class="ihead"><div class="ipost">'+(posters[it.poster]?'<img src="'+posters[it.poster]+'" alt="">':'<span>'+esc(name)+'</span>')+'</div><div class="iinfo"><div class="ititle">'+esc(name)+'</div>'+
+    (ep?'<div class="isub">'+esc('S'+it.season+' E'+it.episode+' · '+it.title)+'</div>':'')+'<div class="imeta">'+esc(meta)+'</div>'+
+    (it.chips.length?'<div class="ichips">'+it.chips.map(c=>'<span>'+esc(c)+'</span>').join('')+'</div>':'')+
+    '<div class="k" style="margin-top:12px">IN JELLYFIN</div><div class="'+(it.matched?'okc':'warnc')+'">● '+(it.matched?'Matched':it.jellyfin?'Not found':'Not connected')+'</div></div></div>';
+  const resume=it.start>=30,can=it.matched&&it.home;
+  if(resume&&it.runtime)x+='<div class="card"><h3><span class="k">'+(it.on_phone?'WATCHED ON PHONE':'WATCHED SO FAR')+'</span><span class="mono">'+mmss(it.start)+' / '+mmss(it.runtime)+'</span></h3><div class="pbar"><i style="width:'+Math.min(100,it.start/it.runtime*100).toFixed(1)+'%"></i></div></div>';
+  x+='<button class="btn r wide big" data-wplay="'+(resume?it.start:0)+'"'+(can?'':' disabled')+'>▶&nbsp; '+(!it.home?(resume?'Resume':'Watch')+' on phone · at home only':resume?'Resume on phone · '+mmss(it.start):'Watch on phone')+'</button>';
+  if(!it.home)x+='<div class="away">You\'re not on home Wi-Fi, so this would use mobile data.</div>';
+  x+='<div class="crow">'+(resume?'<button class="btn wide half" data-wplay="0"'+(can?'':' disabled')+'>Start over</button>':'')+'<button class="btn wide half" data-'+(ep?'ep':'movie')+'="'+it.id+'">📺&nbsp; Play on TV</button></div>';
+  x+='<div class="dline"><div class="eye sm"></div><div>“'+esc(itemLine(it))+'”</div></div>';
+  if(it.plot)x+='<p class="plot">'+esc(it.plot)+'</p>';return x}
+
+const CAN_HLS=!!document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
+function wOpen(start){if(!ITEM)return;if(!CAN_HLS){toast('This browser can\'t play the stream. Use Safari on the iPhone'+(ITEM.web?', or Open in Jellyfin':'')+'.',true);return}
+  PL={it:ITEM,quality:LS.get('w_q','best'),audio:null,sub:null,sid:null,state:'Starting…',direct:false,lastSave:0};
+  const p=$('player');p.innerHTML=playerHtml();p.classList.remove('hidden');document.body.classList.add('noscroll');wWire();wLoad(Number(start)||0)}
+function playerHtml(){const it=PL.it,ep=it.kind==='episode';
+  return'<div class="phead"><button class="pbtn" data-wclose aria-label="Close">⌄</button><span class="k">NOW PLAYING ON PHONE</span><button class="pbtn" data-wopts aria-label="Playback options">⋯</button></div>'+
+  '<div class="pvid"><video id="pv" playsinline controls preload="auto" x-webkit-airplay="allow"></video></div><div class="pbody">'+
+  '<div class="pctl"><button data-wseek="-10">↺ 10</button><button data-wpp id="wpp">❚❚</button><button data-wseek="30">30 ↻</button></div>'+
+  '<div class="ititle" style="font-size:21px">'+esc(ep?it.show:it.title)+'</div><div class="imeta">'+esc(ep?'S'+it.season+' E'+it.episode+' · '+it.title:[it.year,it.runtime?mins(it.runtime):''].filter(Boolean).join(' · '))+'</div>'+
+  '<div class="ichips" id="wchips"></div>'+
+  '<div class="card" style="margin-top:14px"><h3><span class="k">STREAM</span><span id="wstate" class="mono">…</span></h3><div class="wgrid"><div><span class="k">QUALITY</span><b id="wq">—</b></div><div><span class="k">PC</span><b id="wpc">—</b></div><div><span class="k">LEFT</span><b id="wleft">—</b></div></div></div>'+
+  '<div class="crow"><button class="btn wide half" data-wtv>📺&nbsp; Move to TV</button>'+(it.web?'<a class="btn wide half" style="text-align:center;text-decoration:none" href="'+esc(it.web)+'" target="_blank" rel="noopener">Open in Jellyfin</a>':'')+'</div>'+
+  '<div class="dline"><div class="eye sm"></div><div>“Enjoy the '+(ep?'show':'film')+', '+esc(NAME())+'. I\'ll remember where you stop.”</div></div></div>'}
+const QN={best:'Best',1080:'1080p',720:'720p'};
+function wInfo(){const v=$('pv');if(!PL||!v)return;const it=PL.it,h=v.videoHeight;
+  const sub=PL.sub==null?'Subs off':((it.subs.find(s=>s.index===PL.sub)||{}).label||'Subtitles'),au=PL.audio==null?((it.audio.find(a=>a.default)||it.audio[0]||{}).label||''):((it.audio.find(a=>a.index===PL.audio)||{}).label||'');
+  if($('wchips'))$('wchips').innerHTML=['⚙ '+QN[PL.quality],'💬 '+sub,au?'🔈 '+au:''].filter(Boolean).map(c=>'<button data-wopts>'+esc(c)+'</button>').join('');
+  const st=$('wstate');if(st){st.textContent=PL.state;st.style.color=PL.state==='● SMOOTH'?'var(--green)':PL.state.startsWith('●')?'var(--amber)':'var(--soft)'}
+  if($('wq'))$('wq').textContent=h?(h>=1600?'4K':h>=900?'1080p':h>=650?'720p':h+'p'):'—';
+  if($('wpc'))$('wpc').textContent=PL.direct?'direct':'converting';
+  if($('wleft'))$('wleft').textContent=v.duration&&isFinite(v.duration)?mmss(v.duration-v.currentTime):'—';
+  if($('wpp'))$('wpp').textContent=v.paused?'▶':'❚❚'}
+function wWire(){const v=$('pv');const set=s=>{if(PL){PL.state=s;wInfo()}};
+  v.addEventListener('waiting',()=>set('● LOADING'));v.addEventListener('playing',()=>set('● SMOOTH'));v.addEventListener('stalled',()=>set('● SLOW'));
+  v.addEventListener('pause',()=>{wInfo();wSave(true)});v.addEventListener('play',wInfo);v.addEventListener('loadedmetadata',wInfo);
+  v.addEventListener('timeupdate',()=>{if(!PL)return;if(Date.now()-PL.lastSave>15000)wSave(false);if(Date.now()-(wInfo.t||0)>1000){wInfo.t=Date.now();wInfo()}});
+  v.addEventListener('ended',()=>{wSave(true).then(()=>{toast('That\'s the end, '+NAME()+'.');wClose()})});
+  v.addEventListener('error',()=>{if(PL&&PL.sid)set('● PROBLEM — try 1080p in ⋯')})}
+async function wLoad(at){const v=$('pv');if(!v||!PL)return;const old=PL.sid;PL.sid=null;if(old)api('/api/watch/stop',{sid:old}).catch(()=>{});
+  PL.state='Starting…';wInfo();
+  try{const r=await api('/api/watch/start',{kind:PL.it.kind,id:PL.it.id,quality:PL.quality,audio:PL.audio,sub:PL.sub});if(!PL)return;
+    PL.sid=r.sid;PL.direct=r.direct;wInfo();
+    const go=()=>{v.removeEventListener('loadedmetadata',go);if(at>0){try{v.currentTime=at}catch(e){}}v.play().catch(()=>{})};
+    v.addEventListener('loadedmetadata',go);v.src=r.url;v.load()}
+  catch(e){toast(e.message,true);if(PL){PL.state='● PROBLEM';wInfo()}}}
+function wSave(final){const v=$('pv');if(!PL||!v||!v.duration||!isFinite(v.duration)||v.currentTime<1)return Promise.resolve();PL.lastSave=Date.now();
+  return fetch('/api/watch/progress',{method:'POST',keepalive:true,headers:{'X-Mobile-Token':token,'Content-Type':'application/json'},
+    body:JSON.stringify({kind:PL.it.kind,id:PL.it.id,pos:v.currentTime,dur:v.duration,final:!!final})}).catch(()=>{})}
+async function wClose(){const v=$('pv');if(v&&!v.paused)v.pause();await wSave(true);const it=PL&&PL.it;if(PL&&PL.sid)api('/api/watch/stop',{sid:PL.sid}).catch(()=>{});
+  PL=null;if(v){v.removeAttribute('src');try{v.load()}catch(e){}}$('player').classList.add('hidden');$('player').innerHTML='';document.body.classList.remove('noscroll');
+  $('sheet').classList.add('hidden');if(it&&libView==='item'){try{ITEM=await api('/api/watch/item?kind='+it.kind+'&id='+it.id);render()}catch(e){}}}
+async function wTv(){const v=$('pv');if(!PL)return;if(v&&!v.paused)v.pause();
+  try{await api('/api/watch/tv',{kind:PL.it.kind,id:PL.it.id,pos:v?v.currentTime:0,dur:v&&isFinite(v.duration)?v.duration:0,sid:PL.sid});PL.sid=null;
+    toast('Carrying on on the TV, '+NAME()+'.');wClose()}catch(e){toast(e.message,true)}}
+function wOpts(){if(!PL)return;const it=PL.it,ck=b=>'<span class="m" style="color:var(--red2)">'+(b?'✓':'')+'</span>';
+  let x='<h2 style="margin:0 0 4px">Playback</h2><div class="sec"><span>QUALITY</span></div><div class="list">'+
+    [['best','Best','plays the file as it is'],['1080','1080p','if Best stutters'],['720','720p','weak Wi-Fi spot']].map(q=>'<button class="row" data-wq="'+q[0]+'"><span class="t"><b>'+q[1]+'</b><span>'+q[2]+'</span></span>'+ck(PL.quality===q[0])+'</button>').join('')+'</div>';
+  if(it.subs.length)x+='<div class="sec"><span>SUBTITLES</span></div><div class="list"><button class="row" data-wsub=""><span class="t"><b>Off</b></span>'+ck(PL.sub==null)+'</button>'+
+    it.subs.map(s=>'<button class="row" data-wsub="'+s.index+'"><span class="t"><b>'+esc(s.label)+'</b></span>'+ck(PL.sub===s.index)+'</button>').join('')+'</div>';
+  if(it.audio.length>1){const cur=PL.audio==null?((it.audio.find(a=>a.default)||it.audio[0]).index):PL.audio;
+    x+='<div class="sec"><span>SOUND</span></div><div class="list">'+it.audio.map(a=>'<button class="row" data-wau="'+a.index+'"><span class="t"><b>'+esc(a.label)+'</b></span>'+ck(cur===a.index)+'</button>').join('')+'</div>'}
+  x+='<div class="card" style="margin-top:12px;color:var(--soft);font-size:13px"><span style="color:var(--green)">●</span> On home Wi-Fi. Watching on the phone only works at home, so it never uses mobile data.</div>';
+  $('panel').innerHTML=x;$('sheet').classList.remove('hidden')}
+function wSwitch(){$('sheet').classList.add('hidden');const v=$('pv');wLoad(v&&v.currentTime>1?v.currentTime:0)}
+
 const mins=s=>s>=3600?Math.floor(s/3600)+' h '+String(Math.round(s%3600/60)).padStart(2,'0'):Math.round(s/60)+' min';
 function movieRow(m,finish){const meta=[m.year,m.runtime?mins(m.runtime):'',m.imdb?'IMDb '+Number(m.imdb).toFixed(1):'',finish&&m.runtime?mins(Math.max(0,m.runtime-m.resume))+' left':'',!finish&&m.watched?'watched':''].filter(Boolean).join(' · ');
-  return'<div class="row"><span class="s'+(m.watched?' off':'')+'"></span><span class="t"><b>'+esc(m.title)+'</b><span>'+esc(meta)+'</span></span><button class="btn r" data-movie="'+m.id+'">▶ TV</button></div>'}
+  return'<div class="row"><span class="s'+(m.watched?' off':'')+'"></span><button class="t" data-item="movie:'+m.id+'"><b>'+esc(m.title)+'</b><span>'+esc(meta)+'</span></button><button class="btn r" data-movie="'+m.id+'">▶ TV</button></div>'}
 function rWatch(){if(libView)return rLibrary();let x='<div class="narrow">'+topbar('Watch')+tvCard(true);
   if(K===null)x+='<div class="list"><div class="empty">I\'m asking Kodi…</div></div>';
   else if(K.online===false&&K.configured!==false)x+='<div class="list"><div class="empty">Kodi isn\'t answering, '+esc(NAME())+'. '+(H&&H.tv_ready?'Turn the TV on above.':'Turn the TV on and open Kodi.')+'</div></div>';
@@ -503,7 +606,7 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if(d.sort){sortBy=d.sort==='size'?(sortBy==='size_desc'?'size_asc':'size_desc'):d.sort;LS.set('app_sort',sortBy);render();return}
   if(d.seg){getSeg=d.seg;render();if(d.seg==='upcoming')loadUpcoming();if(d.seg==='history')loadHistory();if(d.seg==='saved')loadSaved();return}
   if(d.lib){libView=d.lib;libFilter='';render();window.scrollTo(0,0);loadLib(d.lib);return}
-  if('libback' in d){libView=libView==='show'?'shows':null;render();window.scrollTo(0,0);return}
+  if('libback' in d){libView=libView==='item'?libPrev:libView==='show'?'shows':null;render();window.scrollTo(0,0);return}
   if(d.show){openShow(d.show);return}
   if(d.hretry){act(()=>api('/api/history/retry',{id:d.hretry}).then(()=>loadHistory()),'Trying it again.');return}
   if(d.hdel){if(!confirm('Remove '+(d.name||'this')+' from the history? Downloaded files stay.'))return;act(()=>api('/api/history/delete',{id:d.hdel}).then(()=>loadHistory()),'Removed from the history.');return}
@@ -513,6 +616,16 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if(d.sclear){api('/api/saved',{action:'clear',id:d.sclear}).then(v=>{SAVED=v;render()}).catch(e=>toast(e.message,true));return}
   if(d.sopen!==undefined){getCat=d.scat||'';LS.set('app_cat',getCat);libView=null;show('get');setTimeout(()=>{if($('sq'))$('sq').value=d.sopen;doSearch(d.sopen)},50);return}
   if(d.play){c.disabled=true;act(()=>api('/api/home/play',{id:d.play}),r=>r&&r.started_tv?'Turning the TV on. It\'ll start in a moment.':'Starting it on the TV.');return}
+  if(d.item){const p=d.item.split(':');openItem(p[0],p[1]);return}
+  if(d.wplay!==undefined){wOpen(d.wplay);return}
+  if('wclose' in d){wClose();return}
+  if('wopts' in d){wOpts();return}
+  if(d.wseek){const v=$('pv');if(v)v.currentTime=Math.max(0,v.currentTime+Number(d.wseek));return}
+  if('wpp' in d){const v=$('pv');if(v){if(v.paused)v.play().catch(()=>{});else v.pause()}return}
+  if('wtv' in d){wTv();return}
+  if(d.wq){PL.quality=d.wq;LS.set('w_q',d.wq);wSwitch();return}
+  if(d.wsub!==undefined&&PL){PL.sub=d.wsub===''?null:Number(d.wsub);wSwitch();return}
+  if(d.wau!==undefined&&PL){PL.audio=Number(d.wau);wSwitch();return}
   if(d.ep){act(()=>api('/api/kodi/play',{episodeid:Number(d.ep)}),'Starting it on the TV.');return}
   if(d.movie){act(()=>api('/api/kodi/play',{movieid:Number(d.movie)}),'Starting it on the TV.');return}
   if(d.kc){act(()=>api('/api/kodi/control',{action:d.kc,playerid:Number(d.pid)}));return}

@@ -36,6 +36,20 @@ run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardware
 **Options > Remote Web Server > Run** (port 8085; the app also reads its WMI feed when that's available).
 Run as administrator to see drive temperatures and wear.
 
+## Watch on the phone (home Wi-Fi only)
+
+In the app, **Watch › Your library**: tap a movie (or an episode) for its page, then **Watch on phone**.
+The phone server finds the same film in Jellyfin (same file name, else title and year) and relays
+Jellyfin's stream, so the phone never sees Jellyfin's key and Safari plays it natively (full screen, AirPlay).
+
+- **Best** plays the file as it is (no converting); **1080p** / **720p** convert it, if Best stutters.
+  Subtitles and sound tracks are under **...**.
+- Where you stop is remembered (`watch_positions.json`) and handed to Kodi, so **Move to TV** (or
+  Play on TV later) carries on from the same spot. Finishing it marks it watched in Kodi.
+- It only works on the home network: away from home (mobile data or Tailscale) the button is off.
+- Uses the Jellyfin connection the phone server already has (desktop app's Jellyfin settings, or
+  Connect in the classic phone app's Jellyfin tab).
+
 ## Scripts: one setup, one update, one backup
 
 Right-click > Run with PowerShell, from your NZB Command Center folder:
