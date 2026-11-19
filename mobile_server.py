@@ -82,7 +82,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.13.1"
+VERSION = "3.14.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -2795,6 +2795,171 @@ SAVED_INTERVALS = (1, 3, 6, 12, 24)
 _settings_lock = threading.RLock()
 
 
+# ---- Connections (SABnzbd, indexers, Kodi): edited from the app, in the desktop app's own file ----
+# Written to nzb_manager_config.json in the desktop app's format (keys encrypted for this Windows user as
+# "dpapi:..."), so both apps keep working on the same settings. Keys are never sent back to the phone: it
+# only learns whether one is saved. Every other field in the file is left exactly as it was.
+_conn_lock = threading.Lock()
+SAB_KEY_RE = re.compile(r"^[A-Za-z0-9]{8,64}$")
+INDEXER_KEY_RE = re.compile(r"^[A-Za-z0-9_\-]{8,128}$")
+MAX_INDEXERS = 20
+
+
+def _plain_url(value, what: str) -> str:
+    url = str(value or "").strip().rstrip("/")
+    if not url:
+        return ""
+    if not re.match(r"^https?://", url, re.I):
+        url = "http://" + url
+    p = urllib.parse.urlsplit(url)
+    if not p.hostname or p.username or p.password or len(url) > 300 or any(c.isspace() for c in url):
+        raise ValueError(f"The {what} address doesn't look right.")
+    return url
+
+
+def desktop_app_running() -> bool:
+    """Whether NZB Command Center's desktop window is open (its next save would overwrite changes made here)."""
+    try:
+        import psutil  # optional; present when HAL runs
+    except ImportError:
+        return False
+    try:
+        for proc in psutil.process_iter(["name", "cmdline"]):
+            cmd = " ".join(proc.info.get("cmdline") or [])
+            if "nzb_command_center" in cmd.lower():
+                return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
+def _read_config_raw() -> dict:
+    data = json.loads(read_text_retry(CONFIG_FILE, encoding="utf-8-sig"))
+    if not isinstance(data, dict):
+        raise ConfigError(f"{CONFIG_FILE.name} does not contain a JSON object.")
+    return data
+
+
+def connections_view() -> dict:
+    data = _read_config_raw()
+    return {
+        "sab": {"url": str(data.get("sab_url") or "http://127.0.0.1:8080"), "key_set": bool(data.get("sab_api_key"))},
+        "indexers": [{"index": i, "name": str(x.get("name") or ""), "url": str(x.get("url") or ""),
+                      "enabled": bool(x.get("enabled", True)), "key_set": bool(x.get("api_key"))}
+                     for i, x in enumerate(data.get("indexers") or []) if isinstance(x, dict)],
+        "kodi": {"url": str(data.get("kodi_url") or ""), "username": str(data.get("kodi_username") or ""),
+                 "password_set": bool(data.get("kodi_password"))},
+        "desktop_open": desktop_app_running(),
+    }
+
+
+def save_connections(body: dict) -> dict:
+    """Applies the app's Connections page to nzb_manager_config.json (a backup is kept as .bak)."""
+    with _conn_lock:
+        data = _read_config_raw()
+        if "sab_url" in body:
+            data["sab_url"] = _plain_url(body.get("sab_url"), "SABnzbd") or "http://127.0.0.1:8080"
+        key = str(body.get("sab_api_key") or "").strip()
+        if key:
+            if not SAB_KEY_RE.match(key):
+                raise ValueError("That SABnzbd API key doesn't look right (letters and digits, from SABnzbd's Config > General).")
+            data["sab_api_key"] = _dpapi_protect(key)
+        if "indexers" in body:
+            items = body.get("indexers")
+            if not isinstance(items, list) or len(items) > MAX_INDEXERS:
+                raise ValueError("Which indexers?")
+            old = [x for x in (data.get("indexers") or []) if isinstance(x, dict)]
+            new = []
+            for it in items:
+                if not isinstance(it, dict):
+                    raise ValueError("Which indexers?")
+                idx = it.get("index")
+                base = dict(old[idx]) if isinstance(idx, int) and 0 <= idx < len(old) else {}
+                name = str(it.get("name") or "").strip()[:60]
+                url = _plain_url(it.get("url"), name or "indexer")
+                if not name or not url:
+                    raise ValueError("Each indexer needs a name and an address.")
+                k = str(it.get("api_key") or "").strip()
+                if k and not INDEXER_KEY_RE.match(k):
+                    raise ValueError(f"The API key for {name} doesn't look right.")
+                base.update({"name": name, "url": url, "enabled": bool(it.get("enabled", True))})
+                if k:
+                    base["api_key"] = _dpapi_protect(k)
+                base.setdefault("api_key", "")
+                new.append(base)
+            data["indexers"] = new
+        if "kodi_url" in body:
+            data["kodi_url"] = _plain_url(body.get("kodi_url"), "Kodi")
+        if "kodi_username" in body:
+            data["kodi_username"] = str(body.get("kodi_username") or "").strip()[:60]
+        pw = str(body.get("kodi_password") or "")
+        if pw:
+            if len(pw) > 128 or any(ord(c) < 32 for c in pw):
+                raise ValueError("That Kodi password doesn't look right.")
+            data["kodi_password"] = _dpapi_protect(pw)
+        elif body.get("clear_kodi_password"):
+            data["kodi_password"] = ""
+        bak = CONFIG_FILE.with_name(CONFIG_FILE.name + ".bak")
+        tmp = CONFIG_FILE.with_suffix(".tmp")
+        _retry_busy(lambda: bak.write_bytes(CONFIG_FILE.read_bytes()))
+        tmp.write_text(json.dumps(data, indent=4, ensure_ascii=False), encoding="utf-8")
+        _retry_busy(lambda: os.replace(tmp, CONFIG_FILE))
+    log.info("Connections changed from the app (SABnzbd, %d indexer(s), Kodi).", len(data.get("indexers") or []))
+    try:
+        get_config()                                   # pick the change up now (and say so if it's broken)
+    except ConfigError as exc:
+        return {"ok": True, "warning": str(exc)}
+    return {"ok": True}
+
+
+def test_connection(body: dict) -> dict:
+    """Tries SABnzbd, an indexer or Kodi with what's typed (or what's saved)."""
+    what = str(body.get("what") or "")
+    data = _read_config_raw()
+    try:
+        if what == "sab":
+            url = _plain_url(body.get("url") or data.get("sab_url"), "SABnzbd")
+            key = str(body.get("key") or "").strip() or _dpapi_unprotect(str(data.get("sab_api_key") or ""))
+            raw = http_fetch(f"{url}/api?mode=queue&limit=1&output=json&apikey={urllib.parse.quote(key)}", timeout=8, max_bytes=MAX_SAB_BYTES)
+            d = json.loads(raw.decode("utf-8", "replace"))
+            if isinstance(d, dict) and d.get("error"):
+                return {"ok": False, "message": f"SABnzbd answered, but: {redact(d['error'])}"}
+            return {"ok": True, "message": "SABnzbd is answering and accepts the key."}
+        if what == "indexer":
+            idx = body.get("index")
+            old = [x for x in (data.get("indexers") or []) if isinstance(x, dict)]
+            saved = old[idx] if isinstance(idx, int) and 0 <= idx < len(old) else {}
+            url = _plain_url(body.get("url") or saved.get("url"), "indexer")
+            key = str(body.get("key") or "").strip() or _dpapi_unprotect(str(saved.get("api_key") or ""))
+            api = url if url.endswith(("/api", "/api.php")) else url + "/api"
+            raw = http_fetch(f"{api}?t=caps&apikey={urllib.parse.quote(key)}", timeout=12, max_bytes=MAX_API_BYTES)
+            text = raw.decode("utf-8", "replace")
+            m = re.search(r'<error[^>]*description="([^"]*)"', text)
+            if m:
+                return {"ok": False, "message": f"The indexer answered, but: {redact(m.group(1))}"}
+            if "<caps" not in text:
+                return {"ok": False, "message": "That address answered, but not like a Newznab indexer."}
+            return {"ok": True, "message": "The indexer is answering and accepts the key."}
+        if what == "kodi":
+            url = normalize_kodi_url(str(body.get("url") or data.get("kodi_url") or ""))
+            if not url:
+                return {"ok": False, "message": "Enter Kodi's address first, e.g. http://192.168.68.62:8080."}
+            user = str(body.get("username") if body.get("username") is not None else data.get("kodi_username") or "")
+            pw = str(body.get("password") or "") or _dpapi_unprotect(str(data.get("kodi_password") or ""))
+            hdrs = {"Content-Type": "application/json"}
+            if user or pw:
+                hdrs["Authorization"] = "Basic " + base64.b64encode(f"{user}:{pw}".encode("utf-8")).decode("ascii")
+            raw = http_fetch(url.rstrip("/") + "/jsonrpc", timeout=6, max_bytes=64_000, headers=hdrs,
+                             data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "JSONRPC.Ping"}).encode())
+            ok = '"pong"' in raw.decode("utf-8", "replace")
+            return {"ok": ok, "message": "Kodi is answering." if ok else "That address answered, but not like Kodi."}
+    except UpstreamError as exc:
+        return {"ok": False, "message": str(exc)}
+    except ConfigError as exc:
+        return {"ok": False, "message": str(exc)}
+    raise ValueError("Test what?")
+
+
 def _default_settings() -> dict:
     return {"ntfy_url": "", "ntfy_token": "", "notify_complete": True, "notify_failed": True, "notify_saved": True,
             "saved_interval_hours": 6, "saved_searches": [],
@@ -4823,6 +4988,8 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             self.send_json(200, self._saved_view())
         elif path == "/api/settings":
             self.send_json(200, self._settings_view())
+        elif path == "/api/connections":
+            self.send_json(200, connections_view())
         elif path == "/api/kodi/art":
             ref = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("u", [""])[0]
             raw, ctype = kodi_art(ref)
@@ -4986,6 +5153,10 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             self._post_saved(body)
         elif path == "/api/settings":
             self._post_settings(body)
+        elif path == "/api/connections":
+            self.send_json(200, save_connections(body))
+        elif path == "/api/connections/test":
+            self.send_json(200, test_connection(body))
         elif path == "/api/settings/test":
             if not send_notification("NZB Command Center", "Test alert from your phone app — alerts are working.", tags=("bell",)):
                 raise ValueError("Save an ntfy topic URL first.")

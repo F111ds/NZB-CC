@@ -51,8 +51,12 @@ device; otherwise type the 6-digit PIN from `http://localhost:8765/hal/pair`.
 - HAL talks on the phone (after your first tap; the speaker button mutes him), not on the PC. On a wide screen it
   shows a sidebar and three columns.
 
-The classic NZB app (`/`, `/kodi`) and HAL (`/hal/`, port 8766) keep working alongside it. Connections (SABnzbd,
-indexers, Kodi, Jellyfin) are still set in the desktop app for now. The page is `app_page.py`.
+The classic NZB app (`/`, `/kodi`) and HAL (`/hal/`, port 8766) keep working alongside it. **Settings › Connections**
+edits SABnzbd, your indexers (add, edit, switch off, remove) and Kodi, with a Test button for each. It writes the desktop
+app's own `nzb_manager_config.json` (keys encrypted for your Windows user, never sent to the phone; a copy of the
+previous file is kept as `nzb_manager_config.json.bak`), so the desktop app isn't needed for them any more. Close the
+desktop window before saving there: its next save would put the old settings back (the page warns when it's open).
+The page is `app_page.py`.
 
 ## HAL 9000 (phone app that watches over this PC)
 
