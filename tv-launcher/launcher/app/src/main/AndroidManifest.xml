@@ -29,6 +29,10 @@
     <!-- Android 11+ package visibility: lets the launcher list the TV apps it shows as tiles, and the
          apps that declare a module card (docs/specs/card.md). -->
     <queries>
+        <!-- NZB-CC: HalDream speaks through the TV's text-to-speech engine (Android 11+ needs it listed). -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
         <!-- The standard settings handlers, so package visibility doesn't hide them and send the pills to a vendor fallback by mistake. -->
         <intent>
             <action android:name="android.settings.SETTINGS" />
@@ -222,6 +226,19 @@
             android:name=".PhotoDream"
             android:enabled="${fullLauncher}"
             android:label="NZB-CC Photos"
+            android:exported="true"
+            android:permission="android.permission.BIND_DREAM_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.dreams.DreamService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+
+        <!-- NZB-CC: HAL 9000 as the screensaver: his eye, live readings from the PC, and he talks. -->
+        <service
+            android:name=".HalDream"
+            android:enabled="${fullLauncher}"
+            android:label="HAL 9000"
             android:exported="true"
             android:permission="android.permission.BIND_DREAM_SERVICE">
             <intent-filter>

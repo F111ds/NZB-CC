@@ -85,4 +85,10 @@ h3.note_uptime(3600)
 r = h3.record()
 assert r["power_cuts"] == 1 and r["longest_up"] == 86400 * 3 and r["next_milestone"] == 50_000
 print("counters ok")
+# ---- what the TV's HAL screensaver reads ----
+tb = hs.tv_brief(hal.status())
+assert tb["say"].startswith("Good") and "Z:" not in tb["say"] and "%" not in tb["say"]
+assert tb["alerts"] and all(a["level"] in ("warning", "critical") for a in tb["alerts"]) and len(tb["alerts"]) <= 3
+assert tb["kuma_total"] == 12 and tb["kuma_up"] == 11 and tb["internet_down"] is False and tb["downloading"].startswith("downloading")
+print("tv ok")
 print("\nALL FUN TESTS PASSED")
