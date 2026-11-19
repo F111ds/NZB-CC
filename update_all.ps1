@@ -58,34 +58,49 @@ function TvSync {
     }
     if (-not $tvHost) { Say "A new TV app is ready: run tv-launcher\install-on-tv.ps1 once." Yellow; return " A new TV app is ready: run tv-launcher\install-on-tv.ps1 once." }
     Say "`nUpdating the app on the TV ($tvHost)..."
-    # Run from the phone, this is Windows' SYSTEM account: use the profile whose ADB key the TV already trusts.
-    $oldProfile = $env:USERPROFILE
-    $pf = Join-Path $Folder "tv_user_profile.txt"
-    if ($env:USERPROFILE -match 'systemprofile') {
-        $cands = @()
-        if (Test-Path $pf) { $cands += (Get-Content $pf -Raw).Trim() }
-        # The NZB folder usually lives in your own user folder (C:\Users\you\...): that profile's key is the one the TV trusts.
-        if ($Folder -match '^([A-Za-z]:\\Users\\[^\\]+)') { $cands += $Matches[1] }
-        foreach ($p in $cands) {
-            if ($p -and (Test-Path (Join-Path $p ".android\adbkey"))) { $env:USERPROFILE = $p; $env:HOME = $p; break }
+    $whyFile = Join-Path $Folder ("tv_update_result_" + [guid]::NewGuid().ToString("N").Substring(0, 8) + ".txt")
+    $tvOk = $false; $why = ""
+    if ([Security.Principal.WindowsIdentity]::GetCurrent().IsSystem) {
+        # From the phone this runs as Windows' SYSTEM account, which can't start Python from the Microsoft Store
+        # and isn't who the TV trusts. So the TV step runs in your own session instead, as a one-off task.
+        $who = $null
+        try { $who = Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" | Select-Object -First 1 | Invoke-CimMethod -MethodName GetOwner } catch { }
+        if (-not $who -or -not $who.User) {
+            $why = "Nobody is signed in to Windows on the PC, so I couldn't run the TV tools as you."
+        } else {
+            $taskName = "NZB-CC TV update (from phone)"
+            $arg = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`" -TvHost $tvHost -UpdateOnly -ResultFile `"$whyFile`""
+            try {
+                $act = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg -WorkingDirectory (Split-Path $script)
+                $pr = New-ScheduledTaskPrincipal -UserId "$($who.Domain)\$($who.User)" -LogonType Interactive -RunLevel Limited
+                $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+                Register-ScheduledTask -TaskName $taskName -Action $act -Principal $pr -Settings $set -Force | Out-Null
+                Start-ScheduledTask -TaskName $taskName
+                $until = (Get-Date).AddMinutes(4)
+                Start-Sleep 3
+                while ((Get-Date) -lt $until -and -not (Test-Path $whyFile) -and (Get-ScheduledTask -TaskName $taskName).State -eq 'Running') { Start-Sleep 2 }
+                Start-Sleep 1
+            } catch { $why = "Couldn't start the TV update as $($who.User): $($_.Exception.Message)" }
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+            $res = if (Test-Path $whyFile) { (Get-Content $whyFile -Raw).Trim() } else { "" }
+            if ($res -like "OK*") { $tvOk = $true; Say "TV app now: $($res.Substring(2).Trim())" Green }
+            elseif (-not $why) { $why = if ($res) { $res } else { "the TV update didn't finish in time" } }
         }
+    } else {
+        $ErrorActionPreference = 'Continue'
+        $tvOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -TvHost $tvHost -UpdateOnly -ResultFile $whyFile 2>&1 | Out-String
+        $ErrorActionPreference = 'Stop'
+        Say $tvOut.Trim()
+        $res = if (Test-Path $whyFile) { (Get-Content $whyFile -Raw).Trim() } else { "" }
+        $tvOk = ($res -like "OK*")
+        if (-not $tvOk) { $why = if ($res) { $res } else { "no answer from the TV" } }
     }
-    $ErrorActionPreference = 'Continue'
-    $whyFile = Join-Path $env:TEMP ("nzbcc-tv-" + [guid]::NewGuid().ToString("N").Substring(0, 8) + ".txt")
-    $tvOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -TvHost $tvHost -UpdateOnly -ResultFile $whyFile 2>&1 | Out-String
-    $env:USERPROFILE = $oldProfile
-    $tvOk = ($LASTEXITCODE -eq 0)
-    $ErrorActionPreference = 'Stop'
-    Say $tvOut.Trim()
+    Remove-Item $whyFile -ErrorAction SilentlyContinue
     if ($tvOk) {
         [IO.File]::WriteAllText($mark, $hash)
         Say "The TV app was updated too." Green
         return " The TV app was updated too."
     }
-    # Say why, in the TV script's own words (the whole sentence it wrote), instead of guessing.
-    $why = ""
-    if (Test-Path $whyFile) { $why = (Get-Content $whyFile -Raw).Trim(); Remove-Item $whyFile -ErrorAction SilentlyContinue }
-    if (-not $why) { $why = "no answer from the TV" }
     if ($why.Length -gt 220) { $why = $why.Substring(0, 220) + "..." }
     Say "The TV app couldn't be updated: $why It'll try again next time." Yellow
     return " The TV app couldn't be updated: $why Run tv-launcher\install-on-tv.ps1 -TvHost $tvHost -UpdateOnly on the PC to see more; updates try again next time."
