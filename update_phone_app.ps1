@@ -56,6 +56,12 @@ try {
         Say "GitHub download failed; using Downloads\mobile_server.py instead." Yellow
         Copy-Item $dl $Temp -Force
     }
+    # From 3.12.1 the page and the icons are separate files next to mobile_server.py.
+    $Parts = @("mobile_page.py", "mobile_icons.py")
+    foreach ($part in $Parts) {
+        try { Invoke-WebRequest "https://raw.githubusercontent.com/$Repo/$Branch/$part" -OutFile (Join-Path $env:TEMP "$part.new") -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache" } }
+        catch { throw "Download of $part failed ($($_.Exception.Message)). Nothing was changed. Try update_all.ps1 instead." }
+    }
 
     # --- Check it's the real file ---
     $text = Get-Content $Temp -Raw -Encoding UTF8
@@ -83,6 +89,12 @@ try {
         $out = (& $python -m py_compile $Temp 2>&1 | Out-String).Trim(); $code = $LASTEXITCODE
         $ErrorActionPreference = 'Stop'
         if ($code -ne 0) { throw "The new file has an error, so nothing was changed:`n$out" }
+        foreach ($part in $Parts) {
+            $ErrorActionPreference = 'Continue'
+            $out = (& $python -m py_compile (Join-Path $env:TEMP "$part.new") 2>&1 | Out-String).Trim(); $code = $LASTEXITCODE
+            $ErrorActionPreference = 'Stop'
+            if ($code -ne 0) { throw "$part has an error, so nothing was changed:`n$out" }
+        }
     } else { Say "Couldn't run Python to test the file; skipping that check." Yellow }
 
     # --- 2. Stop, 3. back up, 4. replace ---
@@ -91,6 +103,7 @@ try {
     elseif (-not $hasTask) { Say "The phone server wasn't running." }
     if (Test-Path $Target) { Copy-Item $Target $Backup -Force; Say "Old version saved as mobile_server.old.py" }
     Move-Item $Temp $Target -Force
+    foreach ($part in $Parts) { Move-Item (Join-Path $env:TEMP "$part.new") (Join-Path $Folder $part) -Force }
     Say "Installed version $new" Green
 
     # --- Start it again: through the startup task (as administrator) if there is one ---

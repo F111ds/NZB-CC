@@ -90,6 +90,12 @@ choose, and cancels it if the power comes back in time.
 `python hal_server.py --demo` shows the app with made-up data (`--demo-ups battery` for a power cut), on any PC.
 HAL's own files: `hal_settings.json`, `hal_state.json` (history and log), `hal_server.log`.
 
+## Phone server files
+
+`mobile_server.py` keeps its web page in `mobile_page.py` and its icons in `mobile_icons.py`: keep all three in the
+same folder (`update_all.ps1` and `update_phone_app.ps1` fetch them together). If one is missing the server still
+starts, shows a page saying which file to get back, and logs it.
+
 ## TV home row (phone server)
 
 `mobile_server.py` also serves the newest movies to a TV home screen, so a launcher can show them with their
