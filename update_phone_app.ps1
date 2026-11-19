@@ -57,7 +57,7 @@ try {
         Copy-Item $dl $Temp -Force
     }
     # From 3.12.1 the page and the icons are separate files next to mobile_server.py.
-    $Parts = @("mobile_page.py", "mobile_icons.py")
+    $Parts = @("mobile_page.py", "mobile_icons.py", "app_page.py")
     foreach ($part in $Parts) {
         try { Invoke-WebRequest "https://raw.githubusercontent.com/$Repo/$Branch/$part" -OutFile (Join-Path $env:TEMP "$part.new") -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache" } }
         catch { throw "Download of $part failed ($($_.Exception.Message)). Nothing was changed. Try update_all.ps1 instead." }

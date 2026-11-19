@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2608,7 +2608,8 @@ const $=id=>document.getElementById(id);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const LV={ok:0,info:1,warning:2,critical:3};
 let token='',S=null,tab='status',range='live',hist=null,histAt=0,busy=false,lastOk=0;
-try{token=localStorage.getItem('hal_token')||''}catch(e){}
+// Inside the NZB phone server (same address) the NZB app's or the all-in-one app's saved code works too.
+try{token=localStorage.getItem('hal_token')||(B?localStorage.getItem('app_token')||localStorage.getItem('nzb_mobile_token'):'')||''}catch(e){}
 const fb=(n,d=1)=>{if(n==null||isNaN(n))return'—';const u=['B','KB','MB','GB','TB','PB'];let i=0;n=Number(n);while(Math.abs(n)>=1024&&i<u.length-1){n/=1024;i++}return(i?n.toFixed(n>=100?0:d):n.toFixed(0))+' '+u[i]};
 const fr=b=>b==null?'—':(b*8/1e6>=10?(b*8/1e6).toFixed(0):(b*8/1e6).toFixed(1))+' Mb/s';
 const f0=(n,s='')=>n==null||isNaN(n)?'—':Math.round(n)+s;
@@ -2930,7 +2931,7 @@ document.addEventListener('click',async e=>{
   if(e.target.closest('[data-settings]'))openSettings();
   if(e.target.closest('[data-talk]'))setTalk(!talkative());
 });
-$('tabs').onclick=e=>{const b=e.target.closest('button');if(b)show(b.dataset.tab)};
+$('tabs').onclick=e=>{const b=e.target.closest('button');if(b&&b.dataset.tab)show(b.dataset.tab)};
 
 /* ---------- Windows events (errors worth knowing about) ---------- */
 let evData=null,evCat='all',evDays=7;const evOpen=new Set();
@@ -2968,8 +2969,17 @@ async function loadEvents(){try{events=(await api('/api/events')).events;if(S)S.
 async function loadHist(force){if(!force&&range!=='live'&&Date.now()-histAt<60000)return;try{hist=(await api('/api/history?range='+range)).series;histAt=Date.now();if(tab==='vitals')render()}catch(e){}}
 async function loadCleanup(){try{cleanup=await api('/api/cleanup');if(tab==='drives')render();if(cleanup.busy||!cleanup.t)setTimeout(loadCleanup,4000)}catch(e){}}
 async function refresh(){if(busy)return;busy=true;try{S=await api('/api/status');lastOk=Date.now();if(tab!=='events')render();if(tab==='vitals')loadHist(range==='live')}catch(e){if(!token)return;lastOk=0}finally{busy=false}}
-function start(){$('app').classList.remove('hidden');$('tabs').classList.remove('hidden');refresh();
+// Opened from the all-in-one app (/app): ?tab=drives opens that page, ?settings=1 opens Settings, and an
+// "App" button at the left of the tab bar goes back.
+const QP=new URLSearchParams(location.search);
+async function start(){$('app').classList.remove('hidden');$('tabs').classList.remove('hidden');
+  if(QP.get('from')==='app'&&!$('toapp'))$('tabs').insertAdjacentHTML('afterbegin','<button id="toapp" aria-label="Back to the app"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>App</button>');
+  const want=QP.get('tab');if(want&&['status','vitals','services','drives','shield','log','events'].includes(want)&&!start.done)show(want);
+  await refresh();
+  if(QP.get('settings')==='1'&&!start.done)openSettings();
+  start.done=true;
   if(!start.t)start.t=setInterval(()=>{if(!document.hidden&&token)refresh()},3000)}
+document.addEventListener('click',e=>{if(e.target.closest('#toapp'))location.href='/app/'});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&token)refresh()});
 if(token)start();else showPair();
 </script></body></html>
