@@ -188,6 +188,23 @@ except hs.PiHoleAuthError:
 print("v5 ok")
 
 # ---- HAL ----
+# HAL starts some checks in a background thread; run them right away here so the test doesn't race them.
+class _SyncThread:
+    def __init__(self, target=None, args=(), kwargs=None, **_k):
+        self.target, self.args, self.kwargs = target, args, kwargs or {}
+
+    def start(self):
+        self.target(*self.args, **self.kwargs)
+
+
+class _Threading:
+    Thread = _SyncThread
+
+    def __getattr__(self, name):
+        return getattr(threading, name)
+
+
+hs.threading = _Threading()
 events = []
 hal = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=hs.DemoMonitor(), start_threads=False)
 hal.add_event = lambda *a, **k: events.append(a)
