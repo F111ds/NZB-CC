@@ -2164,7 +2164,8 @@ nav.tabs button.on{color:var(--red2)}nav.tabs svg{width:23px;height:23px}
 .sheet{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;z-index:10}
 .sheet .panel{background:var(--bg);width:100%;max-width:640px;max-height:92vh;overflow-y:auto;border-radius:20px 20px 0 0;padding:18px 16px calc(24px + env(safe-area-inset-bottom));border-top:1px solid #222}
 label.f{display:block;font-size:13px;color:var(--soft);margin:12px 0 6px}
-input.field{width:100%;background:var(--card);border:1px solid #26262b;border-radius:10px;color:var(--white);font:15px var(--mono);padding:11px 12px}
+select.field{appearance:none;-webkit-appearance:none}
+input.field,select.field{width:100%;background:var(--card);border:1px solid #26262b;border-radius:10px;color:var(--white);font:15px var(--mono);padding:11px 12px}
 .sw{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
 .sw span{font-size:14px}.sw small{display:block;color:var(--muted);font-size:12px}
 .sw input{width:22px;height:22px;accent-color:#FF3B1F;flex:none}
@@ -2217,6 +2218,7 @@ const f0=(n,s='')=>n==null||isNaN(n)?'—':Math.round(n)+s;
 function dur(s){if(s==null)return'—';s=Math.max(0,Math.round(s));if(s<90)return s+' s';if(s<5400)return Math.round(s/60)+' min';if(s<36000)return Math.floor(s/3600)+' h'+(s%3600>=60?' '+Math.floor(s%3600/60)+' min':'');if(s<172800)return Math.round(s/3600)+' h';return Math.floor(s/86400)+' d '+Math.floor(s%86400/3600)+' h'}
 function ago(t){if(!t)return'';const d=Date.now()/1000-t;if(d<60)return'just now';if(d<3600)return Math.round(d/60)+' min ago';const dt=new Date(t*1000),now=new Date();const tm=dt.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(dt.toDateString()===now.toDateString())return'Today '+tm;const y=new Date(now-864e5);if(dt.toDateString()===y.toDateString())return'Yesterday '+tm;return dt.toLocaleDateString([],{month:'short',day:'numeric'})+' '+tm}
 function toast(msg,bad){const t=$('toast');t.textContent=msg;t.className='on'+(bad?' bad':'');clearTimeout(toast.h);toast.h=setTimeout(()=>t.className='',3600);
+  if(talkative()&&unlocked&&!talkRun){say(msg);return}
   const sec=document.querySelector('main section:not(.hidden)');if(sec)murmur(sec.querySelector('.eye'),Math.min(2600,400+msg.length*45))}
 async function api(path,body){
   const o={headers:{'X-Mobile-Token':token}};
@@ -2238,7 +2240,7 @@ function spark(vals,color,max){vals=(vals||[]).map(v=>v==null?null:Number(v));co
 const lvlOf=(v,warn,crit)=>v==null?'ok':v>=crit?'critical':v>=warn?'warning':'ok';
 function pill(level,text){return'<span class="pill '+level+'"><span class="dot"></span>'+esc(text)+'</span>'}
 function hdr(title){return'<div class="top"><span class="brand"><b>HAL</b> 9000</span><div class="eye sm '+(S?S.hal.level:'')+'"></div></div>'+(title?'<h1>'+esc(title)+'</h1>':'')}
-const ICON={lock:'<path d="M6 11h12v9H6zM8 11V8a4 4 0 018 0v3"/>',moon:'<path d="M20 14A8 8 0 1110 4a7 7 0 0010 10z"/>',net:'<path d="M2 9a15 15 0 0120 0M5 12.5a10 10 0 0114 0M8.5 16a5 5 0 017 0M12 19.5h.01"/>',shield:'<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',upd:'<path d="M4 12a8 8 0 0114-5l2 2M20 12a8 8 0 01-14 5l-2-2M20 4v5h-5M4 20v-5h5"/>',bell:'<path d="M6 8a6 6 0 1112 0c0 7 3 9 3 9H3s3-2 3-9M10 21h4"/>',gear:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>'};
+const ICON={spk:'<path d="M11 5L6 9H3v6h3l5 4zM15.5 8.5a5 5 0 010 7M18.5 5.5a9 9 0 010 13"/>',mute:'<path d="M11 5L6 9H3v6h3l5 4zM22 9l-6 6M16 9l6 6"/>',lock:'<path d="M6 11h12v9H6zM8 11V8a4 4 0 018 0v3"/>',moon:'<path d="M20 14A8 8 0 1110 4a7 7 0 0010 10z"/>',net:'<path d="M2 9a15 15 0 0120 0M5 12.5a10 10 0 0114 0M8.5 16a5 5 0 017 0M12 19.5h.01"/>',shield:'<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',upd:'<path d="M4 12a8 8 0 0114-5l2 2M20 12a8 8 0 01-14 5l-2-2M20 4v5h-5M4 20v-5h5"/>',bell:'<path d="M6 8a6 6 0 1112 0c0 7 3 9 3 9H3s3-2 3-9M10 21h4"/>',gear:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>'};
 const svg=(k,c)=>'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="'+(c||'currentColor')+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+ICON[k]+'</svg>';
 
 /* ---------- Status ---------- */
@@ -2246,7 +2248,8 @@ function rStatus(){
   const h=S.hal,v=S.vitals,n=S.net,g=(v.gpus||[])[0];
   const alerts=S.issues.filter(i=>LV[i.level]>=2).slice(0,4),notes=S.issues.filter(i=>i.level==='info');
   const sysBad=S.systems.filter(x=>LV[x.level]>=2).length;
-  let head='<div class="top"><span class="brand"><b>HAL</b> 9000</span><button class="iconbtn" data-go="log" aria-label="Log and controls">'+svg('bell','#D4D4D8')+(S.unread?'<i></i>':'')+'</button></div>';
+  const spk=CAN_SPEAK?'<button class="iconbtn" data-talk aria-label="'+(talkative()?'Voice on':'Voice off')+'">'+svg(talkative()?'spk':'mute',talkative()?'#FF6A4D':'#71717A')+'</button>':'';
+  let head='<div class="top"><span class="brand"><b>HAL</b> 9000</span><span style="display:flex;gap:8px">'+spk+'<button class="iconbtn" data-go="log" aria-label="Log and controls">'+svg('bell','#D4D4D8')+(S.unread?'<i></i>':'')+'</button></span></div>';
   if(S.power.shutdown_at&&S.power.shutdown_at>S.now)head+='<div class="banner"><b>Shutting down in '+Math.max(0,Math.round(S.power.shutdown_at-S.now))+' s</b><button class="btn red" data-act="cancel_shutdown">Cancel</button></div>';
   let x='';
   x+=alerts.map(i=>'<button class="alert '+i.level+'" data-go="'+esc(i.tab)+'"><span class="s '+i.level+'"></span><span><b>'+esc(i.title)+'</b>'+(i.detail?'<p>'+esc(i.detail)+'</p>':'')+'</span></button>').join('');
@@ -2265,26 +2268,53 @@ function rStatus(){
 let lastQuote='',talkRun=null,voiceOn=false;
 const REDUCE=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const CAN_SPEAK='speechSynthesis' in window&&'SpeechSynthesisUtterance' in window;
-function pickVoice(){if(!CAN_SPEAK)return null;const vs=speechSynthesis.getVoices().filter(v=>/^en/i.test(v.lang));
-  return vs.find(v=>/daniel|arthur|aaron|fred|alex|google uk english male|male/i.test(v.name))||vs.find(v=>/en-GB/i.test(v.lang))||vs[0]||null}
+// HAL's voice: the calmest male English voice on this phone (Enhanced/Premium ones first), slow and soft.
+const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:v}catch(e){return d}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+const MALE=/daniel|arthur|aaron|oliver|malcolm|gordon|reed|evan|nathan|tom|alex|fred|rishi|lee|george|ryan|guy|david|mark|james|google uk english male|\bmale\b/i;
+function voices(){return CAN_SPEAK?speechSynthesis.getVoices().filter(v=>/^en/i.test(v.lang)):[]}
+function voiceScore(v){let s=0;if(MALE.test(v.name))s+=10;if(/premium|enhanced|neural|natural|online/i.test(v.name))s+=6;if(/en-GB/i.test(v.lang))s+=3;if(/en-US/i.test(v.lang))s+=1;
+  if(/novelty|bad news|bells|boing|bubbles|cellos|whisper|zarvox|trinoids|jester|organ|superstar|wobble|albert|bahh/i.test(v.name))s-=50;if(v.localService)s+=1;return s}
+function pickVoice(){const vs=voices();if(!vs.length)return null;const want=LS.get('hal_voice_name','');
+  return vs.find(v=>v.name===want)||vs.slice().sort((a,b)=>voiceScore(b)-voiceScore(a))[0]}
+const VOICE={rate:()=>Number(LS.get('hal_rate','0.82')),pitch:()=>Number(LS.get('hal_pitch','0.7'))};
 if(CAN_SPEAK)speechSynthesis.onvoiceschanged=()=>{};
+// Text the voice reads well: "Z:" -> "Z", "°C" -> "degrees", "GB" -> "gigabytes"...
+function speakable(t){return String(t).replace(/\b([A-Z]):/g,'$1').replace(/°C/g,' degrees').replace(/(\d)\s*GB\b/g,'$1 gigabytes').replace(/(\d)\s*TB\b/g,'$1 terabytes')
+  .replace(/(\d)\s*MB\/s\b/g,'$1 megabytes a second').replace(/(\d)\s*ms\b/g,'$1 milliseconds').replace(/\bmin\b/g,'minutes').replace(/—/g,', ').replace(/·/g,', ').replace(/\bNZB\b/g,'N Z B')}
+let unlocked=false;
+const talkative=()=>CAN_SPEAK&&LS.get('hal_talk','on')==='on';
+function utter(text,onBoundary,onEnd){const u=new SpeechSynthesisUtterance(speakable(text));u.rate=VOICE.rate();u.pitch=VOICE.pitch();u.volume=1;const v=pickVoice();if(v){u.voice=v;u.lang=v.lang}
+  u.onboundary=onBoundary||null;u.onend=u.onerror=()=>{voiceOn=false;if(onEnd)onEnd()};
+  if(speechSynthesis.speaking||speechSynthesis.pending)speechSynthesis.cancel();   // (cancel right before speak swallows it on iPhone)
+  voiceOn=true;speechSynthesis.speak(u);return u}
+// Says a short line (button results) with the small eye moving while he speaks.
+function say(text){if(!talkative()||!unlocked||talkRun)return;const sec=document.querySelector('main section:not(.hidden)');const eye=sec&&sec.querySelector('.eye');
+  utter(text);if(eye&&!REDUCE){let cur=1,next=0,target=1;eye.classList.add('talking');(function f(now){if(!eye.isConnected)return;
+    if(voiceOn&&now>=next){target=Math.random()<.3?.75:1.3+Math.random()*.5;next=now+60+Math.random()*90}if(!voiceOn)target=1;
+    cur+=(target-cur)*.3;eye.style.setProperty('--b',cur.toFixed(3));if(!voiceOn&&Math.abs(cur-1)<.015){eye.classList.remove('talking');eye.style.removeProperty('--b');return}requestAnimationFrame(f)})(performance.now())}}
+// Phones only allow sound after a touch: the first one wakes HAL's voice and he says hello.
+document.addEventListener('pointerdown',e=>{if(unlocked||!CAN_SPEAK)return;unlocked=true;updateTap();
+  if(!talkative()||!S||e.target.closest('#heye,[data-talk]'))return;
+  setTimeout(()=>{if(!voiceOn&&$('heye'))talk($('heye'),$('hquote'),lastQuote,true,S.hal.greeting)},60)},true);
+function updateTap(){const t=$('htap');if(!t)return;t.textContent=!talkative()?'TAP HAL TO HEAR HIM':unlocked?'':'TAP ANYWHERE AND I\'LL TALK';t.classList.toggle('hidden',!t.textContent)}
+function setTalk(on){LS.set('hal_talk',on?'on':'off');if(!on)stopTalk();render();if(on){unlocked=true;talk($('heye'),$('hquote'),'Thank you, '+S.hal.name+'. I\'ll talk to you from now on.',true)}}
 function stopTalk(){if(talkRun){talkRun.stop();talkRun=null}if(CAN_SPEAK&&voiceOn){speechSynthesis.cancel();voiceOn=false}}
 // Types text into textEl while the eye's light rises on vowels and dips at spaces and punctuation.
-function talk(eye,textEl,text,speak){
+function talk(eye,textEl,text,speak,prefix){
   if(talkRun)talkRun.stop();
   const wrap=s=>'“'+esc(s)+'”';
   if(REDUCE&&!speak){textEl.innerHTML=wrap(text);return}
   let raf=0,stopped=false,cur=1,target=1,next=0,bIdx=-1,spoken=false;const t0=performance.now();
-  const cps=speak?14:30;
-  if(speak&&CAN_SPEAK){const u=new SpeechSynthesisUtterance(text);u.rate=.86;u.pitch=.6;u.volume=1;const v=pickVoice();if(v)u.voice=v;
-    u.onboundary=e=>{if(e.charIndex!=null)bIdx=e.charIndex};u.onend=u.onerror=()=>{voiceOn=false};
-    speechSynthesis.cancel();voiceOn=true;spoken=true;speechSynthesis.speak(u)}
+  const cps=speak?13*VOICE.rate()/.82:30;let startShow=performance.now()+(speak&&prefix?prefix.length/cps*1000:0);
+  if(speak&&CAN_SPEAK){const pre=prefix?prefix+' ':'';const off=speakable(pre).length;
+    // boundary positions are in the spoken text; map them back roughly onto what's shown
+    utter(pre+text,e=>{if(e.charIndex!=null&&e.charIndex>=off)bIdx=Math.round((e.charIndex-off)*text.length/Math.max(1,speakable(text).length))});spoken=true}
   eye.classList.add('talking');
   const run={stop(){stopped=true;cancelAnimationFrame(raf);eye.classList.remove('talking');eye.style.removeProperty('--b');textEl.innerHTML=wrap(text)}};
   talkRun=run;
   function frame(now){
     if(stopped)return;
-    let idx=Math.floor((now-t0)/1000*cps);
+    let idx=Math.max(0,Math.floor((now-startShow)/1000*cps));
     if(bIdx>=0){const end=text.slice(bIdx).search(/\s/);idx=Math.max(Math.min(idx,text.length),end<0?text.length:bIdx+end)}
     const shown=Math.min(text.length,idx);
     const busy=spoken?voiceOn:shown<text.length;
@@ -2303,14 +2333,15 @@ function murmur(eye,ms){if(!eye||REDUCE)return;let cur=1,t0=performance.now(),ne
     cur+=(target-cur)*.3;eye.style.setProperty('--b',cur.toFixed(3));if(!on&&Math.abs(cur-1)<.015){eye.classList.remove('talking');eye.style.removeProperty('--b');return}requestAnimationFrame(f)})(t0)}
 function renderStatus(){
   const el=$('t-status');
-  if(!$('hero')){el.innerHTML='<div id="hhead"></div><div class="eyewrap" id="hero"><button class="eye" id="heye" aria-label="Hear HAL"></button><div class="greet" id="hgreet"></div><div class="quote" id="hquote"></div><div class="qsub" id="hsub"></div>'+(CAN_SPEAK?'<div class="tap" id="htap">TAP HAL TO HEAR HIM</div>':'')+'</div><div id="hbody"></div>';
-    $('heye').onclick=()=>{if(voiceOn){stopTalk();return}talk($('heye'),$('hquote'),lastQuote,true);const t=$('htap');if(t)t.classList.add('hidden')}}
+  if(!$('hero')){el.innerHTML='<div id="hhead"></div><div class="eyewrap" id="hero"><button class="eye" id="heye" aria-label="Hear HAL"></button><div class="greet" id="hgreet"></div><div class="quote" id="hquote"></div><div class="qsub" id="hsub"></div>'+(CAN_SPEAK?'<div class="tap" id="htap"></div>':'')+'</div><div id="hbody"></div>';
+    $('heye').onclick=()=>{if(voiceOn){stopTalk();return}unlocked=true;talk($('heye'),$('hquote'),lastQuote,true);updateTap()}}
   const r=rStatus(),h=S.hal,eye=$('heye');
   $('hhead').innerHTML=r.head;$('hbody').innerHTML=r.body;
   eye.className='eye '+h.level+(eye.classList.contains('talking')?' talking':'');
   $('hgreet').textContent=h.greeting;
   $('hsub').textContent='UP '+dur(S.uptime).toUpperCase()+' · '+S.host.toUpperCase()+(lastOk?' · LIVE':'');
-  if(h.quote!==lastQuote){lastQuote=h.quote;if(!voiceOn)talk(eye,$('hquote'),lastQuote,false)}}
+  updateTap();
+  if(h.quote!==lastQuote){const first=!lastQuote;lastQuote=h.quote;if(!voiceOn)talk(eye,$('hquote'),lastQuote,!first&&talkative()&&unlocked)}}
 
 /* ---------- Vitals ---------- */
 function rVitals(){
@@ -2437,9 +2468,14 @@ async function openSettings(){
   let d;try{d=await api('/api/settings')}catch(e){toast(e.message,true);return}
   const s=d.settings;
   const sw=(k,t,sub)=>'<label class="sw"><span>'+t+(sub?'<small>'+sub+'</small>':'')+'</span><input type="checkbox" data-k="'+k+'"'+(s[k]?' checked':'')+'></label>';
+  const sw2=(k,t,sub)=>'<label class="sw"><span>'+t+(sub?'<small>'+sub+'</small>':'')+'</span><input type="checkbox" id="v'+k+'"'+(talkative()?' checked':'')+'></label>';
   const num=(k,t)=>'<div><label class="f">'+t+'</label><input class="field" inputmode="numeric" data-k="'+k+'" data-num value="'+esc(s[k])+'"></div>';
   $('panel').innerHTML='<h2 style="margin:0 0 4px">Settings</h2><p class="hint" style="text-align:left;margin:0 0 8px">“I know I\'ve made some very poor decisions recently, but I can give you my complete assurance that my work will be back to normal.”</p>'+
    '<label class="f">What should I call you?</label><input class="field" data-k="name" value="'+esc(s.name)+'">'+
+   (CAN_SPEAK?'<div class="sec">HAL\'S VOICE</div>'+sw2('talk','Talk to me','Speaks when you open the app, when something changes, and when you press a button')+
+     '<label class="f">Voice (this phone)</label><select class="field" id="vname"><option value="">Automatic (calmest male voice)</option>'+voices().slice().sort((a,b)=>voiceScore(b)-voiceScore(a)).map(v=>'<option'+(v.name===LS.get('hal_voice_name','')?' selected':'')+' value="'+esc(v.name)+'">'+esc(v.name+' ('+v.lang+')')+'</option>').join('')+'</select>'+
+     '<div class="nums"><div><label class="f">Speed</label><input type="range" id="vrate" min="0.6" max="1.1" step="0.02" value="'+VOICE.rate()+'" style="width:100%;accent-color:#FF3B1F"></div><div><label class="f">Pitch</label><input type="range" id="vpitch" min="0.4" max="1.2" step="0.02" value="'+VOICE.pitch()+'" style="width:100%;accent-color:#FF3B1F"></div></div>'+
+     '<button class="btn wide" id="vtest" style="margin-top:10px">Hear it</button><p class="hint" style="text-align:left">For the best voice on an iPhone: Settings › Accessibility › Spoken Content › Voices › English, download <b>Daniel (Enhanced)</b> or another Enhanced/Premium voice, then pick it here.</p>':'')+
    '<div class="sec">PHONE ALERTS</div>'+sw('push','Send alerts to my phone',d.push_ready?(d.push_from_phone_app?'Using the NZB phone app\'s ntfy topic':'Using the topic below'):'Set up an ntfy topic first')+
    '<label class="f">ntfy topic (blank: use the NZB phone app\'s)</label><input class="field" data-k="ntfy_url" placeholder="https://ntfy.sh/your-private-topic" value="'+esc(s.ntfy_url)+'" autocapitalize="off" autocorrect="off">'+
    sw('push_recoveries','Tell me when things are fine again')+
@@ -2455,8 +2491,10 @@ async function openSettings(){
    '<button class="btn wide" id="forget" style="margin-top:8px;background:none;color:var(--muted)">Forget the access code on this phone</button>';
   $('sheet').classList.remove('hidden');
   $('cancel').onclick=closeSheet;
+  const vsave=()=>{if(!$('vname'))return;LS.set('hal_voice_name',$('vname').value);LS.set('hal_rate',$('vrate').value);LS.set('hal_pitch',$('vpitch').value);LS.set('hal_talk',$('vtalk').checked?'on':'off')};
+  if($('vtest'))$('vtest').onclick=()=>{vsave();unlocked=true;utter('Good afternoon, '+S.hal.name+'. Everything is going extremely well.')};
   $('forget').onclick=()=>{try{localStorage.removeItem('hal_token')}catch(e){}token='';closeSheet();showPair()};
-  $('save').onclick=async()=>{const b={};$('panel').querySelectorAll('[data-k]').forEach(el=>{b[el.dataset.k]=el.type==='checkbox'?el.checked:(el.dataset.num!==undefined?Number(el.value):el.value)});
+  $('save').onclick=async()=>{vsave();const b={};$('panel').querySelectorAll('[data-k]').forEach(el=>{b[el.dataset.k]=el.type==='checkbox'?el.checked:(el.dataset.num!==undefined?Number(el.value):el.value)});
     b.ignored_services=[...$('panel').querySelectorAll('[data-ign]')].filter(el=>el.checked).map(el=>el.dataset.ign);
     try{await api('/api/settings',b);closeSheet();toast('Saved. Thank you for a very enjoyable game.');refresh()}catch(e){toast(e.message,true)}};
 }
@@ -2477,6 +2515,7 @@ document.addEventListener('click',async e=>{
   const rs=e.target.closest('[data-restart]');if(rs){if(!confirm((rs.textContent==='Start'?'Start ':'Restart ')+rs.dataset.name+'?'))return;
     try{const d=await api('/api/service/restart',{id:rs.dataset.restart});toast(d.message,!d.ok);refresh()}catch(err){toast(err.message,true)}return}
   if(e.target.closest('[data-settings]'))openSettings();
+  if(e.target.closest('[data-talk]'))setTalk(!talkative());
 });
 $('tabs').onclick=e=>{const b=e.target.closest('button');if(b)show(b.dataset.tab)};
 

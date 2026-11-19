@@ -56,7 +56,9 @@ Pair with the **same access code as the NZB phone app**, then add it to your hom
   something is critical. HAL tells you what's wrong in his own words. Live CPU / memory / GPU / internet, and six
   critical systems (media services, network, storage, hardware, security, power).
   When HAL has something new to say, the words type out and his light flickers as he "speaks";
-  **tap the eye** to hear him say it out loud (your phone's voice, slowed and deepened).
+  he also **talks out loud**: after your first tap (phones only allow sound after a touch) he greets you, speaks
+  whenever something changes and answers when you press a button. The speaker button turns that off; Settings >
+  HAL's voice picks the voice, speed and pitch (on an iPhone, download an Enhanced voice such as Daniel for the best one).
 - **Vitals**: CPU, memory and GPU with live / 1 h / 24 h / 7 d graphs, per-core load, temperatures and fans
   (LibreHardwareMonitor, as for the System Command Center), busiest apps.
 - **Services**: SABnzbd, Jellyfin, Sonarr, Radarr, Prowlarr and the NZB phone server: answering, response time and
