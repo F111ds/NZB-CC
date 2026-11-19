@@ -377,7 +377,7 @@ async function act(fn,ok){try{const r=await fn();if(ok)toast(typeof ok==='functi
 let CONN=null;
 async function openConnections(){$('panel').innerHTML='<h2 style="margin:0">Connections</h2><p class="hint" style="text-align:left">I\'m reading the settings…</p>';$('sheet').classList.remove('hidden');
   try{CONN=await api('/api/connections');CONN.indexers.forEach(x=>x.orig=x.index)}catch(e){toast(e.message,true);$('sheet').classList.add('hidden');return}renderConn()}
-function keyPh(set,what){return set?'Saved · type a new one to replace':'Not set yet'}
+function keyPh(set,what){return set?'Saved · type to replace':'Not set yet'}
 function renderConn(){const c=CONN;
   let x='<h2 style="margin:0 0 4px">Connections</h2><p class="hint" style="text-align:left;margin:0 0 10px">“I can give you my complete assurance that everything is connected, '+esc(NAME())+'.” Keys are encrypted on the PC and never shown here.</p>';
   if(c.desktop_open)x+='<div class="warnbox">The NZB Command Center desktop window is open on the PC. Close it before saving here, or its next save puts the old settings back.</div>';
