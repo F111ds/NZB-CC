@@ -73,6 +73,9 @@ public class HalActivity extends Activity {
     private EyeView eye;
     private TextView quote, alertTitle, alertMore, dlKey, dlTitle, dlInfo;
     private LinearLayout dlStrip;
+    private LinearLayout details;
+    private JSONArray detailPages;
+    private int detailAt;
     private FrameLayout dlBar;
     private View dlFill;
     private LinearLayout alertBar;
@@ -155,6 +158,7 @@ public class HalActivity extends Activity {
         running = false;
         main.removeCallbacksAndMessages(null);
         eye.stop();
+        if (detailsOpen()) closeDetails();
         if (io != null) {
             final ExecutorService old = io;
             io = null;
@@ -188,6 +192,24 @@ public class HalActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        // Details: Down opens them, Left/Right go between the pages, Back (or Up) returns to HAL.
+        if (detailsOpen()) {
+            if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                closeDetails();
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                showDetail(detailAt + 1);
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                showDetail(detailAt - 1);
+                return true;
+            }
+        } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+            openDetails();
+            return true;
+        }
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
                 || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER || keyCode == KeyEvent.KEYCODE_BUTTON_A) {
             if (speaking && tts != null) tts.stop();
@@ -235,6 +257,12 @@ public class HalActivity extends Activity {
         page.setOrientation(LinearLayout.VERTICAL);
         page.setPadding(dp(40), dp(26), dp(40), dp(22));
         root.addView(page, new FrameLayout.LayoutParams(-1, -1));
+        details = new LinearLayout(this);
+        details.setOrientation(LinearLayout.VERTICAL);
+        details.setPadding(dp(40), dp(24), dp(40), dp(16));
+        details.setBackgroundColor(Color.BLACK);
+        details.setVisibility(View.GONE);
+        root.addView(details, new FrameLayout.LayoutParams(-1, -1));
 
         // Boxes left and right, HAL's eye in the middle.
         LinearLayout middle = new LinearLayout(this);
@@ -326,6 +354,12 @@ public class HalActivity extends Activity {
         dlInfo.setSingleLine(true);
         dlStrip.addView(dlInfo);
         dlBar.setVisibility(View.GONE);
+        TextView hint = text(8.5f, 0xFF52525B, mono);
+        hint.setGravity(Gravity.CENTER);
+        hint.setText("\u25BC  details     OK  HAL talks     BACK  close");
+        LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-1, -2);
+        hl.topMargin = dp(8);
+        page.addView(hint, hl);
         return root;
     }
 
@@ -601,6 +635,371 @@ public class HalActivity extends Activity {
         if (!running) return;
         page.animate().translationX(dp((float) (Math.random() * 30 - 15))).translationY(dp((float) (Math.random() * 16 - 8))).setDuration(4000).start();
         main.postDelayed(this::drift, DRIFT_MS);
+    }
+
+    // ---- details: four pages of everything ------------------------------------------------------
+
+    private static final long DETAILS_REFRESH_MS = 15_000L;
+    private static final String[] TABS = {"THE PC", "NETWORK", "UPTIME KUMA", "RASPBERRY PI"};
+
+    private boolean detailsOpen() {
+        return details != null && details.getVisibility() == View.VISIBLE;
+    }
+
+    private void openDetails() {
+        details.setVisibility(View.VISIBLE);
+        page.setVisibility(View.INVISIBLE);
+        showDetail(detailAt);
+        loadDetails();
+    }
+
+    private void closeDetails() {
+        details.setVisibility(View.GONE);
+        page.setVisibility(View.VISIBLE);
+        main.removeCallbacks(detailsTick);
+    }
+
+    private final Runnable detailsTick = this::loadDetails;
+
+    private void loadDetails() {
+        main.removeCallbacks(detailsTick);
+        if (!running || !detailsOpen()) return;
+        run(() -> {
+            JSONObject j = null;
+            try {
+                if (!extras.kodiServer.isEmpty())
+                    j = new JSONObject(new String(get("/hal/api/tv/details", 15000), StandardCharsets.UTF_8));
+            } catch (Exception ignored) {
+                j = null;
+            }
+            final JSONObject data = j;
+            main.post(() -> {
+                if (!running || !detailsOpen()) return;
+                if (data != null) {
+                    detailPages = data.optJSONArray("pages");
+                    showDetail(detailAt);
+                }
+                main.postDelayed(detailsTick, DETAILS_REFRESH_MS);
+            });
+        });
+    }
+
+    private void showDetail(int index) {
+        int n = TABS.length;
+        detailAt = ((index % n) + n) % n;
+        details.removeAllViews();
+        Typeface light = UiFont.get(this, R.string.font_light), regular = UiFont.get(this, R.string.font_regular);
+        JSONObject pg = detailPages == null ? null : detailPages.optJSONObject(detailAt);
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        details.addView(head, new LinearLayout.LayoutParams(-1, -2));
+        EyeView small = new EyeView(this);
+        small.setLevel(pg == null ? "" : pg.optString("level"));
+        head.addView(small, new LinearLayout.LayoutParams(dp(38), dp(38)));
+        TextView title = text(26, Color.WHITE, light);
+        title.setText(pg == null ? TABS[detailAt].charAt(0) + TABS[detailAt].substring(1).toLowerCase(Locale.US) : pg.optString("title"));
+        LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(-2, -2);
+        tl.leftMargin = dp(14);
+        head.addView(title, tl);
+        TextView status = key(pg == null ? "LOADING\u2026" : "\u25CF " + pg.optString("head"));
+        status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+        status.setTextColor(pg == null ? 0xFF71717A : levelColor(pg.optString("level")));
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(-2, -2);
+        sl.leftMargin = dp(14);
+        head.addView(status, sl);
+        View spring = new View(this);
+        head.addView(spring, new LinearLayout.LayoutParams(0, 1, 1f));
+        for (int i = 0; i < n; i++) {
+            TextView tab = key(TABS[i]);
+            tab.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9);
+            tab.setPadding(dp(9), dp(5), dp(9), dp(5));
+            if (i == detailAt) {
+                tab.setTextColor(Color.WHITE);
+                GradientDrawable on = new GradientDrawable();
+                on.setColor(0xFF1A1A20);
+                on.setCornerRadius(dp(6));
+                tab.setBackground(on);
+            }
+            head.addView(tab);
+        }
+
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(-1, 0, 1f);
+        bl.topMargin = dp(16);
+        details.addView(body, bl);
+        JSONArray cols = pg == null ? null : pg.optJSONArray("cols");
+        if (cols == null) {
+            TextView wait = text(14, 0xFF71717A, regular);
+            wait.setGravity(Gravity.CENTER);
+            wait.setText("I'm reading the details, Dave\u2026");
+            body.addView(wait, new LinearLayout.LayoutParams(-1, -1));
+        } else {
+            for (int c = 0; c < cols.length(); c++) body.addView(detailColumn(cols.optJSONObject(c)), colParams(c));
+        }
+
+        TextView hint = text(9, 0xFF71717A, Typeface.MONOSPACE);
+        hint.setGravity(Gravity.CENTER);
+        hint.setText("\u25C0 \u25B6  other pages      OK  HAL talks      BACK  return to HAL");
+        LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-1, -2);
+        hl.topMargin = dp(10);
+        details.addView(hint, hl);
+    }
+
+    private LinearLayout.LayoutParams colParams(int index) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -1, 1f);
+        if (index > 0) lp.leftMargin = dp(11);
+        return lp;
+    }
+
+    private View detailColumn(JSONObject col) {
+        Typeface light = UiFont.get(this, R.string.font_light), regular = UiFont.get(this, R.string.font_regular);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(14), dp(12), dp(14), dp(8));
+        GradientDrawable bg = card();
+        bg.setStroke(Math.max(1, dp(0.5f)), 0xFF17171C);
+        box.setBackground(bg);
+        if (col == null) return box;
+        LinearLayout kh = new LinearLayout(this);
+        kh.setOrientation(LinearLayout.HORIZONTAL);
+        kh.addView(key(col.optString("key")), new LinearLayout.LayoutParams(0, -2, 1f));
+        if (!col.optString("badge").isEmpty()) {
+            TextView badge = key(col.optString("badge"));
+            badge.setTextColor(col.optString("badge").startsWith("CHECK") ? 0xFFFBBF24 : 0xFF34D399);
+            kh.addView(badge);
+        }
+        box.addView(kh, new LinearLayout.LayoutParams(-1, -2));
+        if (!col.optString("big").isEmpty()) {
+            TextView big = text(32, Color.WHITE, light);
+            big.setSingleLine(true);
+            big.setText(col.optString("big"));
+            LinearLayout.LayoutParams bgl = new LinearLayout.LayoutParams(-2, -2);
+            bgl.topMargin = dp(8);
+            box.addView(big, bgl);
+        }
+        if (!col.optString("bigsub").isEmpty()) {
+            TextView sub = text(10, 0xFFA1A1AA, Typeface.MONOSPACE);
+            sub.setText(col.optString("bigsub"));
+            LinearLayout.LayoutParams sbl = new LinearLayout.LayoutParams(-2, -2);
+            sbl.topMargin = dp(3);
+            box.addView(sub, sbl);
+        }
+        JSONArray graph = col.optJSONArray("graph");
+        if (graph != null && graph.length() > 1) {
+            int color;
+            try {
+                color = Color.parseColor(col.optString("graph_color", "#FF6A4D"));
+            } catch (IllegalArgumentException e) {
+                color = 0xFFFF6A4D;
+            }
+            LinearLayout.LayoutParams gl = new LinearLayout.LayoutParams(-1, dp(62));
+            gl.topMargin = dp(8);
+            box.addView(new GraphView(this, graph, color), gl);
+        }
+        JSONArray cores = col.optJSONArray("cores");
+        if (cores != null && cores.length() > 0) {
+            LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(-1, dp(30));
+            cl.topMargin = dp(8);
+            box.addView(new CoresView(this, cores), cl);
+        }
+        JSONArray drives = col.optJSONArray("drives");
+        for (int i = 0; drives != null && i < drives.length(); i++) {
+            JSONObject d = drives.optJSONObject(i);
+            boolean warn = d.optBoolean("warn");
+            LinearLayout dv = new LinearLayout(this);
+            dv.setOrientation(LinearLayout.VERTICAL);
+            dv.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout top = new LinearLayout(this);
+            top.setOrientation(LinearLayout.HORIZONTAL);
+            TextView name = text(11.5f, 0xFFF4F4F5, regular);
+            name.setSingleLine(true);
+            name.setEllipsize(TextUtils.TruncateAt.END);
+            name.setText(d.optString("mount") + "  " + d.optString("name"));
+            top.addView(name, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView val = text(10, warn ? 0xFFFBBF24 : 0xFFD4D4D8, Typeface.MONOSPACE);
+            val.setText(d.optInt("pct") + "% \u00b7 " + d.optString("free") + " free");
+            top.addView(val);
+            dv.addView(top);
+            FrameLayout bar = new FrameLayout(this);
+            GradientDrawable track = new GradientDrawable();
+            track.setColor(0xFF1F1F25);
+            track.setCornerRadius(dp(3));
+            bar.setBackground(track);
+            View fill = new View(this);
+            GradientDrawable fd = new GradientDrawable();
+            fd.setColor(warn ? 0xFFFBBF24 : 0xFF34D399);
+            fd.setCornerRadius(dp(3));
+            fill.setBackground(fd);
+            final int pct = Math.max(0, Math.min(100, d.optInt("pct")));
+            bar.addView(fill, new FrameLayout.LayoutParams(0, -1));
+            bar.post(() -> {
+                FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) fill.getLayoutParams();
+                lp.width = Math.round(bar.getWidth() * pct / 100f);
+                fill.setLayoutParams(lp);
+            });
+            LinearLayout.LayoutParams brl = new LinearLayout.LayoutParams(-1, dp(5));
+            brl.topMargin = dp(5);
+            dv.addView(bar, brl);
+            TextView info = text(9, 0xFF71717A, Typeface.MONOSPACE);
+            info.setSingleLine(true);
+            info.setEllipsize(TextUtils.TruncateAt.END);
+            info.setText(d.optString("info"));
+            LinearLayout.LayoutParams il = new LinearLayout.LayoutParams(-1, -2);
+            il.topMargin = dp(4);
+            dv.addView(info, il);
+            addDivider(box, i > 0);
+            box.addView(dv, new LinearLayout.LayoutParams(-1, 0, 1f));
+        }
+        JSONArray mons = col.optJSONArray("monitors");
+        for (int i = 0; mons != null && i < mons.length(); i++) {
+            JSONObject m = mons.optJSONObject(i);
+            String st = m.optString("status");
+            int dot = "up".equals(st) ? 0xFF34D399 : "down".equals(st) ? 0xFFFF6A4D : 0xFFFBBF24;
+            LinearLayout r = new LinearLayout(this);
+            r.setOrientation(LinearLayout.HORIZONTAL);
+            r.setGravity(Gravity.CENTER_VERTICAL);
+            TextView name = text(12, 0xFFF4F4F5, regular);
+            name.setSingleLine(true);
+            name.setEllipsize(TextUtils.TruncateAt.END);
+            SpannableString s = new SpannableString("\u25CF  " + m.optString("name"));
+            s.setSpan(new ForegroundColorSpan(dot), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            name.setText(s);
+            r.addView(name, new LinearLayout.LayoutParams(0, -2, 1.3f));
+            TextView type = text(9, 0xFF71717A, Typeface.MONOSPACE);
+            type.setText(m.optString("type"));
+            r.addView(type, new LinearLayout.LayoutParams(0, -2, 0.45f));
+            r.addView(new HeartView(this, m.optJSONArray("hist")), new LinearLayout.LayoutParams(0, dp(12), 1.4f));
+            TextView ms = text(10.5f, "up".equals(st) ? 0xFFD4D4D8 : dot, Typeface.MONOSPACE);
+            ms.setGravity(Gravity.END);
+            ms.setText("up".equals(st) ? (m.isNull("ms") ? "up" : m.optInt("ms") + " ms") : st);
+            r.addView(ms, new LinearLayout.LayoutParams(0, -2, 0.55f));
+            addDivider(box, i > 0);
+            box.addView(r, new LinearLayout.LayoutParams(-1, 0, 1f));
+        }
+        JSONArray rows = col.optJSONArray("rows");
+        boolean first = (drives == null || drives.length() == 0) && (mons == null || mons.length() == 0);
+        for (int i = 0; rows != null && i < rows.length(); i++) {
+            JSONArray row = rows.optJSONArray(i);
+            if (row == null) continue;
+            String label = row.optString(0), value = row.optString(1), lv = row.optString(2, "ok");
+            boolean heading = value.isEmpty();
+            LinearLayout r = new LinearLayout(this);
+            r.setOrientation(LinearLayout.HORIZONTAL);
+            r.setGravity(Gravity.CENTER_VERTICAL);
+            TextView l = heading ? key(label.toUpperCase(Locale.US)) : text(11.5f, 0xFFF4F4F5, regular);
+            if (!heading) {
+                l.setText(label);
+                l.setSingleLine(true);
+                l.setEllipsize(TextUtils.TruncateAt.END);
+            }
+            r.addView(l, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView v = text(10.5f, "ok".equals(lv) ? 0xFFD4D4D8 : levelColor(lv), Typeface.MONOSPACE);
+            v.setSingleLine(true);
+            v.setText(value);
+            r.addView(v);
+            addDivider(box, !(first && i == 0) && !heading);
+            box.addView(r, new LinearLayout.LayoutParams(-1, 0, 1f));
+        }
+        return box;
+    }
+
+    private void addDivider(LinearLayout box, boolean show) {
+        if (!show) return;
+        View line = new View(this);
+        line.setBackgroundColor(0xFF1A1A20);
+        box.addView(line, new LinearLayout.LayoutParams(-1, Math.max(1, dp(0.5f))));
+    }
+
+    /** A filled line graph of the last hour. */
+    static class GraphView extends View {
+        private final float[] vals;
+        private final int color;
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Path path = new android.graphics.Path();
+
+        GraphView(Context c, JSONArray a, int color) {
+            super(c);
+            vals = new float[a.length()];
+            for (int i = 0; i < vals.length; i++) vals[i] = (float) a.optDouble(i, 0);
+            this.color = color;
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            float w = getWidth(), h = getHeight(), max = 1;
+            for (float v : vals) max = Math.max(max, v);
+            max *= 1.15f;
+            path.reset();
+            for (int i = 0; i < vals.length; i++) {
+                float x = w * i / (vals.length - 1), y = h - h * vals[i] / max;
+                if (i == 0) path.moveTo(x, y);
+                else path.lineTo(x, y);
+            }
+            android.graphics.Path fill = new android.graphics.Path(path);
+            fill.lineTo(w, h);
+            fill.lineTo(0, h);
+            fill.close();
+            p.setStyle(Paint.Style.FILL);
+            p.setColor((color & 0x00FFFFFF) | 0x22000000);
+            c.drawPath(fill, p);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(Math.max(2f, getResources().getDisplayMetrics().density * 1.5f));
+            p.setColor(color);
+            c.drawPath(path, p);
+        }
+    }
+
+    /** One small bar per CPU core. */
+    static class CoresView extends View {
+        private final float[] vals;
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        CoresView(Context c, JSONArray a) {
+            super(c);
+            vals = new float[a.length()];
+            for (int i = 0; i < vals.length; i++) vals[i] = (float) a.optDouble(i, 0);
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            int n = vals.length;
+            float gap = getResources().getDisplayMetrics().density * 2, w = (getWidth() - gap * (n - 1)) / n, h = getHeight();
+            for (int i = 0; i < n; i++) {
+                float bh = Math.max(h * 0.08f, h * Math.min(100, vals[i]) / 100f), x = i * (w + gap);
+                p.setColor(0xFF1F1F25);
+                c.drawRect(x, 0, x + w, h, p);
+                p.setColor(vals[i] >= 90 ? 0xFFFBBF24 : 0xFF34D399);
+                c.drawRect(x, h - bh, x + w, h, p);
+            }
+        }
+    }
+
+    /** An Uptime Kuma monitor's last checks: green up, red down, amber anything else. */
+    static class HeartView extends View {
+        private final String[] st;
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        HeartView(Context c, JSONArray a) {
+            super(c);
+            st = new String[a == null ? 0 : a.length()];
+            for (int i = 0; i < st.length; i++) st[i] = a.optString(i);
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            int slots = 30;
+            float gap = getResources().getDisplayMetrics().density, w = (getWidth() - gap * (slots - 1)) / slots, h = getHeight();
+            int start = slots - st.length;
+            for (int i = 0; i < slots; i++) {
+                String s = i < start ? "" : st[i - start];
+                p.setColor(s.isEmpty() ? 0xFF1F1F25 : "up".equals(s) ? 0xFF34D399 : "down".equals(s) ? 0xFFFF6A4D : 0xFFFBBF24);
+                float x = i * (w + gap);
+                c.drawRoundRect(x, 0, x + w, h, gap, gap, p);
+            }
+        }
     }
 
     // ---- the boxes ------------------------------------------------------------------------------

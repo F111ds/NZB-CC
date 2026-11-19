@@ -136,5 +136,13 @@ assert sc["kuma"]["ok"] and len(sc["kuma"]["monitors"]) <= 5 and sc["kuma"]["hea
 assert sc["pi"]["rows"][0][1] == "Pi 4 B · 4 GB" and sc["pi"]["rows"][1][1] == "47°C"
 assert sc["alerts"][0]["title"] and "ads blocked" in sc["record"]
 assert "Z: (Seagate" not in json.dumps(sc["pc"]) and "screen" in hs.tv_brief(hal.status())
+det = hs.tv_details(hal)
+assert [pg["title"] for pg in det["pages"]] == ["The PC", "Network", "Uptime Kuma", "Raspberry Pi"]
+pc = det["pages"][0]
+assert len(pc["cols"][0]["graph"]) > 10 and len(pc["cols"][0]["cores"]) == 16 and len(pc["cols"][2]["drives"]) == 3
+assert pc["cols"][2]["badge"] == "CHECK" and [d for d in pc["cols"][2]["drives"] if d["warn"]][0]["mount"] == "Z:"
+assert det["pages"][2]["cols"][0]["monitors"][0]["status"] == "down"                    # problems first
+assert sum(len(c.get("monitors", [])) for c in det["pages"][2]["cols"]) == 12
+assert all(len(r) == 3 for pg in det["pages"] for c in pg["cols"] for r in c.get("rows", []))
 print("tv on demand ok")
 print("\nALL FUN TESTS PASSED")

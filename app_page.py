@@ -414,7 +414,18 @@ function shownResults(){let r=(results||[]).slice();
   const by={'size_desc':(a,b)=>(b.size_bytes||0)-(a.size_bytes||0),'size_asc':(a,b)=>(a.size_bytes||0)-(b.size_bytes||0),
     'new':(a,b)=>(b.pub_ts||0)-(a.pub_ts||0),'grabs':(a,b)=>(b.grabs||0)-(a.grabs||0)}[sortBy];
   return by?r.sort(by):r}
-function rGet(){let x='<div class="narrow">'+topbar('Get')+'<form class="search" id="sform"><input id="sq" placeholder="'+(getCat==='2000'?'Which movie would you like, ':getCat==='5000'?'Which show would you like, ':'What would you like, ')+esc(NAME())+'?" enterkeyhint="search" autocomplete="off"><button class="btn r">Search</button></form>';
+// The queue at a glance, at the top of Get: what's downloading now, or that nothing is.
+function queueTop(){if(H&&H.sab_ok===false)return'<div class="card"><h3><span class="k">QUEUE</span><span class="mono" style="color:var(--amber)">● NOT ANSWERING</span></h3><div class="tt" style="margin-top:8px">SABnzbd isn\'t answering, '+esc(NAME())+'.</div></div>';
+  if(!Q)return'';const slots=Q.slots||[],paused=Q.state==='Paused',cur=slots.find(s=>String(s.status).toLowerCase()==='downloading')||slots[0];
+  const done=H&&H.done_today!=null?H.done_today:null,z=Q.disk_free_gb!=null?Q.disk_free_gb:H&&H.disk_free_gb,free=z!=null&&z>=0?(z>=1024?(z/1024).toFixed(1)+' TB':Math.round(z)+' GB')+' free':'';
+  if(!slots.length)return'<div class="card"><h3><span class="k">QUEUE</span><span class="mono" style="color:var(--green)">● READY</span></h3><div class="tt" style="margin-top:8px">Nothing downloading, '+esc(NAME())+'.</div>'+
+    '<div class="sub" style="margin-top:6px;font:12px var(--mono);color:var(--soft)">'+esc([done?done+' finished today':'',free].filter(Boolean).join(' · '))+'</div></div>';
+  const s=secsOf(cur.eta),at=s!=null&&s>0&&s<86400*3?'done '+clock(Date.now()+s*1000):'',next=slots.filter(x=>x!==cur).slice(0,2).map(x=>x.name);
+  return'<div class="card"><h3><span class="k">'+(paused?'PAUSED':'DOWNLOADING')+' · '+slots.length+' IN QUEUE</span><button class="btn" data-q="'+(paused?'resume':'pause')+'">'+(paused?'▶ Resume':'❚❚ Pause')+'</button></h3>'+
+    '<div class="tt" style="margin-top:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(cur.name)+'</div><div class="bar"><i style="width:'+(cur.percentage||0)+'%"></i></div>'+
+    '<div class="sub" style="display:flex;justify-content:space-between;gap:10px;margin-top:8px;font:12px var(--mono);color:var(--soft)"><span>'+esc([f0(cur.percentage,'%'),paused?'':Q.speed].filter(Boolean).join(' · '))+'</span><span>'+esc(paused?'paused':at)+'</span></div>'+
+    (next.length?'<div class="sub" style="margin-top:8px;font:12px var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Next: '+esc(next.join(' · '))+'</div>':'')+'</div>'}
+function rGet(){let x='<div class="narrow">'+topbar('Get')+queueTop()+'<form class="search" id="sform"><input id="sq" placeholder="'+(getCat==='2000'?'Which movie would you like, ':getCat==='5000'?'Which show would you like, ':'What would you like, ')+esc(NAME())+'?" enterkeyhint="search" autocomplete="off"><button class="btn r">Search</button></form>';
   x+='<div class="chiprow">'+CATS.map(c=>'<button data-cat="'+c[0]+'" class="'+(getCat===c[0]?'on':'')+'">'+c[1]+'</button>').join('')+'</div>';
   if(searching)x+='<div class="list"><div class="empty">I\'m searching your indexers, '+esc(NAME())+'…</div></div>';
   if(results&&!searching){const list=shownResults(),sz=sortBy==='size_desc'?'Size ↓':sortBy==='size_asc'?'Size ↑':'Size';
@@ -936,7 +947,7 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
 });
 
 function start(){$('app').classList.remove('hidden');$('tabs').classList.remove('hidden');$('side').classList.remove('hidden');refresh();loadUpcoming();
-  if(!start.t)start.t=setInterval(()=>{if(document.hidden||!token)return;refresh();if(tab==='get'&&getSeg==='queue')loadQueue();if(tab==='watch'&&Date.now()-(loadKodi.t||0)>30000){loadKodi.t=Date.now();loadKodi()}},4000)}
+  if(!start.t)start.t=setInterval(()=>{if(document.hidden||!token)return;refresh();if(tab==='get')loadQueue();if(tab==='watch'&&Date.now()-(loadKodi.t||0)>30000){loadKodi.t=Date.now();loadKodi()}},4000)}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&token)refresh()});
 (function pairFromLink(){const m=(location.hash||'').match(/^#k=([A-Za-z0-9_-]+)$/);if(m){token=m[1];LS.set('app_token',token);try{history.replaceState(null,'',location.pathname)}catch(e){}}})();
 if(token)start();else showPair();
