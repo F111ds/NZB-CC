@@ -56,12 +56,12 @@ import java.util.concurrent.Executors;
  * "Show HAL on the TV": adb am start, with an optional message to say in the extra "say_b64").
  *
  * <p>HAL's eye, the clock, weather and the exchange rate, HAL's line (a different one every few minutes), what just
- * arrived (posters) and what's coming up tonight, HAL's record, and live readings from the PC. HAL says his line
+ * boxes for the PC (with its drives), the network, Uptime Kuma and the Raspberry Pi, an alert bar only when something
+ * needs you, and HAL's record. HAL says his line
  * (or the message) when the screen opens; OK on the remote makes him talk again; Back closes it.
  */
 public class HalActivity extends Activity {
     private static final long REFRESH_MS = 30_000L;
-    private static final long HOME_REFRESH_MS = 120_000L;
     private static final long LINE_MS = 3 * 60_000L;
     private static final long DRIFT_MS = 180_000L;
 
@@ -72,9 +72,10 @@ public class HalActivity extends Activity {
 
     private LinearLayout page;
     private EyeView eye;
-    private TextView quote, weather, fx, record, recordSub;
-    private LinearLayout posters, upcoming;
-    private TextView[][] tiles;
+    private TextView quote, weather, weatherSub, fx, record, alertTitle, alertMore;
+    private LinearLayout alertBar;
+    /** The four boxes: PC, network, Uptime Kuma, Raspberry Pi. */
+    private Box pcBox, netBox, kumaBox, piBox;
 
     private TextToSpeech tts;
     private boolean ttsReady, speaking;
@@ -144,7 +145,6 @@ public class HalActivity extends Activity {
         io = Executors.newSingleThreadExecutor();
         eye.start();
         refresh();
-        refreshHome();
         main.postDelayed(this::nextLine, LINE_MS);
         main.postDelayed(this::drift, DRIFT_MS);
     }
@@ -232,7 +232,8 @@ public class HalActivity extends Activity {
         root.setBackgroundColor(Color.BLACK);
         page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(dp(56), dp(30), dp(56), dp(26));
+        page.setPadding(dp(48), dp(24), dp(48), dp(24));
+        page.setGravity(Gravity.CENTER_VERTICAL);
         root.addView(page, new FrameLayout.LayoutParams(-1, -1));
 
         // Top: eye, clock and date; weather and the exchange rate on the right.
@@ -241,16 +242,16 @@ public class HalActivity extends Activity {
         top.setGravity(Gravity.CENTER_VERTICAL);
         page.addView(top, new LinearLayout.LayoutParams(-1, -2));
         eye = new EyeView(this);
-        top.addView(eye, new LinearLayout.LayoutParams(dp(120), dp(120)));
+        top.addView(eye, new LinearLayout.LayoutParams(dp(92), dp(92)));
         LinearLayout clockBox = new LinearLayout(this);
         clockBox.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams cbl = new LinearLayout.LayoutParams(0, -2, 1f);
-        cbl.leftMargin = dp(34);
+        cbl.leftMargin = dp(24);
         top.addView(clockBox, cbl);
         TextClock clock = new TextClock(this);
         clock.setFormat12Hour("h:mm a");
         clock.setFormat24Hour("HH:mm");
-        clock.setTextSize(TypedValue.COMPLEX_UNIT_SP, 70);
+        clock.setTextSize(TypedValue.COMPLEX_UNIT_SP, 60);
         clock.setTextColor(Color.WHITE);
         clock.setTypeface(light);
         clock.setIncludeFontPadding(false);
@@ -269,111 +270,79 @@ public class HalActivity extends Activity {
         side.setOrientation(LinearLayout.VERTICAL);
         side.setGravity(Gravity.END);
         top.addView(side, new LinearLayout.LayoutParams(-2, -2));
-        weather = text(26, Color.WHITE, light);
+        weather = text(36, Color.WHITE, light);
         weather.setGravity(Gravity.END);
+        weather.setSingleLine(true);
         side.addView(weather);
+        weatherSub = text(12, 0xFFA1A1AA, UiFont.get(this, R.string.font_regular));
+        weatherSub.setGravity(Gravity.END);
+        weatherSub.setSingleLine(true);
+        LinearLayout.LayoutParams wsl = new LinearLayout.LayoutParams(-2, -2);
+        wsl.topMargin = dp(5);
+        side.addView(weatherSub, wsl);
         fx = text(13, 0xFFA1A1AA, mono);
         fx.setGravity(Gravity.END);
         LinearLayout.LayoutParams fl = new LinearLayout.LayoutParams(-2, -2);
         fl.topMargin = dp(10);
         side.addView(fx, fl);
 
-        quote = text(17, 0xFFD4D4D8, Typeface.create(regular, Typeface.ITALIC));
+        quote = text(16, 0xFFD4D4D8, Typeface.create(regular, Typeface.ITALIC));
         quote.setLineSpacing(0, 1.15f);
-        quote.setMaxLines(2);
+        quote.setMaxLines(1);
         quote.setEllipsize(TextUtils.TruncateAt.END);
         quote.setText("“I'm reading the PC, Dave.”");
         LinearLayout.LayoutParams ql = new LinearLayout.LayoutParams(-1, -2);
-        ql.topMargin = dp(18);
+        ql.topMargin = dp(20);
         page.addView(quote, ql);
 
-        // Middle: just arrived (posters) | coming up tonight and HAL's record.
-        LinearLayout mid = new LinearLayout(this);
-        mid.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(-1, 0, 1f);
-        ml.topMargin = dp(16);
-        page.addView(mid, ml);
-        LinearLayout left = new LinearLayout(this);
-        left.setOrientation(LinearLayout.VERTICAL);
-        mid.addView(left, new LinearLayout.LayoutParams(0, -1, 1.2f));
-        left.addView(key("JUST ARRIVED"));
-        posters = new LinearLayout(this);
-        posters.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(-1, -2);
-        pl.topMargin = dp(8);
-        left.addView(posters, pl);
-        LinearLayout right = new LinearLayout(this);
-        right.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(0, -1, 1f);
-        rl.leftMargin = dp(28);
-        mid.addView(right, rl);
-        right.addView(key("COMING UP TONIGHT"));
-        upcoming = new LinearLayout(this);
-        upcoming.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams ul = new LinearLayout.LayoutParams(-1, -2);
-        ul.topMargin = dp(4);
-        right.addView(upcoming, ul);
-        View gap = new View(this);
-        right.addView(gap, new LinearLayout.LayoutParams(-1, 0, 1f));
-        LinearLayout rec = new LinearLayout(this);
-        rec.setOrientation(LinearLayout.HORIZONTAL);
-        rec.setGravity(Gravity.CENTER_VERTICAL);
-        rec.setPadding(dp(14), dp(10), dp(14), dp(10));
-        rec.setBackground(card());
-        right.addView(rec, new LinearLayout.LayoutParams(-1, -2));
-        LinearLayout recText = new LinearLayout(this);
-        recText.setOrientation(LinearLayout.VERTICAL);
-        rec.addView(recText, new LinearLayout.LayoutParams(0, -2, 1f));
-        recText.addView(key("HAL'S RECORD"));
-        recordSub = text(10, 0xFF71717A, mono);
-        recordSub.setText("ads blocked");
-        LinearLayout.LayoutParams rsl = new LinearLayout.LayoutParams(-2, -2);
-        rsl.topMargin = dp(4);
-        recText.addView(recordSub, rsl);
-        record = text(22, Color.WHITE, Typeface.create(mono, Typeface.BOLD));
-        record.setText("—");
-        rec.addView(record);
+        // Only when something needs you: the first alert, and how many more.
+        alertBar = new LinearLayout(this);
+        alertBar.setOrientation(LinearLayout.HORIZONTAL);
+        alertBar.setGravity(Gravity.CENTER_VERTICAL);
+        alertBar.setPadding(dp(14), dp(9), dp(14), dp(9));
+        LinearLayout.LayoutParams abl = new LinearLayout.LayoutParams(-1, -2);
+        abl.topMargin = dp(14);
+        page.addView(alertBar, abl);
+        alertTitle = text(12.5f, 0xFFFDE68A, regular);
+        alertTitle.setSingleLine(true);
+        alertTitle.setEllipsize(TextUtils.TruncateAt.END);
+        alertBar.addView(alertTitle, new LinearLayout.LayoutParams(0, -2, 1f));
+        alertMore = text(9.5f, 0xFFA1A1AA, mono);
+        alertBar.addView(alertMore);
+        alertBar.setVisibility(View.GONE);
 
-        // Bottom: the six readings.
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams rowl = new LinearLayout.LayoutParams(-1, -2);
-        rowl.topMargin = dp(16);
-        page.addView(row, rowl);
-        String[] keys = {"CPU", "MEMORY", "INTERNET", "PI-HOLE", "UPTIME KUMA", "DRIVES"};
-        tiles = new TextView[keys.length][2];
-        for (int i = 0; i < keys.length; i++) {
-            LinearLayout t = new LinearLayout(this);
-            t.setOrientation(LinearLayout.VERTICAL);
-            t.setPadding(dp(14), dp(11), dp(14), dp(11));
-            t.setBackground(card());
-            LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(0, dp(88), 1f);
-            if (i > 0) tl.leftMargin = dp(10);
-            row.addView(t, tl);
-            t.addView(key(keys[i]));
-            TextView v = text(21, Color.WHITE, Typeface.create(mono, Typeface.BOLD));
-            v.setSingleLine(true);
-            v.setText("—");
-            LinearLayout.LayoutParams vl = new LinearLayout.LayoutParams(-2, -2);
-            vl.topMargin = dp(8);
-            t.addView(v, vl);
-            TextView s = text(10, 0xFF71717A, mono);
-            s.setSingleLine(true);
-            s.setEllipsize(TextUtils.TruncateAt.END);
-            LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(-2, -2);
-            sl.topMargin = dp(5);
-            t.addView(s, sl);
-            tiles[i][0] = v;
-            tiles[i][1] = s;
-        }
+        // The four boxes, side by side, rows spread evenly.
+        LinearLayout boxes = new LinearLayout(this);
+        boxes.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams bxl = new LinearLayout.LayoutParams(-1, dp(232));
+        bxl.topMargin = dp(22);
+        page.addView(boxes, bxl);
+        pcBox = new Box("THE PC", 1.15f, boxes, false);
+        netBox = new Box("NETWORK", 1f, boxes, true);
+        kumaBox = new Box("UPTIME KUMA", 1f, boxes, true);
+        piBox = new Box("RASPBERRY PI", 1f, boxes, true);
+
+        record = text(9.5f, 0xFF71717A, mono);
+        record.setSingleLine(true);
+        record.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams rl2 = new LinearLayout.LayoutParams(-1, -2);
+        rl2.topMargin = dp(16);
+        page.addView(record, rl2);
         showLocal();
         return root;
     }
 
     /** Weather and the exchange rate, as Home last read them (kept on the TV). */
     private void showLocal() {
-        String pill = getSharedPreferences("weather_now", MODE_PRIVATE).getString("pill", "");
-        weather.setText(pill.trim().replaceAll("\\s+", " "));
+        // "☀  23°  ·  H 27°  L 14°" (Home's pill) -> "☀ 23°" big, and "High 27° · Low 14° · Sunny" under it.
+        SharedPreferences w = getSharedPreferences("weather_now", MODE_PRIVATE);
+        String pill = w.getString("pill", "").trim();
+        String now = w.getString("now", "").trim();
+        String[] parts = pill.split("\\s*\u00b7\\s*", 2);
+        weather.setText(parts[0].replaceAll("\\s+", " "));
+        String hl = parts.length > 1 ? parts[1].replaceAll("\\s+", " ").replace("H ", "High ").replace(" L ", " \u00b7 Low ") : "";
+        String cond = now.split("\\s*\u00b7\\s*")[0];
+        weatherSub.setText(hl.isEmpty() ? cond : cond.isEmpty() ? hl : hl + " \u00b7 " + cond);
         SharedPreferences p = getSharedPreferences("exchange_rate", MODE_PRIVATE);
         String pair = extras.fxFrom + ">" + extras.fxTo;
         double rate = Double.longBitsToDouble(p.getLong("rate", Double.doubleToLongBits(Double.NaN)));
@@ -437,143 +406,6 @@ public class HalActivity extends Activity {
         });
     }
 
-    /** Just arrived and coming up tonight, from the phone server's Home (with posters). */
-    private void refreshHome() {
-        if (!running) return;
-        run(() -> {
-            JSONObject j = null;
-            try {
-                if (!extras.kodiServer.isEmpty())
-                    j = new JSONObject(new String(get("/api/home", 15000), StandardCharsets.UTF_8));
-            } catch (Exception ignored) {
-                j = null;
-            }
-            final JSONObject home = j;
-            final Bitmap[] art = new Bitmap[3];
-            JSONArray arrived = home == null ? null : home.optJSONArray("arrived");
-            for (int i = 0; arrived != null && i < Math.min(3, arrived.length()); i++) {
-                String ref = arrived.optJSONObject(i).optString("poster", "");
-                if (!ref.startsWith("t:")) continue;
-                try {
-                    byte[] b = get("/api/tv/poster?id=" + java.net.URLEncoder.encode(ref.substring(2), "UTF-8"), 15000);
-                    BitmapFactory.Options o = new BitmapFactory.Options();
-                    o.inSampleSize = 2;
-                    art[i] = BitmapFactory.decodeByteArray(b, 0, b.length, o);
-                } catch (Exception ignored) {
-                    art[i] = null;
-                }
-            }
-            main.post(() -> {
-                if (!running) return;
-                if (home != null) showHome(home, art);
-                main.postDelayed(this::refreshHome, HOME_REFRESH_MS);
-            });
-        });
-    }
-
-    private static String ago(String iso) {
-        if (iso == null || iso.length() < 10) return "";
-        try {
-            SimpleDateFormat f = new SimpleDateFormat(iso.length() >= 19 ? "yyyy-MM-dd HH:mm:ss" : "yyyy-MM-dd", Locale.US);
-            Date d = f.parse(iso.replace('T', ' ').substring(0, Math.min(19, iso.length())));
-            if (d == null) return "";
-            long h = (System.currentTimeMillis() - d.getTime()) / 3_600_000L;
-            if (h < 1) return "just now";
-            if (h < 24) return h + " h ago";
-            long days = h / 24;
-            return days == 1 ? "yesterday" : days + " days ago";
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    private void showHome(JSONObject home, Bitmap[] art) {
-        posters.removeAllViews();
-        JSONArray arrived = home.optJSONArray("arrived");
-        Typeface regular = UiFont.get(this, R.string.font_regular);
-        for (int i = 0; arrived != null && i < Math.min(3, arrived.length()); i++) {
-            JSONObject a = arrived.optJSONObject(i);
-            LinearLayout box = new LinearLayout(this);
-            box.setOrientation(LinearLayout.VERTICAL);
-            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(dp(84), -2);
-            if (i > 0) bl.leftMargin = dp(12);
-            posters.addView(box, bl);
-            ImageView img = new ImageView(this);
-            img.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            img.setClipToOutline(true);
-            GradientDrawable ph = card();
-            ph.setColor(0xFF1A1F2B);
-            img.setBackground(ph);
-            if (art[i] != null) img.setImageBitmap(art[i]);
-            box.addView(img, new LinearLayout.LayoutParams(dp(84), dp(126)));
-            TextView t = text(11, Color.WHITE, regular);
-            t.setSingleLine(true);
-            t.setEllipsize(TextUtils.TruncateAt.END);
-            t.setText(a.optString("title", ""));
-            LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(-1, -2);
-            tl.topMargin = dp(6);
-            box.addView(t, tl);
-            TextView s = text(9, 0xFF71717A, Typeface.MONOSPACE);
-            s.setSingleLine(true);
-            s.setText(ago(a.optString("added", "")));
-            LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(-1, -2);
-            sl.topMargin = dp(3);
-            box.addView(s, sl);
-        }
-        if (posters.getChildCount() == 0) {
-            TextView none = text(12, 0xFF71717A, regular);
-            none.setText("Nothing new yet, Dave.");
-            posters.addView(none);
-        }
-
-        upcoming.removeAllViews();
-        JSONArray up = home.optJSONArray("upcoming");
-        String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
-        int shown = 0;
-        for (int i = 0; up != null && i < up.length() && shown < 3; i++) {
-            JSONObject u = up.optJSONObject(i);
-            String when = u.optString("when", "");
-            String local = when;
-            String time = "";
-            if (when.length() > 10) {   // an episode's air time, in UTC
-                try {
-                    SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US);
-                    f.setTimeZone(TimeZone.getTimeZone("UTC"));
-                    Date d = f.parse(when.substring(0, 19));
-                    if (d != null) {
-                        local = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(d);
-                        time = android.text.format.DateFormat.getTimeFormat(this).format(d);
-                    }
-                } catch (Exception ignored) {
-                    // keep the date as it is
-                }
-            }
-            if (!local.startsWith(today)) continue;
-            String title = u.optString("title", "");
-            if ("episode".equals(u.optString("kind"))) title += String.format(Locale.US, " S%d E%d", u.optInt("season"), u.optInt("episode"));
-            if (time.isEmpty()) time = u.optString("release", "").toLowerCase(Locale.US);
-            LinearLayout r = new LinearLayout(this);
-            r.setOrientation(LinearLayout.HORIZONTAL);
-            r.setPadding(0, dp(7), 0, dp(7));
-            TextView a = text(13, Color.WHITE, regular);
-            a.setSingleLine(true);
-            a.setEllipsize(TextUtils.TruncateAt.END);
-            a.setText(title);
-            r.addView(a, new LinearLayout.LayoutParams(0, -2, 1f));
-            TextView b = text(10, 0xFF71717A, Typeface.MONOSPACE);
-            b.setText(time);
-            r.addView(b);
-            upcoming.addView(r);
-            shown++;
-        }
-        if (shown == 0) {
-            TextView none = text(12, 0xFF71717A, regular);
-            none.setPadding(0, dp(7), 0, 0);
-            none.setText("Nothing scheduled for tonight.");
-            upcoming.addView(none);
-        }
-    }
-
     private static String pct(JSONObject j, String k) {
         return j.isNull(k) ? "—" : Math.round(j.optDouble(k)) + "%";
     }
@@ -589,12 +421,6 @@ public class HalActivity extends Activity {
         return (bytes >= 100 || i == 0 ? String.valueOf(Math.round(bytes)) : String.format(Locale.US, "%.1f", bytes)) + " " + u[i];
     }
 
-    private void tile(int i, String value, String sub, int color) {
-        tiles[i][0].setText(value);
-        tiles[i][0].setTextColor(color);
-        tiles[i][1].setText(sub);
-    }
-
     private void show(JSONObject j) {
         showLocal();
         if (j == null) {
@@ -606,39 +432,39 @@ public class HalActivity extends Activity {
         lines = j.optJSONArray("lines");
         if (lineAt == 0 || shownQuote.isEmpty()) setLine(j.optString("say", ""), j.optString("greeting", "") + " " + j.optString("quote", ""));
 
-        int white = Color.WHITE, amber = 0xFFFBBF24, red = 0xFFFF6A4D, green = 0xFF34D399;
-        tile(0, pct(j, "cpu"), j.isNull("cpu_temp") ? "" : Math.round(j.optDouble("cpu_temp")) + "°C", white);
-        if (j.isNull("mem_total")) tile(1, pct(j, "ram"), "", white);
-        else {
-            double used = j.optDouble("mem_used") / 1073741824.0, total = j.optDouble("mem_total") / 1073741824.0;
-            tile(1, pct(j, "ram"), String.format(Locale.US, "%.1f of %.0f GB", used, total), white);
-        }
-        if (j.optBoolean("internet_down")) tile(2, "DOWN", "no internet", red);
-        else tile(2, j.isNull("ping") ? "—" : Math.round(j.optDouble("ping")) + " ms",
-                j.isNull("net_down") ? "" : size(j.optDouble("net_down")) + "/s down", white);
-        if (j.isNull("ads")) tile(3, "—", "not connected", white);
-        else tile(3, String.format(Locale.getDefault(), "%,d", j.optLong("ads")),
-                j.optBoolean("ads_on", true) ? "blocked today" : "blocking paused", j.optBoolean("ads_on", true) ? white : amber);
-        if (j.isNull("kuma_down")) tile(4, "—", "not connected", white);
-        else {
-            int down = j.optInt("kuma_down");
-            tile(4, down > 0 ? down + " down" : "all up", j.optInt("kuma_up") + " of " + j.optInt("kuma_total"), down > 0 ? red : green);
-        }
-        JSONObject f = j.optJSONObject("fullest");
-        if (f == null) tile(5, "—", "", white);
-        else {
-            double p = f.optDouble("pct");
-            tile(5, f.optString("mount") + " " + Math.round(p) + "%", size(f.optDouble("free")) + " free", p >= 90 ? amber : white);
-        }
-        JSONObject rec = j.optJSONObject("record");
-        if (rec != null && rec.has("ads")) {
-            record.setText(String.format(Locale.getDefault(), "%,d", rec.optLong("ads")));
-            String since = rec.optString("since", "");
-            try {
-                Date d = new SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(since);
-                if (d != null) recordSub.setText("ads blocked since " + new SimpleDateFormat("MMMM", Locale.getDefault()).format(d));
-            } catch (Exception ignored) {
-                recordSub.setText("ads blocked");
+        JSONObject sc = j.optJSONObject("screen");
+        if (sc != null) {
+            JSONObject pc = sc.optJSONObject("pc");
+            if (pc != null) {
+                pcBox.rows(pc.optJSONArray("rows"), pc.optString("level"), null);
+                pcBox.drives(3, pc.optJSONArray("drives"));
+            }
+            JSONObject net = sc.optJSONObject("net");
+            if (net != null) netBox.rows(net.optJSONArray("rows"), net.optString("level"), "ALL UP");
+            JSONObject km = sc.optJSONObject("kuma");
+            if (km != null) kumaBox.monitors(km);
+            JSONObject pi = sc.optJSONObject("pi");
+            if (pi != null) piBox.rows(pi.optJSONArray("rows"), pi.optString("level"), null);
+            record.setText(sc.optString("record", "").isEmpty() ? "" : "HAL'S RECORD   " + sc.optString("record"));
+            JSONArray al = sc.optJSONArray("alerts");
+            if (al != null && al.length() > 0) {
+                JSONObject a = al.optJSONObject(0);
+                boolean crit = "critical".equals(a.optString("level"));
+                int col = crit ? 0xFFFF6A4D : 0xFFFBBF24;
+                SpannableString s = new SpannableString("●  " + a.optString("title") + "   " + a.optString("detail"));
+                int titleEnd = 3 + a.optString("title").length();
+                s.setSpan(new ForegroundColorSpan(col), 0, titleEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                s.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), 0, titleEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                alertTitle.setText(s);
+                alertMore.setText(al.length() > 1 ? "+" + (al.length() - 1) + " more in the app" : "");
+                GradientDrawable bg = new GradientDrawable();
+                bg.setColor(crit ? 0x1AFF2A1F : 0x14FBBF24);
+                bg.setStroke(dp(1), crit ? 0x66FF6A4D : 0x59FBBF24);
+                bg.setCornerRadius(dp(9));
+                alertBar.setBackground(bg);
+                alertBar.setVisibility(View.VISIBLE);
+            } else {
+                alertBar.setVisibility(View.GONE);
             }
         }
         if (ttsReady) applyVoice(j.optJSONObject("voice"));
@@ -780,6 +606,158 @@ public class HalActivity extends Activity {
         if (!running) return;
         page.animate().translationX(dp((float) (Math.random() * 30 - 15))).translationY(dp((float) (Math.random() * 16 - 8))).setDuration(4000).start();
         main.postDelayed(this::drift, DRIFT_MS);
+    }
+
+    // ---- the boxes ------------------------------------------------------------------------------
+
+    private static int levelColor(String level) {
+        return "critical".equals(level) ? 0xFFFF6A4D : "warning".equals(level) ? 0xFFFBBF24 : "info".equals(level) ? 0xFF60A5FA : 0xFF34D399;
+    }
+
+    /** One box: a title with a status in the corner, and six rows sharing the height evenly. */
+    private class Box {
+        final LinearLayout body;
+        final TextView status;
+        final LinearLayout[] rows = new LinearLayout[6];
+        final TextView[] labels = new TextView[6], values = new TextView[6];
+        final String okWord;
+
+        Box(String title, float weight, LinearLayout parent, boolean gap) {
+            okWord = "OK";
+            LinearLayout box = new LinearLayout(HalActivity.this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(15), dp(13), dp(15), dp(10));
+            GradientDrawable bg = card();
+            bg.setStroke(Math.max(1, dp(0.5f)), 0xFF17171C);
+            box.setBackground(bg);
+            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(0, -1, weight);
+            if (gap) bl.leftMargin = dp(11);
+            parent.addView(box, bl);
+            LinearLayout head = new LinearLayout(HalActivity.this);
+            head.setOrientation(LinearLayout.HORIZONTAL);
+            TextView k = key(title);
+            head.addView(k, new LinearLayout.LayoutParams(0, -2, 1f));
+            status = key("");
+            head.addView(status);
+            box.addView(head, new LinearLayout.LayoutParams(-1, -2));
+            body = new LinearLayout(HalActivity.this);
+            body.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams bdl = new LinearLayout.LayoutParams(-1, 0, 1f);
+            bdl.topMargin = dp(4);
+            box.addView(body, bdl);
+            Typeface regular = UiFont.get(HalActivity.this, R.string.font_regular);
+            for (int i = 0; i < 6; i++) {
+                if (i > 0) {
+                    View line = new View(HalActivity.this);
+                    line.setBackgroundColor(0xFF1A1A20);
+                    body.addView(line, new LinearLayout.LayoutParams(-1, Math.max(1, dp(0.5f))));
+                }
+                LinearLayout r = new LinearLayout(HalActivity.this);
+                r.setOrientation(LinearLayout.HORIZONTAL);
+                r.setGravity(Gravity.CENTER_VERTICAL);
+                body.addView(r, new LinearLayout.LayoutParams(-1, 0, 1f));
+                TextView l = text(12.5f, 0xFFF4F4F5, regular);
+                l.setSingleLine(true);
+                r.addView(l, new LinearLayout.LayoutParams(-2, -2));
+                View spring = new View(HalActivity.this);
+                r.addView(spring, new LinearLayout.LayoutParams(0, 1, 1f));
+                TextView v = text(10.5f, 0xFFA1A1AA, Typeface.MONOSPACE);
+                v.setSingleLine(true);
+                v.setEllipsize(TextUtils.TruncateAt.END);
+                r.addView(v);
+                rows[i] = r;
+                labels[i] = l;
+                values[i] = v;
+            }
+        }
+
+        void setStatus(String level, String okText, String problemText) {
+            boolean ok = level == null || level.isEmpty() || "ok".equals(level);
+            status.setText("● " + (ok ? okText : problemText));
+            status.setTextColor(levelColor(ok ? "ok" : level));
+        }
+
+        /** rows: [[label, value, level], ...] */
+        void rows(JSONArray a, String level, String okText) {
+            int problems = 0;
+            for (int i = 0; i < 6; i++) {
+                JSONArray row = a == null ? null : a.optJSONArray(i);
+                rows[i].setVisibility(row == null ? View.INVISIBLE : View.VISIBLE);
+                if (row == null) continue;
+                String lv = row.optString(2, "ok");
+                labels[i].setText(row.optString(0, ""));
+                values[i].setText(row.optString(1, ""));
+                values[i].setTextColor("ok".equals(lv) ? 0xFFA1A1AA : levelColor(lv));
+                if (!"ok".equals(lv) && !"info".equals(lv)) problems++;
+            }
+            setStatus(level, okText == null ? okWord : okText, problems <= 1 ? "1 ALERT" : problems + " ALERTS");
+        }
+
+        /** The Drives row: a small bar and % per drive. */
+        void drives(int index, JSONArray ds) {
+            LinearLayout r = rows[index];
+            while (r.getChildCount() > 2) r.removeViewAt(2);
+            values[index].setText("");
+            if (ds == null) return;
+            for (int i = 0; i < ds.length(); i++) {
+                JSONObject d = ds.optJSONObject(i);
+                boolean warn = d.optBoolean("warn");
+                int col = warn ? 0xFFFBBF24 : 0xFF34D399;
+                TextView m = text(9.5f, 0xFFA1A1AA, Typeface.MONOSPACE);
+                m.setText(d.optString("mount"));
+                LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(-2, -2);
+                ml.leftMargin = dp(i == 0 ? 0 : 9);
+                r.addView(m, ml);
+                FrameLayout bar = new FrameLayout(HalActivity.this);
+                GradientDrawable track = new GradientDrawable();
+                track.setColor(0xFF1F1F25);
+                track.setCornerRadius(dp(2));
+                bar.setBackground(track);
+                View fill = new View(HalActivity.this);
+                GradientDrawable fd = new GradientDrawable();
+                fd.setColor(col);
+                fd.setCornerRadius(dp(2));
+                fill.setBackground(fd);
+                int w = dp(22);
+                bar.addView(fill, new FrameLayout.LayoutParams(Math.max(1, Math.round(w * Math.min(100, d.optInt("pct")) / 100f)), -1));
+                LinearLayout.LayoutParams barl = new LinearLayout.LayoutParams(w, dp(4));
+                barl.leftMargin = dp(3);
+                r.addView(bar, barl);
+                TextView pc = text(9.5f, warn ? 0xFFFBBF24 : 0xFFA1A1AA, Typeface.MONOSPACE);
+                pc.setText(d.optInt("pct") + "%");
+                LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(-2, -2);
+                pl.leftMargin = dp(3);
+                r.addView(pc, pl);
+            }
+        }
+
+        /** Uptime Kuma: each monitor with a coloured dot and its response time. */
+        void monitors(JSONObject km) {
+            JSONArray ms = km.optJSONArray("monitors");
+            boolean ok = km.optBoolean("ok");
+            for (int i = 0; i < 6; i++) {
+                JSONObject m = ms == null ? null : ms.optJSONObject(i);
+                if (!ok && i == 0) {
+                    rows[0].setVisibility(View.VISIBLE);
+                    labels[0].setText(km.optBoolean("found") ? "Uptime Kuma" : "Not set up");
+                    values[0].setText(km.optString("head"));
+                    values[0].setTextColor(0xFFFBBF24);
+                    continue;
+                }
+                rows[i].setVisibility(m == null || !ok ? View.INVISIBLE : View.VISIBLE);
+                if (m == null || !ok) continue;
+                String st = m.optString("status");
+                int dot = "up".equals(st) ? 0xFF34D399 : "down".equals(st) ? 0xFFFF6A4D : 0xFFFBBF24;
+                SpannableString s = new SpannableString("●  " + m.optString("name"));
+                s.setSpan(new ForegroundColorSpan(dot), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                labels[i].setText(s);
+                values[i].setText("up".equals(st) ? (m.isNull("ms") ? "up" : m.optInt("ms") + " ms") : st);
+                values[i].setTextColor("up".equals(st) ? 0xFFA1A1AA : dot);
+            }
+            String lv = km.optString("level", "ok");
+            status.setText("● " + km.optString("head").toUpperCase(Locale.US));
+            status.setTextColor(ok ? levelColor(lv) : 0xFFFBBF24);
+        }
     }
 
     // ---- HAL's eye ------------------------------------------------------------------------------

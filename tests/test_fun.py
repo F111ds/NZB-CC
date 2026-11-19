@@ -4,6 +4,7 @@ from pathlib import Path as _Path
 ROOT = _Path(__file__).resolve().parents[1]
 _sys.path.insert(0, str(ROOT))
 
+import json
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -110,5 +111,14 @@ assert not r["ok"] and "older app" in r["message"]
 hs.tv_adb = lambda cmd, timeout=30: (False, "The TV didn't answer in time. Is it on?")
 assert "Is it on?" in hs.tv_show(h5, "")["message"]
 assert hs.siri_intent("show yourself on the TV") == "tv_show" and hs.siri_intent("turn on the tv") == "tv_on"
+sc = hs.tv_screen(hal.status())
+for box in ("pc", "net", "pi"):
+    assert len(sc[box]["rows"]) == 6 and all(len(r) == 3 and r[0] for r in sc[box]["rows"]), box
+assert [d["mount"] for d in sc["pc"]["drives"]] == ["C", "D", "Z"] and [d for d in sc["pc"]["drives"] if d["warn"]][0]["mount"] == "Z"
+assert sc["pc"]["level"] == "warning" and sc["pc"]["rows"][3][2] == "warning"          # drive Z is filling up
+assert sc["kuma"]["ok"] and len(sc["kuma"]["monitors"]) <= 6 and sc["kuma"]["head"] == "11 of 12 up"
+assert sc["pi"]["rows"][0][1] == "Pi 4 B · 4 GB" and sc["pi"]["rows"][1][1] == "47°C"
+assert sc["alerts"][0]["title"] and "ads blocked" in sc["record"]
+assert "Z: (Seagate" not in json.dumps(sc["pc"]) and "screen" in hs.tv_brief(hal.status())
 print("tv on demand ok")
 print("\nALL FUN TESTS PASSED")
