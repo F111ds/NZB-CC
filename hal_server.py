@@ -1911,6 +1911,110 @@ def tv_screen(st: dict) -> dict:
             "downloads": tv_downloads(st.get("demo", False))}
 
 
+def _hist(vals, n: int = 60) -> list:
+    out = [v for v in (vals or []) if v is not None]
+    return [round(v, 1) for v in out[-n:]]
+
+
+def tv_details(hal) -> dict:
+    """The TV's detail pages (Down on HAL's screen): The PC, Network, Uptime Kuma, Raspberry Pi. Each page has a
+    title, a status and columns; a column has a heading, optionally a big number, a graph, core bars, drives,
+    monitors, and rows of [label, value, level]."""
+    st = hal.status()
+    sc = tv_screen(st)
+    hist = hal.history("1h")
+    v, n, sec, pw = st["vitals"], st["net"], st["security"], st["power"]
+    cpu, mem = v["cpu"], v["mem"]
+    g = (v.get("gpus") or [{}])[0]
+    gbs = lambda b: f"{(b or 0) / 1073741824:.1f}"
+    word = lambda lv, ok="OK": ok if lv == "ok" else ("CHECK" if lv == "warning" else "PROBLEM")
+    top = (v.get("top_cpu") or [{}])[0]
+    top_name = re.sub(r"(?i)\.exe$", "", str(top.get("name") or "—"))
+    fans = v.get("fans") or []
+    upd = sec.get("updates") or 0
+    full_keys = {i["key"].split(":", 1)[1] for i in st["issues"] if i["key"].startswith(("full:", "days:", "health:", "dtemp:"))}
+    drives = []
+    for d in st["drives"][:5]:
+        dk = d.get("disk") or {}
+        bits = [dk.get("media") or dk.get("bus") or "", f"{dk['temp']:.0f}°C" if dk.get("temp") else "",
+                f"{dk['wear']:.0f}% wear" if dk.get("wear") is not None else (str(dk.get("health") or "").lower() if dk.get("health") else ""),
+                f"full in ~{d['days_left']:.0f} days" if d.get("days_left") else ""]
+        drives.append({"mount": d["mount"], "name": dk.get("name") or d.get("label") or "", "pct": round(d["pct"]),
+                       "free": sm.fmt_bytes(d["free"]), "info": " · ".join(b for b in bits if b), "warn": d["mount"] in full_keys})
+    ups = pw.get("ups")
+    pc = {"title": "The PC", "level": sc["pc"]["level"], "head": word(sc["pc"]["level"]), "cols": [
+        {"key": "PROCESSOR", "badge": re.sub(r"\s+\d+-Core Processor$", "", str(cpu.get("name") or ""))[:28],
+         "big": f"{cpu.get('pct') or 0:.0f}%" + (f"   {cpu['temp']:.0f}°C" if cpu.get("temp") is not None else ""),
+         "graph": _hist(hist.get("cpu")), "graph_color": "#FF6A4D", "cores": [round(x) for x in (cpu.get("per_core") or [])][:32],
+         "rows": [["Cores / threads", f"{cpu.get('cores') or '—'} / {cpu.get('threads') or '—'}", "ok"],
+                  ["Speed", f"{(cpu.get('freq') or 0) / 1000:.1f} GHz" if cpu.get("freq") else "—", "ok"],
+                  ["Busiest", f"{top_name} · {top.get('cpu') or 0:.0f}%" if top else "—", "ok"]]},
+        {"key": "MEMORY & GRAPHICS", "big": f"{gbs(mem.get('used'))} of {(mem.get('total') or 0) / 1073741824:.0f} GB",
+         "graph": _hist(hist.get("mem")), "graph_color": "#60A5FA",
+         "rows": [["GPU", (str(g.get("name") or "").replace("NVIDIA GeForce ", "") + f" · {g.get('util') or 0:.0f}%") if g else "—", "ok"],
+                  ["GPU temperature", f"{g['temp']:.0f}°C" if g.get("temp") is not None else "—", "ok"],
+                  ["Video memory", f"{gbs(g.get('vram_used'))} of {(g.get('vram_total') or 0) / 1073741824:.0f} GB" if g.get("vram_total") else "—", "ok"],
+                  ["Fans", " · ".join(f"{f['name'].replace(' fan', '')} {f['value']:.0f}" for f in fans[:2]) + " rpm" if fans else "—", "ok"]]},
+        {"key": "DRIVES", "badge": "ALL HEALTHY" if not any(d["warn"] for d in drives) else "CHECK", "drives": drives,
+         "rows": [["Power", (("On battery · " if ups.get("on_battery") else "Mains · ") + f"UPS {ups.get('charge') or 0:.0f}%"
+                             + (f" · {ups['load']:.0f}% load" if ups.get("load") is not None else "")) if ups else (pw.get("plan") or "Mains"), sc["pc"]["rows"][4][2]],
+                  ["Up for", _dur(st.get("uptime")) + (f" · {upd} update{'s' if upd != 1 else ''}" if upd else ""), "ok"]]}]}
+    ph = st.get("pihole") or {}
+    dfd = sec.get("defender") or {}
+    fw = sec.get("firewall") or []
+    new_dev = [i for i in st["issues"] if i["key"].startswith("newdev:")]
+    down = [x / 1048576 for x in _hist(hist.get("net_down")) if x is not None]
+    net = {"title": "Network", "level": sc["net"]["level"], "head": word(sc["net"]["level"], "ALL UP"), "cols": [
+        {"key": "INTERNET", "big": f"{n['ping_ms']:.0f} ms" if n.get("ping_ms") is not None else "—",
+         "graph": [round(x, 1) for x in down], "graph_color": "#34D399",
+         "rows": [["Download now", f"{sm.fmt_bytes(n['down'])}/s" if n.get("down") is not None else "—", "ok"],
+                  ["Upload now", f"{sm.fmt_bytes(n['up'])}/s" if n.get("up") is not None else "—", "ok"],
+                  ["Packet loss", f"{n.get('loss') or 0:.0f}%", "warning" if (n.get("loss") or 0) >= 10 else "ok"],
+                  ["Router", f"{n.get('gateway') or '—'} · {n['gateway_ms']:.0f} ms" if n.get("gateway_ms") is not None else (n.get("gateway") or "—"),
+                   sc["net"]["rows"][1][2]],
+                  ["DNS", "answering" if n.get("dns") is not False else "not answering", "ok" if n.get("dns") is not False else "warning"],
+                  ["Tailscale", n.get("tailscale") or "off", "ok"]]},
+        {"key": "PI-HOLE", "big": f"{int(ph.get('blocked') or 0):,}" if ph.get("ok") else "—",
+         "bigsub": f"blocked today · {ph.get('percent') or 0:.0f}% of {int(ph.get('queries') or 0):,}" if ph.get("ok") else "",
+         "rows": [["Top blocked", "", "ok"]] + [[d[0], f"{d[1]:,}", "ok"] for d in (ph.get("top_blocked") or [])[:3]]
+                 + [["Busiest devices", "", "ok"]] + [[d[0], f"{d[1]:,}", "ok"] for d in (ph.get("top_clients") or [])[:3]]},
+        {"key": "SECURITY", "badge": "ALL ON" if dfd.get("rtp") and fw and all(f["on"] for f in fw) else "CHECK",
+         "rows": [["Defender", "on" if dfd.get("rtp") else "off" if dfd else "—", "ok" if dfd.get("rtp") else "warning"],
+                  ["Definitions", (f"{dfd['sig_age'] / 3600:.0f} h old" if dfd.get("sig_age") else "—"), "ok"],
+                  ["Firewall", "on" if fw and all(f["on"] for f in fw) else "off", "ok" if fw and all(f["on"] for f in fw) else "warning"],
+                  ["Failed sign-ins", str(sec.get("failed") or 0), "ok" if (sec.get("failed") or 0) < 10 else "warning"],
+                  ["Windows updates", str(upd) if upd else "none", "ok"],
+                  ["New devices", str(len(new_dev)) if new_dev else "none", "warning" if new_dev else "ok"]]}]}
+    km = st.get("kuma") or {}
+    mons = sorted(km.get("monitors") or [], key=lambda m: (m["status"] == "up", m["name"].lower()))
+    kmons = [{"name": m["name"], "type": m.get("type") or "", "status": m["status"], "ms": m.get("ms"),
+              "hist": list(hal.kuma_hist.get(m["name"]) or [m["status"]])} for m in mons][:16]
+    half = (len(kmons) + 1) // 2
+    kuma = {"title": "Uptime Kuma", "level": sc["kuma"]["level"], "head": sc["kuma"]["head"].upper(),
+            "cols": [{"key": "MONITORS", "badge": "LAST 30 CHECKS", "monitors": kmons[:half]},
+                     {"key": " ", "monitors": kmons[half:]}] if kmons else
+                    [{"key": "UPTIME KUMA", "rows": [["Status", sc["kuma"]["head"], "warning"]]}]}
+    hw = ph.get("hw") or {}
+    pi = {"title": "Raspberry Pi", "level": sc["pi"]["level"], "head": word(sc["pi"]["level"]), "cols": [
+        {"key": "TEMPERATURE", "big": f"{hw['temp']:.1f}°C" if hw.get("temp") is not None else "—",
+         "graph": list(hal.pi_temp_hist)[-60:], "graph_color": "#FBBF24",
+         "rows": [["Model", sc["pi"]["rows"][0][1], "ok"], ["Host name", hw.get("hostname") or "—", "ok"],
+                  ["Up for", _dur(hw.get("uptime")) if hw.get("uptime") else "—", "ok"]]},
+        {"key": "SYSTEM", "rows": [["CPU", f"{hw['cpu_pct']:.0f}%" if hw.get("cpu_pct") is not None else "—", "ok"],
+                                   ["Load", " · ".join(f"{x:.2f}" for x in hw.get("load") or []) or "—", "ok"],
+                                   ["Cores", str(hw.get("cores") or "—"), "ok"],
+                                   ["Memory", f"{hw['mem_pct']:.0f}% of {round((hw.get('mem_total') or 0) / 1e9)} GB" if hw.get("mem_pct") is not None else "—",
+                                    sc["pi"]["rows"][3][2]]]},
+        {"key": "PI-HOLE", "rows": [["Version", hw.get("version") or "—", "ok"],
+                                    ["Updates", "update ready" if hw.get("update") else "up to date", "info" if hw.get("update") else "ok"],
+                                    ["Blocking", ("on" if ph.get("blocking") is not False else "paused") if ph.get("ok") else "—",
+                                     "ok" if ph.get("blocking") is not False else "warning"],
+                                    ["Block lists", f"{(time.time() - ph['gravity_t']) / 86400:.0f} days old" if ph.get("gravity_t") else "—", "ok"],
+                                    ["Sites blocked", f"{int(ph.get('domains') or 0):,}" if ph.get("domains") else "—", "ok"],
+                                    ["Devices", str(ph.get("clients") or "—"), "ok"]]}]}
+    return {"pages": [pc, net, kuma, pi]}
+
+
 def tv_brief(st: dict) -> dict:
     """Extra readings for the TV's HAL screensaver, and what HAL says out loud there."""
     v, n, ph, km = st["vitals"], st["net"], st.get("pihole") or {}, st.get("kuma") or {}
@@ -2045,6 +2149,8 @@ class Hal(FunMixin):
         self.kuma: dict = {}
         self._counters_init(st)
         self.tv_seen = 0.0                  # when HAL's TV screen last asked for readings
+        self.kuma_hist: dict[str, deque] = {}   # monitor -> its last 30 statuses (for the TV's details)
+        self.pi_temp_hist: deque = deque(maxlen=120)
         self.tv_phrases: list[str] = [str(x)[:120] for x in (st.get("tv_phrases") or []) if str(x).strip()][:TV_PHRASES_MAX]
         self._snooze_gone: dict[str, float] = {}
         self.services: dict[str, dict] = {}
@@ -2454,6 +2560,8 @@ class Hal(FunMixin):
             summ = ph.summary()
             self.track_devices(summ.pop("all_clients", []), now)
             self.record_ads(to_int(summ.get("blocked")))
+            if (summ.get("hw") or {}).get("temp") is not None:
+                self.pi_temp_hist.append(round(summ["hw"]["temp"], 1))
             state = {"found": True, "ok": True, "base": ph.base, "version": ph.version, "fails": 0, "error": "",
                      "need_password": False, "t": now, **summ}
         except PiHoleAuthError as exc:
@@ -2550,6 +2658,9 @@ class Hal(FunMixin):
                      "fails": to_int(prev.get("fails")) + 1, "t": now}
         with self.lock:
             self.kuma = state
+            if state.get("ok"):
+                for m in state["monitors"]:
+                    self.kuma_hist.setdefault(m["name"], deque(maxlen=30)).append(m["status"])
         if state.get("ok"):
             was = {m["name"]: m["status"] for m in prev.get("monitors") or []} if prev.get("ok") else {}
             for m in state["monitors"]:
@@ -3879,6 +3990,8 @@ class HalRoutes:
                                    "ads": ph.get("blocked") if ph.get("ok") else None, "kuma_down": km.get("down") if km.get("ok") else None,
                                    "fullest": {"mount": full["mount"], "pct": full["pct"], "free": full["free"]} if full else None,
                                    "record": st["record"], **tv_brief(st)})
+            elif path == "/api/tv/details":
+                self._h_json(200, tv_details(hal))
             elif path == "/api/tv/phrases":
                 self._h_json(200, {"phrases": list(hal.tv_phrases), "open": time.time() - hal.tv_seen < 45})
             elif path == "/api/kuma":
