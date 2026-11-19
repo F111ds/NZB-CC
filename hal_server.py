@@ -3900,7 +3900,7 @@ function updateDone(){const u=S&&S.update;if(!updWatch||!u||u.running||!u.result
   updWatch=false;const r=u.result;toast(r.state==='updated'?'Updated to version '+r.version+'. I feel much better now, '+S.hal.name+'.':r.message,r.state==='failed');
   if(r.state==='updated')setTimeout(()=>location.reload(),3000)}
 function updBanner(){return (updWatch||(S&&S.update&&S.update.running))?'<div class="banner" style="background:#1a1407;border-color:#4a3609"><b>Updating… I\'ll be back in about a minute'+(S?', '+esc(S.hal.name):'')+'.</b></div>':''}
-async function refresh(){if(busy)return;busy=true;try{S=await api('/api/status');lastOk=Date.now();updateDone();if(tab!=='events')render();if(tab==='vitals')loadHist(range==='live')}catch(e){if(!token)return;lastOk=0}finally{busy=false}}
+async function refresh(){if(busy)return;busy=true;try{const first=!S;S=await api('/api/status');lastOk=Date.now();updateDone();if(tab!=='events'||first)render();if(tab==='vitals')loadHist(range==='live')}catch(e){if(!token)return;lastOk=0}finally{busy=false}}
 // Opened from the all-in-one app (/app): ?tab=drives opens that page, ?settings=1 opens Settings, and an
 // "App" button at the left of the tab bar goes back.
 const QP=new URLSearchParams(location.search);
