@@ -693,6 +693,7 @@ class PiHole:
                     out["all_clients"] = [[str(x.get("name") or ""), str(x.get("ip") or "")] for x in tc.get("clients") or []][:200]
                 except OSError:
                     out["top_blocked"], out["top_clients"] = [], []
+                out["hw"] = self._v6_hardware()
                 return out
             d = self._v5("summaryRaw")
             out = {"queries": to_int(d.get("dns_queries_today")), "blocked": to_int(d.get("ads_blocked_today")),
@@ -710,6 +711,52 @@ class PiHole:
             except (OSError, PiHoleAuthError):
                 pass
             return out
+
+    HW_EVERY = 120
+
+    def _v6_hardware(self) -> dict:
+        """The Raspberry Pi itself (Pi-hole 6 only): model, temperature, CPU, memory, uptime, versions. Every 2 min."""
+        now = time.time()
+        cached = getattr(self, "_hw", None)
+        if cached and now - cached.get("t", 0) < self.HW_EVERY:
+            return cached
+        hw: dict = {"t": now}
+        try:
+            sysd = (self._v6("GET", "/api/info/system").get("system") or {})
+            cpu, ram = sysd.get("cpu") or {}, ((sysd.get("memory") or {}).get("ram") or {})
+            load = (cpu.get("load") or {}).get("raw") or []
+            hw.update(uptime=to_int(sysd.get("uptime")) or None, cpu_pct=round(to_float(cpu.get("%cpu"), 0) or 0, 1),
+                      cores=to_int(cpu.get("nprocs")) or None, load=[round(to_float(x, 0) or 0, 2) for x in load[:3]],
+                      mem_pct=round(to_float(ram.get("%used"), 0) or 0, 1), mem_total=to_int(ram.get("total")) * 1024 or None)
+        except (OSError, PiHoleAuthError, AttributeError, TypeError):
+            pass
+        try:
+            sen = (self._v6("GET", "/api/info/sensors").get("sensors") or {})
+            hw.update(temp=to_float(sen.get("cpu_temp")), hot_limit=to_float(sen.get("hot_limit")),
+                      temp_unit=str(sen.get("unit") or "C"))
+        except (OSError, PiHoleAuthError, AttributeError, TypeError):
+            pass
+        try:
+            host = (self._v6("GET", "/api/info/host").get("host") or {})
+            hw["model"] = str(host.get("model") or (host.get("uname") or {}).get("machine") or "")[:60]
+            hw["hostname"] = str((host.get("uname") or {}).get("nodename") or "")[:60]
+        except (OSError, PiHoleAuthError, AttributeError, TypeError):
+            pass
+        try:
+            ver = (self._v6("GET", "/api/info/version").get("version") or {})
+            mine, behind = {}, []
+            for part in ("core", "web", "ftl"):
+                p = ver.get(part) or {}
+                loc = str((p.get("local") or {}).get("version") or "")
+                rem = str((p.get("remote") or {}).get("version") or "")
+                mine[part] = loc
+                if loc and rem and loc != rem:
+                    behind.append(part)
+            hw.update(version=mine.get("core") or "", update=bool(behind))
+        except (OSError, PiHoleAuthError, AttributeError, TypeError):
+            pass
+        self._hw = hw
+        return hw
 
     def set_blocking(self, enabled: bool, seconds: int = 0) -> None:
         with self.lock:
@@ -1819,7 +1866,7 @@ class Hal:
                 "error": ph.get("error", ""), "need_password": ph.get("need_password", False), "missing": bool(ph.get("missing")),
                 "fails": ph.get("fails", 0),
                 "blocking": ph.get("blocking"), "timer": round(timer) if timer else None,
-                **{k: ph.get(k) for k in ("queries", "blocked", "percent", "clients", "domains", "gravity_t", "top_blocked", "top_clients", "t")}}
+                **{k: ph.get(k) for k in ("queries", "blocked", "percent", "clients", "domains", "gravity_t", "top_blocked", "top_clients", "t", "hw")}}
 
     NEW_DEVICE_HOURS = 24
 
@@ -2248,6 +2295,14 @@ class Hal:
             elif ph.get("ok") and ph.get("gravity_t") and now - ph["gravity_t"] > 14 * 86400:
                 add("pihole_lists", "info", f"Pi-hole's block lists are {(now - ph['gravity_t']) / 86400:.0f} days old",
                     "They normally update every week. On the Pi: pihole -g", "shield")
+        hw = (ph.get("hw") or {}) if ph.get("found") and ph.get("ok") else {}
+        if hw.get("temp") is not None and hw.get("temp_unit", "C") == "C" and hw["temp"] >= 75:
+            add("pi_temp", "critical" if hw["temp"] >= 82 else "warning", "The Raspberry Pi is running hot",
+                f"{hw['temp']:.0f}°C. It slows itself down above 80°C. Check its fan and that air can get to it.", "shield", 120)
+        if hw.get("mem_pct") is not None and hw["mem_pct"] >= 92:
+            add("pi_mem", "warning", "The Raspberry Pi's memory is almost full", f"{hw['mem_pct']:.0f}% used.", "shield", 300)
+        if hw.get("update"):
+            add("pi_update", "info", "A Pi-hole update is available", "On the Pi: sudo pihole -up", "shield")
         for dev in list(self.new_devices.values()):
             add(f"newdev:{dev['id']}", "warning", "A new device joined your network",
                 f"{dev['name'] or 'No name'} · {dev['ip']} · first seen {datetime.fromtimestamp(dev['t']).strftime('%a %I:%M %p').replace(' 0', ' ')}. "
@@ -2426,11 +2481,13 @@ class Hal:
         ph = self.pihole_view()
         if ph["found"]:
             if ph["ok"]:
-                detail = (f"{ph['blocked']:,} blocked today · {ph['percent']:.0f}%" if ph.get("blocking") or ph.get("blocking") is None
+                pi_t = (ph.get("hw") or {}).get("temp")
+                detail = (f"{ph['blocked']:,} blocked today · {ph['percent']:.0f}%" + (f" · Pi {pi_t:.0f}°C" if pi_t is not None else "")
+                          if ph.get("blocking") or ph.get("blocking") is None
                           else f"Paused · back in {fmt_dur(ph['timer'])}" if ph.get("timer") else "Ad blocking is OFF")
             else:
                 detail = "Needs its password" if ph["need_password"] else "Can't find it · set its address" if ph.get("missing") else "Not answering"
-            systems.append({"id": "pihole", "name": "Pi-hole", "level": lvl({"pihole", "pihole_pw", "pihole_off", "pihole_lists"}),
+            systems.append({"id": "pihole", "name": "Pi-hole", "level": lvl({"pihole", "pihole_pw", "pihole_off", "pihole_lists", "pi_temp", "pi_mem", "pi_update"}),
                             "tab": "shield", "detail": detail})
         kv = self.kuma_view()
         if kv["found"]:
@@ -2552,7 +2609,10 @@ def make_demo_hal(ups_mode: str = "online") -> Hal:
               "blocking": True, "timer": None,
               "top_blocked": [["ads.example-tracker.com", 2104], ["telemetry.tv-maker.net", 1630], ["metrics.app-stats.io", 911],
                               ["pixel.adnetwork.com", 640], ["beacon.streaming-ads.tv", 402]],
-              "top_clients": [["living-room-tv", 22140], ["hal9000", 18032], ["iphone", 9311], ["kodi", 4210], ["ipad", 2004]]}
+              "top_clients": [["living-room-tv", 22140], ["hal9000", 18032], ["iphone", 9311], ["kodi", 4210], ["ipad", 2004]],
+              "hw": {"t": now, "model": "Raspberry Pi 4 Model B Rev 1.5", "hostname": "pihole", "temp": 47.2, "hot_limit": 60, "temp_unit": "C",
+                     "cpu_pct": 3.1, "cores": 4, "load": [0.08, 0.05, 0.01], "mem_pct": 21.4, "mem_total": 3_978_000_000,
+                     "uptime": 12 * 86400 + 3 * 3600, "version": "v6.1.4", "update": False}}
     hal.kuma = {"found": True, "ok": True, "base": "http://192.168.68.63:3001", "fails": 0, "error": "", "need_key": False, "t": now,
                 "monitors": [{"name": "Front door camera", "type": "ping", "status": "down", "ms": None, "cert_days": None}] +
                             [{"name": n, "type": ty, "status": "up", "ms": ms, "cert_days": None} for n, ty, ms in

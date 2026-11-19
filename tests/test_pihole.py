@@ -27,6 +27,7 @@ TOK5 = "fake-test-token"
 class PH6(BaseHTTPRequestHandler):
     """Fake Pi-hole 6: one session at a time."""
     sid, logins, blocking, timer, calls = "", 0, True, None, []
+    temp, remote = 47.2, "v6.1.0"
 
     def log_message(self, *a):
         pass
@@ -61,6 +62,16 @@ class PH6(BaseHTTPRequestHandler):
             return self._j(200, {"domains": [{"domain": "ads.x.com", "count": 50}]})
         if self.path.startswith("/api/stats/top_clients"):
             return self._j(200, {"clients": [{"name": "", "ip": "192.168.68.20", "count": 900}]})
+        if self.path == "/api/info/system":
+            return self._j(200, {"system": {"uptime": 90000, "memory": {"ram": {"total": 3884000, "%used": 21.4}},
+                                            "cpu": {"nprocs": 4, "%cpu": 3.14, "load": {"raw": [0.08, 0.05, 0.01]}}}})
+        if self.path == "/api/info/sensors":
+            return self._j(200, {"sensors": {"cpu_temp": PH6.temp, "hot_limit": 60, "unit": "C"}})
+        if self.path == "/api/info/host":
+            return self._j(200, {"host": {"model": "Raspberry Pi 4 Model B Rev 1.5", "uname": {"nodename": "pihole", "machine": "aarch64"}}})
+        if self.path == "/api/info/version":
+            return self._j(200, {"version": {"core": {"local": {"version": "v6.1.0"}, "remote": {"version": PH6.remote}},
+                                             "web": {"local": {"version": "v6.2"}, "remote": {"version": "v6.2"}}}})
         self._j(404, {})
 
     def do_POST(self):
@@ -154,6 +165,10 @@ p = hs.PiHole(base6, PW6, 6)
 sm = p.summary()
 assert sm["blocked"] == 18204 and sm["percent"] == 21.6 and sm["clients"] == 14 and sm["blocking"] is True
 assert sm["top_blocked"] == [["ads.x.com", 50]] and sm["top_clients"] == [["192.168.68.20", 900]]
+hw = sm["hw"]
+assert hw["model"].startswith("Raspberry Pi 4") and hw["temp"] == 47.2 and hw["cpu_pct"] == 3.1 and hw["mem_pct"] == 21.4
+assert hw["uptime"] == 90000 and hw["cores"] == 4 and hw["mem_total"] == 3884000 * 1024 and hw["version"] == "v6.1.0" and hw["update"] is False
+assert p.summary()["hw"] is hw                                                    # cached for 2 minutes
 p.summary()
 assert PH6.logins == 1                                     # one session, reused
 PH6.sid = "expired"                                        # Pi-hole forgot the session: sign in again, once
@@ -225,7 +240,7 @@ time.sleep(0.5)
 hal.check_pihole()
 v = hal.pihole_view()
 assert v["ok"] and v["blocked"] == 18204 and v["version"] == 6 and v["host"] == "127.0.0.1"
-assert any(x["id"] == "pihole" and x["detail"] == "18,204 blocked today · 22%" for x in hal.status()["systems"])
+assert any(x["id"] == "pihole" and x["detail"] == "18,204 blocked today · 22% · Pi 47°C" for x in hal.status()["systems"])
 assert hs.pihole_settings(hal, {"action": "test", "url": base6})["ok"]               # saved password used
 assert not hs.pihole_settings(hal, {"action": "test", "url": base6, "password": "nope"})["ok"]
 assert "Pi-hole 5" in hs.pihole_settings(hal, {"action": "test", "url": base5, "password": TOK5})["message"]
@@ -252,6 +267,19 @@ PH6.timer = None                                                    # turned off
 hal.check_pihole()
 assert [i["key"] for i in hal.compute_issues({}, []) if i["key"].startswith("pihole")] == ["pihole_off"]
 assert hs.run_action(hal, "pihole_resume", {})["ok"] and PH6.blocking is True
+
+# the Pi itself: hot, and an update
+hal.pihole._hw = None
+PH6.temp, PH6.remote = 78.0, "v6.1.2"
+hal.check_pihole()
+keys = {i["key"]: i["level"] for i in hal.compute_issues({}, [])}
+assert keys.get("pi_temp") == "warning" and keys.get("pi_update") == "info"
+assert "Pi 78°C" in [x for x in hal.status()["systems"] if x["id"] == "pihole"][0]["detail"]
+assert hal.pihole_view()["hw"]["model"].startswith("Raspberry Pi")
+PH6.temp, PH6.remote = 47.2, "v6.1.0"
+hal.pihole._hw = None
+hal.check_pihole()
+assert not [i for i in hal.compute_issues({}, []) if i["key"].startswith("pi_")]
 
 # Pi-hole goes away: critical after two missed checks
 s6.shutdown()
