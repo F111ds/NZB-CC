@@ -15,6 +15,8 @@ A phone version of NZB Command Center, served on your home network:
              "Type on TV": type on the phone into the text box open in Kodi
   * Jellyfin - now playing (pause / stop), library scan, "do I already have it?" search with
              quality, missing episodes, movies below 1080p, show seasons; connect from the phone
+  * /app   - the all-in-one HAL 9000 app (Home, Get, Watch, System) built on the same API; it opens
+             signed in with the code this phone already saved for the NZB app. Its page is app_page.py.
   * HAL 9000 - runs inside this server (the first step towards one all-in-one app): open /hal on
              the phone, or HAL's own port 8766 as before. Needs psutil and hal_server.py + system_monitor.py
              in this folder; without them everything else works and the banner says why HAL is off.
@@ -80,7 +82,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.12.1"
+VERSION = "3.13.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -4546,6 +4548,33 @@ def get_local_ip() -> str:
 # 7. WEB PAGE
 # ==============================================================================
 
+# The all-in-one HAL 9000 app (Home, Get, Watch, System) at /app, in app_page.py next to this file.
+try:
+    from app_page import APP_PAGE
+except ImportError:
+    MISSING_PARTS.append("app_page.py")
+    APP_PAGE = ("<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+                "<body style=\"background:#050506;color:#F4F4F5;font:16px system-ui;padding:40px 24px;text-align:center\">"
+                "<h2>HAL 9000</h2><p>The app's page (app_page.py) is missing from the PC's NZB Command Center folder. "
+                "Run update_all.ps1 there to get it back.</p></body>")
+APP_MANIFEST = json.dumps({
+    "id": "/app/", "name": "HAL 9000", "short_name": "HAL 9000", "start_url": "/app/", "scope": "/app/", "display": "standalone",
+    "background_color": "#050506", "theme_color": "#050506",
+    "icons": [{"src": "/app/icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any"},
+              {"src": "/app/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}],
+}).encode("utf-8")
+
+
+def app_icon(size: int) -> bytes:
+    """HAL's eye (drawn by hal_server) for the all-in-one app; the NZB icon if HAL isn't here."""
+    if _hal_mod is not None:
+        try:
+            return _hal_mod.icon(size)
+        except Exception:  # noqa: BLE001
+            pass
+    return ICON_PNG
+
+
 # The page itself is in mobile_page.py (next to this file). Without that file the server still runs and
 # shows how to get it back, instead of failing to start.
 try:
@@ -4707,6 +4736,18 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             return
         if path == "/hal" or path.startswith("/hal/"):
             self._hal_route("GET", path)
+            return
+        if path == "/app":
+            self._send(302, b"", "text/plain", {"Location": "/app/"})
+            return
+        if path in ("/app/", "/app/index.html"):
+            self._send(200, APP_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            return
+        if path == "/app/manifest.webmanifest":
+            self._send(200, APP_MANIFEST, "application/manifest+json", {"Cache-Control": "public, max-age=86400"})
+            return
+        if path in ("/app/icon.png", "/app/icon-512.png"):
+            self._send(200, app_icon(512 if path.endswith("512.png") else 180), "image/png", {"Cache-Control": "public, max-age=86400"})
             return
         if path in ("/", "/index.html"):
             self._send(200, PAGE.replace("__VERSION__", VERSION).encode("utf-8"), "text/html; charset=utf-8")

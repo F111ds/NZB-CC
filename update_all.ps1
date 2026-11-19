@@ -61,7 +61,7 @@ try {
         $paths = @("mobile_server.py", "nzb_command_center.py", "media_server.py", "media_inspector.py", "kodi_client.py",
                    "system_command_center.py", "system_monitor.py", "app_icon.ico", "system_center_icon.ico", "README.md",
                    "update_phone_app.ps1", "update_all.ps1", "setup_startup.ps1", "hal_server.py", "setup_hal_startup.ps1",
-                   "mobile_page.py", "mobile_icons.py")
+                   "mobile_page.py", "mobile_icons.py", "app_page.py")
     }
     $wanted = @($paths | Where-Object {
         ($_ -notmatch '/' -and $_ -match '\.(py|ps1|ico|md)$' -and $_ -ne 'CLAUDE.md') -or

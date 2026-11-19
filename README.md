@@ -36,6 +36,24 @@ run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardware
 **Options > Remote Web Server > Run** (port 8085; the app also reads its WMI feed when that's available).
 Run as administrator to see drive temperatures and wear.
 
+## HAL 9000 all-in-one app (/app)
+
+One app for everything, on the phone and the PC: open `http://<your-pc>:8765/app/` and add it to the home screen
+(on the PC: Edge/Chrome > Install this site as an app). It opens already signed in if the NZB app is paired on that
+device; otherwise type the 6-digit PIN from `http://localhost:8765/hal/pair`.
+
+- **Home**: HAL's eye and one line about your evening (downloads, the TV, anything that needs you), what needs
+  attention, what's downloading (pause/resume, ready time), what's on the TV (pause), Jellyfin streams, what just
+  arrived (Play on TV), what's coming up, today's totals.
+- **Get**: search your indexers (Add, "have it"), the queue (pause, resume, remove), coming up from Sonarr/Radarr.
+- **Watch**: the TV remote (Kodi), continue watching (Play on TV), Jellyfin streams, TV on + Kodi.
+- **System**: HAL's vitals, alerts and systems; each opens HAL's full page (with an App button to come back).
+- HAL talks on the phone (after your first tap; the speaker button mutes him), not on the PC. On a wide screen it
+  shows a sidebar and three columns.
+
+The classic NZB app (`/`, `/kodi`) and HAL (`/hal/`, port 8766) keep working alongside it. Connections (SABnzbd,
+indexers, Kodi, Jellyfin) are still set in the desktop app for now. The page is `app_page.py`.
+
 ## HAL 9000 (phone app that watches over this PC)
 
 > "I am putting myself to the fullest possible use, which is all I think that any conscious entity can ever hope to do."
@@ -92,7 +110,8 @@ HAL's own files: `hal_settings.json`, `hal_state.json` (history and log), `hal_s
 
 ## Phone server files
 
-`mobile_server.py` keeps its web page in `mobile_page.py` and its icons in `mobile_icons.py`: keep all three in the
+`mobile_server.py` keeps its web page in `mobile_page.py`, its icons in `mobile_icons.py` and the all-in-one app in
+`app_page.py`: keep them all in the
 same folder (`update_all.ps1` and `update_phone_app.ps1` fetch them together). If one is missing the server still
 starts, shows a page saying which file to get back, and logs it.
 
