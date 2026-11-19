@@ -253,10 +253,10 @@ public class HalActivity extends Activity {
 
         eye = new EyeView(this);
         centre.addView(eye, new LinearLayout.LayoutParams(dp(196), dp(196)));
-        quote = text(16, 0xFFD4D4D8, Typeface.create(regular, Typeface.ITALIC));
+        quote = text(14.5f, 0xFFD4D4D8, Typeface.create(regular, Typeface.ITALIC));
         quote.setLineSpacing(0, 1.2f);
         quote.setGravity(Gravity.CENTER);
-        quote.setMaxLines(3);
+        quote.setMaxLines(5);
         quote.setEllipsize(TextUtils.TruncateAt.END);
         quote.setText("\u201cI'm reading the PC, Dave.\u201d");
         LinearLayout.LayoutParams ql = new LinearLayout.LayoutParams(-1, -2);
@@ -703,7 +703,7 @@ public class HalActivity extends Activity {
                 TextView m = text(9.5f, 0xFFA1A1AA, Typeface.MONOSPACE);
                 m.setText(d.optString("mount"));
                 LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(-2, -2);
-                ml.leftMargin = dp(i == 0 ? 0 : 9);
+                ml.leftMargin = dp(i == 0 ? 12 : 8);
                 r.addView(m, ml);
                 FrameLayout bar = new FrameLayout(HalActivity.this);
                 GradientDrawable track = new GradientDrawable();
@@ -715,7 +715,7 @@ public class HalActivity extends Activity {
                 fd.setColor(col);
                 fd.setCornerRadius(dp(2));
                 fill.setBackground(fd);
-                int w = dp(22);
+                int w = dp(ds.length() > 3 ? 16 : 20);
                 bar.addView(fill, new FrameLayout.LayoutParams(Math.max(1, Math.round(w * Math.min(100, d.optInt("pct")) / 100f)), -1));
                 LinearLayout.LayoutParams barl = new LinearLayout.LayoutParams(w, dp(4));
                 barl.leftMargin = dp(3);
