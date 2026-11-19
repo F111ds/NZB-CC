@@ -1,0 +1,88 @@
+"""HAL's fun bits: Siri answers, briefings, lifetime counters and milestones."""
+import sys as _sys
+from pathlib import Path as _Path
+ROOT = _Path(__file__).resolve().parents[1]
+_sys.path.insert(0, str(ROOT))
+
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+import hal_server as hs
+
+tmp = Path(tempfile.mkdtemp())
+hs.SETTINGS_FILE = tmp / "hal_settings.json"
+hs.STATE_FILE = tmp / "hal_state.json"
+
+# ---- what was said to Siri ----
+for q, want in [("How's everything?", "status"), ("open the pod bay doors please", "podbay"), ("sing me a song", "daisy"),
+                ("pause the ads for 30 minutes", "ads_off"), ("turn the ads back on", "ads_on"), ("how many ads today", "ads"),
+                ("lock the PC", "lock"), ("put the PC to sleep", "sleep"), ("restart the computer", "refuse"), ("shut down", "refuse"),
+                ("turn on the TV", "tv_on"), ("what's downloading", "downloads"), ("how hot is it", "temps"),
+                ("how are the drives", "drives"), ("is the internet ok", "internet"), ("is anything down on uptime kuma", "kuma"),
+                ("how was my week", "week"), ("give me my briefing", "morning"), ("what's my record", "record"), ("", "status")]:
+    assert hs.siri_intent(q) == want, (q, hs.siri_intent(q), want)
+print("intents ok")
+
+hal = hs.make_demo_hal()
+for q in ("how's everything", "how hot is it", "how are the drives", "what's my record", "is anything down", "pause the ads"):
+    r = hal.siri(q)
+    assert r["say"] and "None" not in r["say"], (q, r)
+assert hal.siri("open the pod bay doors")["say"] == "I'm sorry, Dave. I'm afraid I can't do that."
+assert "can't do that from here" in hal.siri("restart the pc")["say"]
+assert hal.siri("pause the ads")["say"].startswith("Demo mode")                         # demo changes nothing
+assert hs.spoken("Drive Z: is 92% full, 38.2 MB/s, 47°C · ok") == "Drive Z is 92 percent full, 38.2 megabytes a second, 47 degrees, ok"
+assert hs._lc("Windows wants a restart") == "Windows wants a restart" and hs._lc("The CPU is hot") == "the CPU is hot"
+assert hs._lc("CPU load") == "CPU load" and hs._lc("Drive Z: is full") == "drive Z: is full"
+print("siri ok")
+
+# ---- briefings ----
+for kind in ("now", "morning", "weekly"):
+    txt = hal.brief_text(kind)
+    assert txt and "None" not in txt and "{" not in txt, (kind, txt)
+assert hal.brief_text("morning").startswith("Good morning, Dave.") and hal.brief_text("weekly").startswith("Here is your week, Dave.")
+h2 = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=hs.DemoMonitor(), start_threads=False)
+h2.save = lambda: None
+sent = []
+h2.add_event = lambda lvl, title, msg="", push=False: sent.append((title, msg))
+h2.settings.update(brief_time="07:30", brief_weekly="sun", push=False)
+assert h2.check_briefings(datetime(2026, 11, 19, 7, 29)) is None                         # not yet
+assert h2.check_briefings(datetime(2026, 11, 19, 7, 31)) == "morning" and sent[-1][0] == "Morning briefing"
+assert h2.check_briefings(datetime(2026, 11, 19, 7, 45)) is None                          # once a day
+assert h2.check_briefings(datetime(2026, 11, 20, 9, 0)) is None                           # missed the window: skip, don't nag late
+assert h2.check_briefings(datetime(2026, 11, 22, 7, 30)) == "weekly" and sent[-1][0] == "Your week"   # a Sunday
+h2.settings["brief_time"] = ""
+assert h2.check_briefings(datetime(2026, 11, 23, 7, 30)) is None                          # off
+s = hs.validate_settings({"brief_time": "6:05", "brief_weekly": "mon"}, h2.settings)
+assert s["brief_time"] == "06:05" and s["brief_weekly"] == "mon"
+assert hs.validate_settings({"brief_time": ""}, h2.settings)["brief_time"] == ""
+for bad in ({"brief_time": "25:00"}, {"brief_time": "seven"}, {"brief_weekly": "someday"}):
+    try:
+        hs.validate_settings(bad, h2.settings)
+        raise AssertionError(bad)
+    except ValueError:
+        pass
+print("briefings ok")
+
+# ---- lifetime counters and milestones ----
+h3 = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=hs.DemoMonitor(), start_threads=False)
+ev = []
+h3.add_event = lambda lvl, title, msg="", push=False: ev.append(title)
+h3.record_ads(4000, "2026-11-18")
+h3.record_ads(3000, "2026-11-18")                                                        # a day's number only goes up
+h3.record_ads(5000, "2026-11-19")
+assert h3.ads_lifetime() == 9000 and not ev
+h3.record_ads(7000, "2026-11-19")
+assert h3.ads_lifetime() == 11000 and ev == ["10,000 ads blocked"]
+h3.record_ads(8000, "2026-11-19")
+assert ev == ["10,000 ads blocked"]                                                       # once
+for i in range(420):                                                                      # old days fold into a running total
+    h3.record_ads(10, f"2025-{(i // 28) % 12 + 1:02d}-{i % 28 + 1:02d}" if i < 300 else f"2024-01-{i % 28 + 1:02d}")
+assert len(h3.counters["ads_days"]) <= 400 and h3.ads_lifetime() >= 12000
+h3.note_power_cut()
+h3.note_uptime(86400 * 3)
+h3.note_uptime(3600)
+r = h3.record()
+assert r["power_cuts"] == 1 and r["longest_up"] == 86400 * 3 and r["next_milestone"] == 50_000
+print("counters ok")
+print("\nALL FUN TESTS PASSED")

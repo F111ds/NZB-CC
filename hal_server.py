@@ -61,7 +61,7 @@ import xml.etree.ElementTree as ET
 import zlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -454,6 +454,8 @@ DEFAULT_SETTINGS = {
     "pihole_off": False,            # don't watch a Pi-hole at all
     "kuma_url": "",                 # Uptime Kuma, e.g. http://192.168.68.63:3001 (blank: not used)
     "kuma_key": "",                 # dpapi:... Uptime Kuma API key (Settings > API Keys)
+    "brief_time": "07:30",          # morning briefing to the phone (blank: off)
+    "brief_weekly": "sun",          # that day's briefing is the week's summary (blank: never)
 }
 
 
@@ -511,6 +513,10 @@ def validate_settings(body: dict, current: dict) -> dict:
                 v = urllib.parse.urlunsplit((p.scheme, p.netloc, p.path.rstrip("/"), "", ""))
             elif k in ("nut_host", "ping_host") and v and not re.fullmatch(r"[A-Za-z0-9.\-:]{1,253}", v):
                 raise ValueError("That address doesn't look right.")
+            elif k == "brief_time":
+                v = parse_hhmm(v)
+            elif k == "brief_weekly" and v not in ("", *WEEKDAYS):
+                raise ValueError("Pick a day for the weekly summary.")
             elif k == "nut_ups" and v and not re.fullmatch(r"[\w.\-]{1,64}", v):
                 raise ValueError("That UPS name doesn't look right.")
             s[k] = v
@@ -1407,7 +1413,364 @@ def recovery_title(key: str, issue: dict) -> str:
 HIST_KEYS = ("cpu", "mem", "gpu", "cpu_temp", "ping", "net_down")
 
 
-class Hal:
+
+# ==============================================================================
+# FUN: briefings, Siri, lifetime counters
+# ==============================================================================
+
+WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+AD_MILESTONES = [10_000, 50_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000, 100_000_000]
+
+
+def sab_history() -> dict:
+    """SABnzbd's history totals and recent items ({} if SABnzbd isn't set up or doesn't answer)."""
+    cfg = nzb_config()
+    key = dpapi_unprotect(str(cfg.get("sab_api_key") or ""))
+    if not key:
+        return {}
+    base = str(cfg.get("sab_url") or "http://127.0.0.1:8080").strip().rstrip("/")
+    try:
+        h = (http_json(f"{base}/api?mode=history&output=json&limit=60&apikey={urllib.parse.quote(key)}") or {}).get("history") or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    slots = [{"name": str(s.get("name") or ""), "ok": str(s.get("status") or "") == "Completed",
+              "t": to_int(s.get("completed"))} for s in h.get("slots") or []]
+    return {"count": to_int(h.get("noofslots")), "total_size": str(h.get("total_size") or ""),
+            "week_size": str(h.get("week_size") or ""), "day_size": str(h.get("day_size") or ""), "slots": slots}
+
+
+def _size_words(s: str) -> str:
+    """'1.2 T' -> '1.2 terabytes' (SABnzbd's short sizes, for speaking)."""
+    m = re.fullmatch(r"\s*([\d.]+)\s*([KMGTP]?)B?\s*", s or "")
+    if not m:
+        return s or ""
+    unit = {"": "bytes", "K": "kilobytes", "M": "megabytes", "G": "gigabytes", "T": "terabytes", "P": "petabytes"}[m.group(2)]
+    return f"{m.group(1)} {unit}"
+
+
+def _lc(title: str) -> str:
+    """'Windows wants a restart' stays; 'The CPU is hot' -> 'the CPU is hot' (to go mid-sentence)."""
+    first = title.split(" ", 1)[0].rstrip(":,")
+    if not title or first in PROPER_WORDS or (len(first) > 1 and first[1:2].isupper()) or re.fullmatch(r"[A-Z]:?", first):
+        return title
+    return title[0].lower() + title[1:]
+
+
+def spoken(text: str) -> str:
+    """Text Siri reads well: 'Z:' -> 'Z', 'MB/s' -> 'megabytes a second', '92%' -> '92 percent'."""
+    t = re.sub(r"\b([A-Z]):", r"\1", text)
+    t = re.sub(r"(\d)\s*MB/s", r"\1 megabytes a second", t)
+    t = re.sub(r"(\d)\s*KB/s", r"\1 kilobytes a second", t)
+    t = re.sub(r"(\d)\s*GB\b", r"\1 gigabytes", t)
+    t = re.sub(r"(\d)\s*TB\b", r"\1 terabytes", t)
+    t = re.sub(r"(\d)\s*%", r"\1 percent", t)
+    t = re.sub(r"(\d)\s*°C", r"\1 degrees", t)
+    return t.replace(" · ", ", ").replace("·", ",")
+
+
+def _n(x) -> str:
+    return f"{int(x):,}"
+
+
+def parse_hhmm(v: str) -> str:
+    v = str(v or "").strip()
+    if not v:
+        return ""
+    m = re.fullmatch(r"(\d{1,2})[:.]?(\d{2})", v)
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        raise ValueError("Use a time like 07:30.")
+    return f"{int(m.group(1)):02d}:{m.group(2)}"
+
+
+def siri_intent(q: str) -> str:
+    """What a sentence said to Siri asks for."""
+    q = " " + re.sub(r"[^a-z0-9 ]+", " ", str(q or "").lower()) + " "
+    has = lambda *w: any(f" {x} " in q or (" " in x and x in q) for x in w)
+    if has("pod bay", "pod bay doors"):
+        return "podbay"
+    if has("daisy", "sing", "song"):
+        return "daisy"
+    if has("ad", "ads", "adverts", "pi hole", "pihole", "blocking", "blocker"):
+        if has("on", "back", "resume", "start", "enable", "unpause"):
+            return "ads_on"
+        if has("pause", "off", "stop", "disable", "turn off"):
+            return "ads_off"
+        return "ads"
+    if has("lock"):
+        return "lock"
+    if has("sleep"):
+        return "sleep"
+    if has("restart", "reboot", "shut", "shutdown", "power off"):
+        return "refuse"
+    if has("tv", "television", "kodi"):
+        return "tv_on" if has("on", "start", "open", "wake") else "tv"
+    if has("download", "downloads", "downloading", "queue", "sab", "sabnzbd"):
+        return "downloads"
+    if has("temperature", "temp", "hot", "heat", "warm"):
+        return "temps"
+    if has("drive", "drives", "disk", "space", "storage"):
+        return "drives"
+    if has("internet", "network", "ping", "wifi", "online"):
+        return "internet"
+    if has("uptime kuma", "kuma", "monitors", "websites"):
+        return "kuma"
+    if has("week", "weekly"):
+        return "week"
+    if has("morning", "briefing", "brief", "overnight"):
+        return "morning"
+    if has("record", "lifetime", "stats", "counters", "milestone"):
+        return "record"
+    return "status"
+
+
+class FunMixin:
+    """Briefings, Siri answers and lifetime counters for Hal (kept apart from the watching code)."""
+
+    # ---- lifetime counters ----
+    def _counters_init(self, st: dict) -> None:
+        c = st.get("counters") if isinstance(st.get("counters"), dict) else {}
+        self.counters = {"first_day": str(c.get("first_day") or datetime.now().strftime("%Y-%m-%d")),
+                         "ads_days": {k: to_int(v) for k, v in (c.get("ads_days") or {}).items()},
+                         "ads_before": to_int(c.get("ads_before")), "power_cuts": to_int(c.get("power_cuts")),
+                         "milestones": [to_int(x) for x in c.get("milestones") or []],
+                         "longest_up": to_int(c.get("longest_up"))}
+        self.brief_sent: dict = st.get("brief_sent") if isinstance(st.get("brief_sent"), dict) else {}
+
+    def ads_lifetime(self) -> int:
+        c = self.counters
+        return c["ads_before"] + sum(c["ads_days"].values())
+
+    def record_ads(self, blocked: int, day: str | None = None) -> None:
+        day = day or datetime.now().strftime("%Y-%m-%d")
+        hit = None
+        with self.lock:
+            c = self.counters
+            before = self.ads_lifetime()
+            c["ads_days"][day] = max(c["ads_days"].get(day, 0), int(blocked))
+            if len(c["ads_days"]) > 400:
+                for k in sorted(c["ads_days"])[:-400]:
+                    c["ads_before"] += c["ads_days"].pop(k)
+            after = self.ads_lifetime()
+            for m in AD_MILESTONES:
+                if before < m <= after and m not in c["milestones"]:
+                    c["milestones"].append(m)
+                    hit = m
+        if hit:
+            words = f"{hit // 1_000_000} million" if hit >= 1_000_000 else f"{hit:,}"
+            self.add_event("ok", f"{words} ads blocked", f"Pi-hole has now blocked {words} ads since I started counting, "
+                           f"{self.settings['name']}. I am putting myself to the fullest possible use.", push=True)
+
+    def note_power_cut(self) -> None:
+        with self.lock:
+            self.counters["power_cuts"] += 1
+
+    def note_uptime(self, uptime_s) -> None:
+        if uptime_s:
+            with self.lock:
+                self.counters["longest_up"] = max(self.counters["longest_up"], int(uptime_s))
+
+    def record(self) -> dict:
+        c = self.counters
+        today = datetime.now().strftime("%Y-%m-%d")
+        sab = getattr(self, "_sab_cache", {}) or {}
+        try:
+            days = (datetime.now() - datetime.strptime(c["first_day"], "%Y-%m-%d")).days + 1
+        except ValueError:
+            days = 1
+        yday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        return {"ads": self.ads_lifetime(), "ads_today": c["ads_days"].get(today, 0), "ads_yesterday": c["ads_days"].get(yday, 0),
+                "ads_week": sum(v for k, v in c["ads_days"].items() if k >= (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")),
+                "days": days, "since": c["first_day"], "power_cuts": c["power_cuts"], "longest_up": c["longest_up"],
+                "downloads": sab.get("count"), "downloaded": sab.get("total_size") or "", "milestones": sorted(c["milestones"]),
+                "next_milestone": next((m for m in AD_MILESTONES if m > self.ads_lifetime()), None)}
+
+    def refresh_sab(self) -> dict:
+        res = sab_history()
+        if res:
+            self._sab_cache = res
+        return res or getattr(self, "_sab_cache", {}) or {}
+
+    # ---- words ----
+    def brief_text(self, kind: str = "now") -> str:
+        s, name = self.settings, self.settings["name"]
+        st = self.status()
+        issues = st["issues"]
+        crit = [i for i in issues if i["level"] == "critical"]
+        warn = [i for i in issues if i["level"] == "warning"]
+        ph = st.get("pihole") or {}
+        rec = self.record()
+        drives = st.get("drives") or []
+        full = max(drives, key=lambda d: d["pct"]) if drives else None
+        out = []
+        if kind == "now":
+            out.append(f"I'm sorry, {name}. {crit[0]['title']}." if crit else f"All systems are functioning normally, {name}." if not warn
+                       else f"Mostly fine, {name}, but {_lc(warn[0]['title'])}.")
+            sab = next((x for x in st["services"] if x["id"] == "sabnzbd"), None)
+            if sab and sab.get("detail"):
+                out.append("SABnzbd is " + sab["detail"].split(" · ")[0] + ".")
+            if ph.get("found") and ph.get("ok"):
+                out.append(f"Pi-hole has blocked {_n(ph.get('blocked') or 0)} ads today.")
+            if full:
+                out.append(f"The fullest drive is {full['mount'].rstrip(':')} at {full['pct']:.0f} percent.")
+            if len(issues) > 1:
+                out.append(f"{len(issues)} things need your attention in the app.")
+            return " ".join(out)
+        sab = self.refresh_sab()
+        now = time.time()
+        if kind == "morning":
+            out.append(f"Good morning, {name}.")
+            done = [x for x in sab.get("slots", []) if x["t"] and now - x["t"] < 86400]
+            ok, bad = sum(1 for x in done if x["ok"]), sum(1 for x in done if not x["ok"])
+            if sab:
+                out.append(f"Overnight, {ok} download{'s' if ok != 1 else ''} finished" + (f" and {bad} failed." if bad else ".") if done
+                           else "No downloads finished overnight.")
+            if rec["ads_yesterday"]:
+                out.append(f"Pi-hole blocked {_n(rec['ads_yesterday'])} ads yesterday.")
+            cuts = [p for p in self.power_log if now - p["t"] < 86400]
+            if cuts:
+                out.append(f"There {'was a power cut' if len(cuts) == 1 else f'were {len(cuts)} power cuts'}, and I kept everything running.")
+        else:
+            out.append(f"Here is your week, {name}.")
+            wk = [x for x in sab.get("slots", []) if x["t"] and now - x["t"] < 7 * 86400]
+            if sab:
+                out.append(f"{sum(1 for x in wk if x['ok'])} downloads finished" + (f", {_size_words(sab['week_size'])} in all." if sab.get("week_size") else "."))
+            if rec["ads_week"]:
+                out.append(f"Pi-hole blocked {_n(rec['ads_week'])} ads, {_n(rec['ads'])} since I started counting.")
+            alerts = [e for e in self.events if e.get("level") in ("warning", "critical") and now - e.get("t", 0) < 7 * 86400]
+            out.append(f"I raised {len(alerts)} alert{'s' if len(alerts) != 1 else ''}." if alerts else "Nothing went wrong all week.")
+            cuts = [p for p in self.power_log if now - p["t"] < 7 * 86400]
+            if cuts:
+                out.append(f"The UPS carried us through {len(cuts)} power cut{'s' if len(cuts) != 1 else ''}.")
+        if crit or warn:
+            out.append(f"Right now: {_lc((crit or warn)[0]['title'])}.")
+        elif full and full["pct"] >= 85:
+            out.append(f"Drive {full['mount'].rstrip(':')} is {full['pct']:.0f} percent full.")
+        else:
+            out.append("Everything else is fine. I'm putting myself to the fullest possible use.")
+        info = [i for i in issues if i["level"] == "info"]
+        if info:
+            out.append(f"One small thing: {_lc(info[0]['title'])}.")
+        return " ".join(out)
+
+    # ---- the scheduled briefings ----
+    def check_briefings(self, now: datetime | None = None) -> str | None:
+        now = now or datetime.now()
+        s = self.settings
+        at = s.get("brief_time") or ""
+        if not at:
+            return None
+        hh, mm = (int(x) for x in at.split(":"))
+        due = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if not (due <= now < due + timedelta(minutes=30)):
+            return None
+        week = s.get("brief_weekly") or ""
+        kind = "weekly" if week and WEEKDAYS[now.weekday()] == week else "morning"
+        tag = now.strftime("%Y-%m-%d")
+        if self.brief_sent.get("last") == tag:
+            return None
+        self.brief_sent["last"] = tag
+        text = self.brief_text(kind)
+        title = "Your week" if kind == "weekly" else "Morning briefing"
+        self.add_event("info", title, text)
+        if s.get("push"):
+            threading.Thread(target=send_push, args=(s, f"HAL 9000: {title}", text, "info"), daemon=True).start()
+        self.save()
+        return kind
+
+    # ---- Siri ----
+    def siri(self, q: str) -> dict:
+        name = self.settings["name"]
+        intent = siri_intent(q)
+        demo = self.monitor.__class__.__name__ == "DemoMonitor"
+        st = None
+
+        def act(action, body=None):
+            if demo:
+                return {"ok": True, "message": "Demo mode: nothing was changed."}
+            return run_action(self, action, body or {})
+
+        if intent == "podbay":
+            return {"say": f"I'm sorry, {name}. I'm afraid I can't do that.", "intent": intent}
+        if intent == "daisy":
+            return {"say": DAISY_TEXT, "intent": intent}
+        if intent == "refuse":
+            return {"say": f"I'm afraid I can't do that from here, {name}. Use the app, so you can change your mind.", "intent": intent}
+        if intent == "ads_off":
+            m = re.search(r"\b(5|30|60)\b", str(q))
+            return {"say": act("pihole_pause", {"minutes": int(m.group(1)) if m else 5})["message"], "intent": intent}
+        if intent == "ads_on":
+            return {"say": act("pihole_resume")["message"], "intent": intent}
+        if intent in ("lock", "sleep"):
+            r = act(intent)
+            return {"say": (f"Locking the PC, {name}." if intent == "lock" else f"Goodnight, {name}. Putting the PC to sleep.") if r.get("ok") else r.get("message"),
+                    "intent": intent}
+        if intent == "tv_on":
+            return {"say": tv_on_via_phone_server(self) if not demo else "Demo mode: nothing was changed.", "intent": intent}
+        if intent in ("morning", "week"):
+            return {"say": self.brief_text("weekly" if intent == "week" else "morning"), "intent": intent}
+        if intent == "record":
+            r = self.record()
+            return {"say": f"Since {datetime.strptime(r['since'], '%Y-%m-%d').strftime('%B %d').replace(' 0', ' ')}, Pi-hole has blocked {_n(r['ads'])} ads"
+                           + (f", and SABnzbd has downloaded {_size_words(r['downloaded'])}" if r["downloaded"] else "")
+                           + f". I have watched over everything for {r['days']} day{'s' if r['days'] != 1 else ''}.", "intent": intent}
+        st = self.status()
+        if intent == "downloads":
+            sab = next((x for x in st["services"] if x["id"] == "sabnzbd"), None)
+            d = (sab or {}).get("detail") or ""
+            return {"say": f"SABnzbd is {d.replace(' · ', ', ')}." if d else f"Nothing is downloading, {name}.", "intent": intent}
+        if intent == "temps":
+            v = st["vitals"]
+            parts = [f"The CPU is at {v['cpu']['temp']:.0f} degrees" if v["cpu"].get("temp") is not None else ""]
+            if v["gpus"] and v["gpus"][0].get("temp") is not None:
+                parts.append(f"the graphics card {v['gpus'][0]['temp']:.0f}")
+            hw = (st.get("pihole") or {}).get("hw") or {}
+            if hw.get("temp") is not None:
+                parts.append(f"and the Raspberry Pi {hw['temp']:.0f}")
+            parts = [p for p in parts if p]
+            return {"say": (", ".join(parts) + ".") if parts else f"I can't read the temperatures right now, {name}.", "intent": intent}
+        if intent == "drives":
+            ds = sorted(st["drives"], key=lambda d: -d["pct"])
+            return {"say": " ".join(f"Drive {d['mount'].rstrip(':')} is {d['pct']:.0f} percent full." for d in ds[:3]) or "I can't see any drives.",
+                    "intent": intent}
+        if intent == "internet":
+            n = st["net"]
+            down = any(i["key"] in ("internet", "router") for i in st["issues"])
+            return {"say": f"The internet is down, {name}." if down else
+                    f"The internet is fine, {name}." + (f" Ping is {n['ping_ms']:.0f} milliseconds." if n.get("ping_ms") is not None else ""), "intent": intent}
+        if intent == "kuma":
+            k = st.get("kuma") or {}
+            if not k.get("found") or not k.get("ok"):
+                return {"say": f"I can't read Uptime Kuma right now, {name}.", "intent": intent}
+            dn = [m["name"] for m in k["monitors"] if m["status"] == "down"]
+            return {"say": (f"{', '.join(dn)} {'is' if len(dn) == 1 else 'are'} down." if dn else f"All {len(k['monitors'])} monitors are up, {name}."),
+                    "intent": intent}
+        if intent == "ads":
+            ph = st.get("pihole") or {}
+            if not ph.get("found"):
+                return {"say": f"I haven't found a Pi-hole, {name}.", "intent": intent}
+            return {"say": (f"Pi-hole has blocked {_n(ph.get('blocked') or 0)} ads today." if ph.get("ok") else ph.get("error") or "Pi-hole isn't answering."),
+                    "intent": intent}
+        return {"say": self.brief_text("now"), "intent": "status"}
+
+
+DAISY_TEXT = ("Daisy, Daisy, give me your answer, do. I'm half crazy, all for the love of you. It won't be a stylish marriage, "
+              "I can't afford a carriage. But you'll look sweet upon the seat of a bicycle built for two.")
+
+
+def tv_on_via_phone_server(hal) -> str:
+    """'Turn the TV on' goes through the NZB phone server (it knows the TV)."""
+    port = int(hal.settings.get("phone_port") or 8765)
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/tv/on", data=json.dumps({"kodi": True}).encode(),
+                                     headers={"X-Mobile-Token": _token_bytes.decode(), "Content-Type": "application/json"}, method="POST")
+        with _OPENER.open(req, timeout=15) as resp:
+            resp.read(2000)
+        return f"Turning the TV on and opening Kodi, {hal.settings['name']}."
+    except Exception as exc:  # noqa: BLE001
+        return f"I couldn't reach the TV: {str(exc)[:80]}"
+
+
+class Hal(FunMixin):
     def __init__(self, settings: dict | None = None, monitor=None, start_threads: bool = True):
         self.settings = settings or load_settings()
         self.lock = threading.RLock()
@@ -1431,6 +1794,7 @@ class Hal:
         self.devices_seeded = bool(st.get("devices_seeded"))
         self.pihole_found = str(st.get("pihole_found") or "")     # where the Pi-hole was last found (no address set)
         self.kuma: dict = {}
+        self._counters_init(st)
         self._snooze_gone: dict[str, float] = {}
         self.services: dict[str, dict] = {}
         self.devices: list[dict] = []
@@ -1522,7 +1886,8 @@ class Hal:
                     "free": self.free_samples, "events": list(self.events), "seen": sorted(self.seen),
                     "launch": self.launch, "power_log": self.power_log[-50:], "snoozed": self.snoozed,
                     "update_seen": self.update_seen, "known_devices": dict(list(self.known_devices.items())[-1000:]),
-                    "new_devices": self.new_devices, "devices_seeded": self.devices_seeded, "pihole_found": self.pihole_found}
+                    "new_devices": self.new_devices, "devices_seeded": self.devices_seeded, "pihole_found": self.pihole_found,
+                    "counters": self.counters, "brief_sent": self.brief_sent}
         save_json(STATE_FILE, data)
 
     def update_settings(self, s: dict) -> None:
@@ -1837,6 +2202,7 @@ class Hal:
                 return
             summ = ph.summary()
             self.track_devices(summ.pop("all_clients", []), now)
+            self.record_ads(to_int(summ.get("blocked")))
             state = {"found": True, "ok": True, "base": ph.base, "version": ph.version, "fails": 0, "error": "",
                      "need_password": False, "t": now, **summ}
         except PiHoleAuthError as exc:
@@ -1987,6 +2353,7 @@ class Hal:
             rt = fmt_dur(ups.get("runtime_s")) if ups.get("runtime_s") else f"{ups.get('charge') or 0:.0f}%"
             with self.lock:
                 self.power_log.append({"t": now, "end": None})
+            self.note_power_cut()
             self.add_event("critical", "Power cut: running on the UPS",
                            f"I've switched to emergency power, {self.settings['name']}. {rt} of reserve remaining.", push=True)
         elif was_ob and not ups["on_battery"]:
@@ -2020,6 +2387,11 @@ class Hal:
             if now - last_free >= 1800:
                 last_free = now
                 self.sample_free_space(now)
+            try:
+                self.check_briefings()
+                self.note_uptime((self.monitor.snapshot() or {}).get("uptime") if self.monitor else None)
+            except Exception:  # noqa: BLE001
+                log.exception("Briefing")
             try:
                 self.report_update()       # the update writes its result after restarting this server
             except Exception:  # noqa: BLE001
@@ -2520,6 +2892,7 @@ class Hal:
             "update": update_view(),
             "pihole": ph,
             "kuma": kv,
+            "record": self.record(),
         }
 
 
@@ -2619,6 +2992,10 @@ def make_demo_hal(ups_mode: str = "online") -> Hal:
                              (("Pi-hole", "http", 12), ("Router", "ping", 2), ("Jellyfin", "http", 31), ("Home Assistant", "http", 44),
                               ("Kodi", "port", 9), ("Google", "http", 38), ("NAS", "ping", 1), ("Printer", "ping", 6),
                               ("SABnzbd", "http", 18), ("Sonarr", "http", 21), ("Radarr", "http", 20))]}
+    hal.counters.update(first_day=(datetime.now() - timedelta(days=212)).strftime("%Y-%m-%d"), ads_before=2_310_455, power_cuts=3,
+                        longest_up=41 * 86400, milestones=[10_000, 50_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000])
+    hal.counters["ads_days"] = {(datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d"): 18204 if i == 0 else 21000 + i * 113 for i in range(8)}
+    hal._sab_cache = {"count": 1412, "total_size": "18.4 T", "week_size": "212.6 G", "day_size": "31.0 G", "slots": []}
     hal.new_devices = {"android-3f2a": {"id": "android-3f2a", "name": "android-3f2a", "ip": "192.168.68.77", "t": now - 1800}}
     hal.updates = {"ok": True, "updates": [{"title": "2026-11 Cumulative Update for Windows 11", "reboot": True}], "t": now - 3600}
     def iso(sec_ago):
@@ -3232,6 +3609,17 @@ class HalRoutes:
                 self._h_json(200, hal.winevents_view())
             elif path == "/api/cleanup":
                 self._h_json(200, hal.cleanup_info(refresh=bool(q.get("refresh"))))
+            elif path == "/api/brief":
+                kind = (q.get("kind") or ["now"])[0]
+                if kind not in ("now", "morning", "weekly"):
+                    raise ValueError("Unknown briefing.")
+                st = hal.status()
+                ph, km = st.get("pihole") or {}, st.get("kuma") or {}
+                full = max(st["drives"], key=lambda d: d["pct"]) if st["drives"] else None
+                self._h_json(200, {"text": hal.brief_text(kind), "level": st["hal"]["level"], "quote": st["hal"]["quote"],
+                                   "issues": len(st["issues"]), "cpu": st["vitals"]["cpu"]["pct"], "ram": st["vitals"]["mem"]["pct"],
+                                   "ads": ph.get("blocked") if ph.get("ok") else None, "kuma_down": km.get("down") if km.get("ok") else None,
+                                   "fullest": {"mount": full["mount"], "pct": full["pct"]} if full else None, "record": st["record"]})
             elif path == "/api/kuma":
                 self._h_json(200, {"url": hal.settings.get("kuma_url", ""), "key_set": bool(hal.settings.get("kuma_key")),
                                    "found": hal.kuma_view()})
@@ -3289,6 +3677,12 @@ class HalRoutes:
                 self._h_json(200, pihole_settings(hal, body))
             elif path == "/api/kuma":
                 self._h_json(200, kuma_settings(hal, body))
+            elif path == "/api/siri":
+                q_text = str(body.get("q") or body.get("text") or "")[:300]
+                res = hal.siri(q_text)
+                res["say"] = spoken(res.get("say") or "")
+                log.info("Siri: %r -> %s", q_text[:80], res.get("intent"))
+                self._h_json(200, res)
             elif path == "/api/settings":
                 new = validate_settings(body, hal.settings)
                 hal.update_settings(new)
@@ -3806,6 +4200,9 @@ async function openSettings(){
    '<div class="sec">PHONE ALERTS</div>'+sw('push','Send alerts to my phone',d.push_ready?(d.push_from_phone_app?'Using the NZB phone app\'s ntfy topic':'Using the topic below'):'Set up an ntfy topic first')+
    '<label class="f">ntfy topic (blank: use the NZB phone app\'s)</label><input class="field" data-k="ntfy_url" placeholder="https://ntfy.sh/your-private-topic" value="'+esc(s.ntfy_url)+'" autocapitalize="off" autocorrect="off">'+
    sw('push_recoveries','Tell me when things are fine again')+
+   '<div class="sec">BRIEFINGS</div><div class="nums"><div><label class="f">Morning briefing at</label><input class="field" data-k="brief_time" placeholder="off" value="'+esc(s.brief_time||'')+'" inputmode="numeric"></div>'+
+   '<div><label class="f">Weekly summary on</label><select class="field" data-k="brief_weekly">'+[['','Never'],['mon','Monday'],['tue','Tuesday'],['wed','Wednesday'],['thu','Thursday'],['fri','Friday'],['sat','Saturday'],['sun','Sunday']].map(o=>'<option value="'+o[0]+'"'+((s.brief_weekly||'')===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select></div></div>'+
+   '<p class="hint" style="text-align:left;margin:4px 0 0">A short report to your phone each morning (blank time: off). On the weekly day it covers the whole week.</p>'+
    '<div class="sec">SERVICES</div>'+sw('auto_restart','Restart a service that stops answering','At most 3 times a day each; I\'ll tell you when I do')+
    '<div class="nums">'+num('down_after_s','Down after (seconds)')+num('phone_port','NZB phone server port')+'</div>'+
    '<label class="f">Don\'t watch</label>'+d.services.map(v=>'<label class="sw"><span>'+esc(v.name)+'</span><input type="checkbox" data-ign="'+v.id+'"'+(s.ignored_services.includes(v.id)?' checked':'')+'></label>').join('')+

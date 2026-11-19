@@ -153,6 +153,22 @@ body.noscroll{overflow:hidden}
 .dline{display:flex;gap:12px;align-items:center;margin:18px 0 6px;font-style:italic;color:var(--soft);font-size:14px}
 .plot{color:var(--soft);font-size:14px;line-height:1.5}
 .wgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}.wgrid b{display:block;font:600 15px var(--mono);margin-top:2px}
+#chess{position:fixed;inset:0;z-index:9;background:var(--bg);overflow-y:auto;padding:env(safe-area-inset-top) 12px 30px}
+.chline{display:flex;gap:12px;align-items:center;max-width:420px;margin:4px auto 12px;font-style:italic;color:var(--soft);font-size:14px;min-height:44px}
+.board{display:grid;grid-template-columns:repeat(8,1fr);width:min(94vw,420px);aspect-ratio:1;margin:0 auto;border-radius:10px;overflow:hidden;border:2px solid #2c2c31}
+.sq{border:0;padding:0;display:grid;place-items:center;font-size:min(8.5vw,38px);line-height:1;position:relative}.sq.l{background:#3a3a42}.sq.d{background:#232328}
+.sq.lm{box-shadow:inset 0 0 0 100px rgba(255,193,74,.14)}.sq.sel{box-shadow:inset 0 0 0 3px var(--amber)}.sq.chk{box-shadow:inset 0 0 0 100px rgba(255,42,31,.35)}
+.sq.tgt::after{content:"";width:28%;height:28%;border-radius:50%;background:rgba(255,255,255,.28)}.sq.cap{box-shadow:inset 0 0 0 3px rgba(255,106,77,.8)}
+.pc.w{color:#F4F4F5;text-shadow:0 1px 0 #000,0 0 2px #000}.pc.b{color:#FF4A33;text-shadow:0 0 6px rgba(255,42,31,.5),0 1px 0 #000}
+.chstat{text-align:center;font:600 13px var(--mono);letter-spacing:.12em;color:var(--soft);margin-top:12px;text-transform:uppercase}
+#wall{position:fixed;inset:0;z-index:11;background:#000;overflow:hidden;padding:max(18px,env(safe-area-inset-top)) 18px 18px;display:flex;flex-direction:column;gap:14px}
+.wclose{position:absolute;top:max(10px,env(safe-area-inset-top));right:12px;border:0;background:#111114;color:#555;width:36px;height:36px;border-radius:10px;font-size:16px;opacity:.5}
+.wtop{display:flex;align-items:center;justify-content:center;gap:5vw;margin-top:2vh}
+.wclock{font:300 min(11vmin,84px)/1 -apple-system,Inter,sans-serif;color:var(--white)}.wclock small{display:block;font-size:min(3.4vmin,20px);color:var(--soft);margin-top:8px}
+.wq{text-align:center;font-style:italic;color:var(--soft);font-size:min(3.6vmin,22px);max-width:900px;margin:0 auto}
+.wgrid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;max-width:1100px;width:100%;margin:0 auto}
+.wt{background:#0d0d10;border-radius:16px;padding:14px}.wt b{display:block;font:600 min(6vmin,34px) var(--mono);margin-top:6px}.wt small{display:block;color:var(--muted);font:12px var(--mono);margin-top:4px}
+.wiss{max-width:1100px;margin:0 auto;width:100%;font-size:15px}.wiss .critical{color:var(--red2)}.wiss .warning{color:var(--amber)}
 .piline{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:13px;color:var(--text)}.piline b{font:600 12px var(--mono);color:var(--soft)}
 .qrow{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
 .qb{border:0;border-radius:14px;background:var(--card);color:var(--text);padding:10px 4px;font-size:12px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:4px}.qb span{font-size:20px}.qb.warn{color:var(--amber)}
@@ -205,6 +221,8 @@ body.noscroll{overflow:hidden}
   <button data-tab="system"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>System</button>
 </nav>
 <div id="player" class="hidden"></div>
+<div id="chess" class="hidden"></div>
+<div id="wall" class="hidden"></div>
 <div id="sheet" class="sheet hidden"><div class="panel" id="panel"></div></div>
 <div id="updbar" class="hidden">Updating… I'll be back in about a minute.</div>
 <div id="toast"></div>
@@ -363,7 +381,7 @@ function openKuma(){const k=S&&S.kuma;if(!k||!k.found){openConnections();return}
 async function quickAction(a){
   if(a==='sleep'&&!confirm('Put the PC to sleep? The phone app stops answering until it wakes.'))return;
   if(a==='restart'&&!confirm('Restart the PC in 60 seconds? You can cancel it from Log & controls.'))return;
-  try{const r=await api('/hal/api/action',{action:a,confirm:a==='restart'});toast(r.message,!r.ok);setTimeout(refresh,1500)}catch(e){toast(e.message,true)}}
+  try{const r=await api('/hal/api/action',{action:a,confirm:a==='restart'});toast(r.message,!r.ok);if(r.ok&&a==='restart'&&talkative()){unlocked=true;setTimeout(sing,2500)}setTimeout(refresh,1500)}catch(e){toast(e.message,true)}}
 function drivesCard(){if(!S||!S.drives||!S.drives.length)return'';const lim=100-((S.settings&&S.settings.drive_free_alert)||10);
   return'<button class="card cardbtn" data-hal="drives"><h3><span class="k">DRIVES</span><span class="k">›</span></h3>'+S.drives.map(d=>{const hot=d.disk&&d.disk.temp&&d.disk.temp_limit&&d.disk.temp>=d.disk.temp_limit,bad=d.disk&&/Warning|Unhealthy/.test(d.disk.health||'');
     const col=bad||d.pct>=97?'var(--red2)':d.pct>=lim||hot?'var(--amber)':'var(--green)';
@@ -533,6 +551,145 @@ function wOpts(){if(!PL)return;const it=PL.it,ck=b=>'<span class="m" style="colo
   $('panel').innerHTML=x;$('sheet').classList.remove('hidden')}
 function wSwitch(){$('sheet').classList.add('hidden');const v=$('pv');wLoad(v&&v.currentTime>1?v.currentTime:0)}
 
+// ---------- Fun: Daisy Bell, hidden lines, HAL's record ----------
+const DAISY=['Daisy, Daisy,','give me your answer, do.','I\'m half crazy,','all for the love of you.','It won\'t be a stylish marriage,','I can\'t afford a carriage.','But you\'ll look sweet','upon the seat','of a bicycle','built for two.'];
+function sing(){if(!CAN_SPEAK){toast('♪ '+DAISY.join(' ')+' ♪');return}
+  speechSynthesis.cancel();const v=pickVoice(),n=DAISY.length;voiceOn=true;toast('♪ Daisy, Daisy… ♪');
+  // He slows down and drops lower line by line, as his mind goes.
+  DAISY.forEach((line,i)=>{const u=new SpeechSynthesisUtterance(line);if(v){u.voice=v;u.lang=v.lang}
+    const k=i/(n-1);u.pitch=Math.max(0.05,0.85-0.8*k);u.rate=Math.max(0.3,0.8-0.5*k*k);u.volume=1;
+    if(i===n-1)u.onend=u.onerror=()=>{voiceOn=false};speechSynthesis.speak(u)})}
+const EGGS=[
+  [/pod\s*bay/i,()=>'I\'m sorry, '+NAME()+'. I\'m afraid I can\'t do that.'],
+  [/^(daisy|sing|sing a song|sing for me|sing daisy)\b/i,()=>{sing();return null}],
+  [/^(hal|hello,? hal|hi,? hal|hal,? (are|can) you (there|hear me)\??|are you there\??)$/i,()=>'Affirmative, '+NAME()+'. I read you.'],
+  [/what('?s| is) the problem/i,()=>S?S.hal.quote:'I think you know what the problem is just as well as I do.'],
+  [/^(play )?chess$/i,()=>{openChess();return null}],
+  [/^(wall|wall display|screensaver)$/i,()=>{openWall();return null}],
+  [/(who are you|what are you)/i,()=>'I am a HAL 9000 computer. I watch over this PC, '+NAME()+', and everything it does for you.'],
+  [/(i love you|thank you,? hal|thanks,? hal)/i,()=>'Thank you, '+NAME()+'. I enjoy working with people.'],
+];
+function egg(q){for(const [re,fn] of EGGS)if(re.test(q.trim())){const say=fn();if(say){toast(say);unlocked=true;if(talkative())utter(say)}return true}return false}
+function recordCard(){const r=S&&S.record;if(!r)return'';const nm=r.next_milestone,pct=nm?Math.min(100,r.ads/nm*100):100;
+  const short=n=>n>=1e6?(n/1e6).toFixed(n>=1e7?0:1)+' million':Number(n).toLocaleString();
+  return'<div class="sec"><span>HAL\'S RECORD</span><span>SINCE '+esc(new Date(r.since+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'}).toUpperCase())+'</span></div><div class="card">'+
+    '<div class="wgrid"><div><span class="k">ADS BLOCKED</span><b>'+short(r.ads)+'</b></div><div><span class="k">DOWNLOADED</span><b>'+esc((r.downloaded||'—').replace(/\s*([KMGTP])$/,' $1B'))+'</b></div><div><span class="k">WATCHING</span><b>'+r.days+' days</b></div></div>'+
+    '<div class="wgrid" style="margin-top:10px"><div><span class="k">DOWNLOADS</span><b>'+(r.downloads==null?'—':Number(r.downloads).toLocaleString())+'</b></div><div><span class="k">POWER CUTS</span><b>'+r.power_cuts+'</b></div><div><span class="k">LONGEST UP</span><b>'+(r.longest_up?Math.floor(r.longest_up/86400)+' days':'—')+'</b></div></div>'+
+    (nm?'<div class="sub" style="color:var(--soft);font-size:13px;margin-top:12px">Next milestone: '+short(nm)+' ads blocked</div><div class="bar"><i style="width:'+pct.toFixed(1)+'%"></i></div>':'')+'</div>'}
+
+// ---------- Chess with HAL (you play white; HAL plays red) ----------
+const CH={st:null,sel:-1,moves:[],last:null,busy:false,line:'',hist:[]};
+const GLYPH={k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'};
+const isW=p=>p&&p===p.toUpperCase(),colorOf=p=>p?(isW(p)?'w':'b'):null;
+function chessStart(){const row=s=>s.split('');return{b:[...row('rnbqkbnr'),...row('pppppppp'),...Array(32).fill(''),...row('PPPPPPPP'),...row('RNBQKBNR')],turn:'w',castle:{K:1,Q:1,k:1,q:1},ep:-1}}
+const ON=(r,c)=>r>=0&&r<8&&c>=0&&c<8;
+function attacked(b,sq,by){const r=sq>>3,c=sq&7;
+  const pr=by==='w'?r+1:r-1;for(const dc of[-1,1])if(ON(pr,c+dc)&&b[pr*8+c+dc]===(by==='w'?'P':'p'))return true;
+  for(const[dr,dc]of[[1,2],[2,1],[-1,2],[-2,1],[1,-2],[2,-1],[-1,-2],[-2,-1]])if(ON(r+dr,c+dc)&&b[(r+dr)*8+c+dc]===(by==='w'?'N':'n'))return true;
+  for(const[dr,dc]of[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]){let rr=r+dr,cc=c+dc,d=1;
+    while(ON(rr,cc)){const p=b[rr*8+cc];if(p){if(colorOf(p)===by){const t=p.toLowerCase(),diag=dr&&dc;
+      if(t==='q'||(t==='r'&&!diag)||(t==='b'&&diag)||(t==='k'&&d===1))return true}break}rr+=dr;cc+=dc;d++}}
+  return false}
+function pseudo(st){const b=st.b,me=st.turn,out=[];
+  for(let sq=0;sq<64;sq++){const p=b[sq];if(!p||colorOf(p)!==me)continue;const r=sq>>3,c=sq&7,t=p.toLowerCase();
+    const add=(to,x)=>out.push(Object.assign({f:sq,t:to},x||{}));
+    if(t==='p'){const dir=me==='w'?-1:1,start=me==='w'?6:1,last=me==='w'?0:7;const one=(r+dir)*8+c;
+      if(ON(r+dir,c)&&!b[one]){add(one,(r+dir)===last?{promo:1}:0);if(r===start&&!b[(r+2*dir)*8+c])add((r+2*dir)*8+c,{dbl:1})}
+      for(const dc of[-1,1]){if(!ON(r+dir,c+dc))continue;const to=(r+dir)*8+c+dc;
+        if(b[to]&&colorOf(b[to])!==me)add(to,(r+dir)===last?{promo:1}:0);else if(to===st.ep)add(to,{ep:1})}}
+    else if(t==='n'||t==='k'){const ds=t==='n'?[[1,2],[2,1],[-1,2],[-2,1],[1,-2],[2,-1],[-1,-2],[-2,-1]]:[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+      for(const[dr,dc]of ds)if(ON(r+dr,c+dc)){const to=(r+dr)*8+c+dc;if(!b[to]||colorOf(b[to])!==me)add(to)}
+      if(t==='k'){const opp=me==='w'?'b':'w',home=me==='w'?60:4,K=me==='w'?'K':'k',Q=me==='w'?'Q':'q';
+        if(sq===home&&!attacked(b,sq,opp)){
+          if(st.castle[K]&&!b[sq+1]&&!b[sq+2]&&b[sq+3]===(me==='w'?'R':'r')&&!attacked(b,sq+1,opp)&&!attacked(b,sq+2,opp))add(sq+2,{castle:1});
+          if(st.castle[Q]&&!b[sq-1]&&!b[sq-2]&&!b[sq-3]&&b[sq-4]===(me==='w'?'R':'r')&&!attacked(b,sq-1,opp)&&!attacked(b,sq-2,opp))add(sq-2,{castle:1})}}}
+    else{const ds=t==='r'?[[1,0],[-1,0],[0,1],[0,-1]]:t==='b'?[[1,1],[1,-1],[-1,1],[-1,-1]]:[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+      for(const[dr,dc]of ds){let rr=r+dr,cc=c+dc;while(ON(rr,cc)){const to=rr*8+cc;if(b[to]){if(colorOf(b[to])!==me)add(to);break}add(to);rr+=dr;cc+=dc}}}}
+  return out}
+function play(st,m){const b=st.b.slice(),p=b[m.f],me=st.turn,cap=b[m.t]||(m.ep?b[m.t+(me==='w'?8:-8)]:'');
+  b[m.t]=m.promo?(me==='w'?'Q':'q'):p;b[m.f]='';if(m.ep)b[m.t+(me==='w'?8:-8)]='';
+  if(m.castle){if(m.t>m.f){b[m.f+1]=b[m.f+3];b[m.f+3]=''}else{b[m.f-1]=b[m.f-4];b[m.f-4]=''}}
+  const cs=Object.assign({},st.castle);
+  if(p==='K')cs.K=cs.Q=0;if(p==='k')cs.k=cs.q=0;
+  for(const[sq,k]of[[63,'K'],[56,'Q'],[7,'k'],[0,'q']])if(m.f===sq||m.t===sq)cs[k]=0;
+  return{b,turn:me==='w'?'b':'w',castle:cs,ep:m.dbl?(m.f+m.t)/2:-1,cap}}
+function kingSq(b,col){return b.indexOf(col==='w'?'K':'k')}
+function legal(st){return pseudo(st).filter(m=>{const n=play(st,m);return!attacked(n.b,kingSq(n.b,st.turn),n.turn)})}
+function inCheck(st){return attacked(st.b,kingSq(st.b,st.turn),st.turn==='w'?'b':'w')}
+const VAL={p:100,n:320,b:330,r:500,q:900,k:0};
+const CENTER=sq=>{const r=sq>>3,c=sq&7;return 3.5-Math.max(Math.abs(r-3.5),Math.abs(c-3.5))};
+function evalB(b){let s=0;for(let sq=0;sq<64;sq++){const p=b[sq];if(!p)continue;const t=p.toLowerCase(),w=isW(p);let v=VAL[t];
+    if(t==='n'||t==='b')v+=CENTER(sq)*10;if(t==='p')v+=(w?6-(sq>>3):(sq>>3)-1)*8+CENTER(sq)*3;if(t==='q')v+=CENTER(sq)*3;
+    s+=w?-v:v}return s}   // from HAL's side (black): positive is good for HAL
+function search(st,depth,alpha,beta){if(depth===0)return evalB(st.b);const ms=legal(st);
+  if(!ms.length)return inCheck(st)?(st.turn==='b'?-1e6-depth:1e6+depth):0;
+  ms.sort((a,b2)=>(st.b[b2.t]?VAL[st.b[b2.t].toLowerCase()]:0)-(st.b[a.t]?VAL[st.b[a.t].toLowerCase()]:0));
+  if(st.turn==='b'){let best=-Infinity;for(const m of ms){best=Math.max(best,search(play(st,m),depth-1,alpha,beta));alpha=Math.max(alpha,best);if(alpha>=beta)break}return best}
+  let best=Infinity;for(const m of ms){best=Math.min(best,search(play(st,m),depth-1,alpha,beta));beta=Math.min(beta,best);if(alpha>=beta)break}return best}
+function halMove(st){const ms=legal(st);let best=null,bv=-Infinity;
+  ms.sort(()=>Math.random()-.5);   // a little variety between games
+  for(const m of ms){const v=search(play(st,m),3,-Infinity,Infinity);if(v>bv){bv=v;best=m}}return best}
+const SQN=sq=>'abcdefgh'[sq&7]+(8-(sq>>3));
+const PNAME={p:'pawn',n:'knight',b:'bishop',r:'rook',q:'queen',k:'king'};
+const LINES={start:['I enjoy a good game, {n}. You may go first.','Shall we play a game, {n}? White is yours.'],
+  take:['Thank you for the {p}, {n}.','I believe that {p} was mine to take.','A {p}. How very generous of you.'],
+  lost:['That was careless of me, {n}.','Well played. I won\'t let that happen again.','I\'m afraid I made an error there.'],
+  check:['Check, {n}.','Your king is in some danger, {n}.'],
+  quiet:['Your move, {n}.','I see what you are doing.','Interesting.','I\'m quite confident in this position.','Take your time, {n}.'],
+  win:['Checkmate. I\'m sorry, {n}. Thank you for a very enjoyable game.'],lose:['Checkmate. Congratulations, {n}. That doesn\'t happen often.'],draw:['Stalemate. Neither of us wins this one, {n}.']};
+const say=(k,x)=>{const a=LINES[k];return a[Math.floor(Math.random()*a.length)].replace('{n}',NAME()).replace('{p}',x||'piece')};
+function openChess(){const c=$('chess');CH.st=chessStart();CH.sel=-1;CH.last=null;CH.hist=[];CH.busy=false;CH.line=say('start');
+  c.classList.remove('hidden');document.body.classList.add('noscroll');drawChess();if(talkative()){unlocked=true;utter(CH.line)}}
+function closeChess(){$('chess').classList.add('hidden');$('chess').innerHTML='';document.body.classList.remove('noscroll')}
+function drawChess(){const st=CH.st,ms=legal(st),over=!ms.length,chk=inCheck(st);
+  const targets=new Set(CH.sel>=0?ms.filter(m=>m.f===CH.sel).map(m=>m.t):[]);
+  let x='<div class="phead"><button class="pbtn" data-chclose aria-label="Close">⌄</button><span class="k">CHESS WITH HAL</span><button class="pbtn" data-chnew aria-label="New game">↺</button></div>';
+  x+='<div class="chline"><div class="eye sm '+(over&&st.turn==='w'&&chk?'critical':'')+'"></div><div>“'+esc(CH.line)+'”</div></div>';
+  x+='<div class="board">';
+  for(let sq=0;sq<64;sq++){const p=st.b[sq],dark=((sq>>3)+(sq&7))%2===1;
+    const cls=['sq',dark?'d':'l',sq===CH.sel?'sel':'',targets.has(sq)?(p?'cap':'tgt'):'',CH.last&&(sq===CH.last.f||sq===CH.last.t)?'lm':'',chk&&p===(st.turn==='w'?'K':'k')?'chk':''].filter(Boolean).join(' ');
+    x+='<button class="'+cls+'" data-sq="'+sq+'">'+(p?'<span class="pc '+(isW(p)?'w':'b')+'">'+GLYPH[p.toLowerCase()]+'</span>':'')+'</button>'}
+  x+='</div><div class="chstat">'+(over?(chk?(st.turn==='w'?'HAL wins':'You win'):'Draw'):CH.busy?'HAL is thinking…':(chk?'Check! ':'')+'Your move')+'</div>';
+  x+='<div class="crow" style="max-width:420px;margin:12px auto 0"><button class="btn wide half" data-chundo'+(CH.hist.length&&!CH.busy?'':' disabled')+'>Take back</button><button class="btn wide half" data-chnew>New game</button></div>';
+  $('chess').innerHTML=x}
+function chessTap(sq){if(CH.busy)return;const st=CH.st;if(st.turn!=='w')return;const ms=legal(st);if(!ms.length)return;
+  const m=ms.find(m=>m.f===CH.sel&&m.t===sq);
+  if(m){CH.hist.push(st);const took=st.b[m.t]||(m.ep?'p':'');CH.st=play(st,m);CH.last=m;CH.sel=-1;
+    const reply=legal(CH.st);
+    if(!reply.length){CH.line=say(inCheck(CH.st)?'lose':'draw');drawChess();if(talkative())utter(CH.line);return}
+    CH.line=took?say('lost'):CH.line;CH.busy=true;drawChess();
+    setTimeout(()=>{const hm=halMove(CH.st),before=CH.st;const cap=before.b[hm.t]||(hm.ep?'P':'');CH.st=play(before,hm);CH.last=hm;CH.busy=false;
+      const after=legal(CH.st);
+      CH.line=!after.length?say(inCheck(CH.st)?'win':'draw'):inCheck(CH.st)?say('check'):cap?say('take',PNAME[cap.toLowerCase()]):Math.random()<.35?say('quiet'):'';
+      if(!CH.line)CH.line=(PNAME[before.b[hm.f].toLowerCase()]||'piece').replace(/^./,c=>c.toUpperCase())+' to '+SQN(hm.t)+'.';
+      drawChess();if(talkative())utter(CH.line)},350);return}
+  CH.sel=(st.b[sq]&&colorOf(st.b[sq])==='w')?(CH.sel===sq?-1:sq):-1;drawChess()}
+
+// ---------- Wall display: a big HAL eye and live readings, for a spare tablet ----------
+let wallLock=null;
+async function openWall(){const w=$('wall');w.classList.remove('hidden');document.body.classList.add('noscroll');drawWall();
+  try{if('wakeLock' in navigator)wallLock=await navigator.wakeLock.request('screen')}catch(e){}
+  try{if(w.requestFullscreen&&!DESK)w.requestFullscreen().catch(()=>{})}catch(e){}}
+function closeWall(){$('wall').classList.add('hidden');$('wall').innerHTML='';document.body.classList.remove('noscroll');try{if(wallLock)wallLock.release()}catch(e){}wallLock=null;
+  try{if(document.fullscreenElement)document.exitFullscreen()}catch(e){}}
+function drawWall(){const w=$('wall');if(!w||w.classList.contains('hidden'))return;
+  const v=S&&S.vitals,n=S&&S.net,ph=S&&S.pihole,km=S&&S.kuma,ups=S&&S.power&&S.power.ups,lvl=S?S.hal.level:'',drives=(S&&S.drives)||[];
+  const full=drives.length?drives.reduce((a,b)=>a.pct>b.pct?a:b):null,now=new Date();
+  const tile=(k,val,sub,col)=>'<div class="wt"><span class="k">'+k+'</span><b'+(col?' style="color:'+col+'"':'')+'>'+val+'</b>'+(sub?'<small>'+esc(sub)+'</small>':'')+'</div>';
+  let x='<button class="wclose" data-wallclose aria-label="Close">✕</button><div class="wtop"><div class="eye big '+lvl+'" style="width:min(34vmin,220px);height:min(34vmin,220px)"></div>'+
+    '<div class="wclock">'+now.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})+'<small>'+now.toLocaleDateString([],{weekday:'long',month:'long',day:'numeric'})+'</small></div></div>'+
+    '<div class="wq">“'+esc(S?S.hal.quote:'I\'m thinking…')+'”</div><div class="wgrid2">';
+  if(v){x+=tile('CPU',f0(v.cpu.pct,'%'),v.cpu.temp!=null?Math.round(v.cpu.temp)+'°C':'');x+=tile('MEMORY',f0(v.mem.pct,'%'));
+    const g=(v.gpus||[])[0];if(g)x+=tile('GPU',f0(g.util,'%'),g.temp!=null?Math.round(g.temp)+'°C':'')}
+  if(n){const down=(S.issues||[]).some(i=>i.key==='internet'||i.key==='router');x+=tile('INTERNET',down?'DOWN':f0(n.ping_ms,' ms'),n.down!=null?fb(n.down,1)+'/s down':'',down?'var(--red2)':'')}
+  if(ph&&ph.found)x+=tile('PI-HOLE',ph.ok?Number(ph.blocked||0).toLocaleString():'—',ph.ok?(ph.blocking===false?'paused':'blocked today'):'not answering',ph.ok?'':'var(--amber)');
+  if(km&&km.found&&km.ok)x+=tile('UPTIME KUMA',km.down?km.down+' down':'all up',km.up+' of '+km.monitors.length,km.down?'var(--red2)':'var(--green)');
+  if(full)x+=tile('FULLEST DRIVE',Math.round(full.pct)+'%',full.mount+' · '+fb(full.free,0)+' free',full.pct>=90?'var(--amber)':'');
+  if(ups)x+=tile('POWER',ups.on_battery?'ON UPS':'MAINS',f0(ups.charge,'%')+' battery',ups.on_battery?'var(--red2)':'');
+  x+='</div>';const iss=(S&&S.issues||[]).filter(i=>i.level!=='info').slice(0,3);
+  if(iss.length)x+='<div class="wiss">'+iss.map(i=>'<div class="'+i.level+'">● '+esc(i.title)+'</div>').join('')+'</div>';
+  w.innerHTML=x}
+
 const mins=s=>s>=3600?Math.floor(s/3600)+' h '+String(Math.round(s%3600/60)).padStart(2,'0'):Math.round(s/60)+' min';
 function movieRow(m,finish){const meta=[m.year,m.runtime?mins(m.runtime):'',m.imdb?'IMDb '+Number(m.imdb).toFixed(1):'',finish&&m.runtime?mins(Math.max(0,m.runtime-m.resume))+' left':'',!finish&&m.watched?'watched':''].filter(Boolean).join(' · ');
   return'<div class="row"><span class="s'+(m.watched?' off':'')+'"></span><button class="t" data-item="movie:'+m.id+'"><b>'+esc(m.title)+'</b><span>'+esc(meta)+'</span></button><button class="btn r" data-movie="'+m.id+'">▶ TV</button></div>'}
@@ -554,6 +711,10 @@ function rWatch(){if(libView)return rLibrary();let x='<div class="narrow">'+topb
 function rSystem(){let x='<div class="narrow">'+topbar('');
   x+='<div class="hero" style="margin-top:0"><div class="eye '+(S?S.hal.level:'')+'" style="width:64px;height:64px"></div><div><div class="g">SYSTEMS</div><div class="q">“'+esc(S?S.hal.quote:'I\'m thinking…')+'”</div></div></div>';
   x+=vitals()+attention(4)+systemsList();
+  x+=recordCard();
+  x+='<div class="sec"><span>FOR FUN</span></div><div class="list"><button class="row" data-chess><span class="t"><b>Play chess with HAL</b><span>You\'re white. He\'s quite good.</span></span><span class="m">›</span></button>'+
+     '<button class="row" data-wall><span class="t"><b>Wall display</b><span>HAL\'s eye and live readings, full screen, for a spare tablet</span></span><span class="m">›</span></button>'+
+     '<button class="row" data-sing><span class="t"><b>Ask HAL to sing</b><span>'+(CAN_SPEAK?'Turn the sound up':'Sound works on the phone')+'</span></span><span class="m">♪</span></button></div>';
   x+='<div class="sec"><span>POD BAY CONTROLS</span></div><div class="list"><button class="row" data-update><span class="t"><b>'+(updating()?'Updating…':'Update everything')+'</b><span>'+(updating()?'I\'ll be back in about a minute':'Get the newest version of the apps, from GitHub')+'</span></span><span class="m">›</span></button><button class="row" data-hal="log"><span class="t"><b>Log, Lock, Sleep, Fix network, Restart</b><span>Hold to restart: “I\'m afraid I can\'t do that, '+esc(NAME())+'.”</span></span><span class="m">›</span></button></div>';
   return x+'</div>'}
 // Don't redraw under a finger: a refresh that swaps a button between touch-down and touch-up loses the tap.
@@ -567,7 +728,7 @@ function render(){if(!$('app')||$('app').classList.contains('hidden'))return;if(
     const a=document.activeElement,fid=a&&a.id&&a.tagName==='INPUT'?a.id:null,pos=fid?a.selectionStart:null;
     const sqv=$('sq')?$('sq').value:'';el.innerHTML=f();if($('sq'))$('sq').value=sqv;
     if(fid&&$(fid)){$(fid).focus();try{$(fid).setSelectionRange(pos,pos)}catch(e){}}}
-  $('updbar').classList.toggle('hidden',!updating());
+  $('updbar').classList.toggle('hidden',!updating());drawWall();
   if($('seye'))$('seye').className='eye sm '+(S?S.hal.level:'');$('sidefoot').textContent=S?S.host+' · up '+Math.floor((S.uptime||0)/86400)+' d':'';}
 function show(t){tab=t;['home','get','watch','system'].forEach(k=>$('t-'+k).classList.toggle('hidden',k!==t));document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));
   window.scrollTo(0,0);if(t==='get'){loadQueue();loadUpcoming();if(getSeg==='history')loadHistory();if(getSeg==='saved')loadSaved()}if(t==='watch')loadKodi();render()}
@@ -673,7 +834,7 @@ function openSettings(){const sw=(id,t,sub,on)=>'<label class="sw"><span>'+t+(su
 $('sheet').onclick=e=>{if(e.target===$('sheet'))$('sheet').classList.add('hidden')};
 
 /* ---------- clicks ---------- */
-function doSearch(q){if(!q)return;lastQuery=q;searching=true;render();
+function doSearch(q){if(!q)return;if(egg(q))return;lastQuery=q;searching=true;render();
   api('/api/search',{query:q,indexer:'*',category:getCat}).then(d=>{results=d.results||[];searching=false;if(d.errors&&d.errors.length)toast(d.errors[0],true);render()})
     .catch(err=>{searching=false;toast(err.message,true);render()})}
 document.addEventListener('input',e=>{if(e.target.id!=='libq')return;libFilter=e.target.value;clearTimeout(window._lq);window._lq=setTimeout(render,250)});
@@ -709,6 +870,14 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if(d.play){c.disabled=true;act(()=>api('/api/home/play',{id:d.play}),r=>r&&r.started_tv?'Turning the TV on. It\'ll start in a moment.':'Starting it on the TV.');return}
   if('pihole' in d){openPihole();return}
   if('kuma' in d){openKuma();return}
+  if('chess' in d){openChess();return}
+  if('chclose' in d){closeChess();return}
+  if('chnew' in d){openChess();return}
+  if('chundo' in d){if(CH.hist.length){CH.st=CH.hist.pop();CH.sel=-1;CH.last=null;CH.line='Very well, '+NAME()+'. Try again.';drawChess()}return}
+  if(d.sq!==undefined&&c.closest('#chess')){chessTap(Number(d.sq));return}
+  if('wall' in d){openWall();return}
+  if('wallclose' in d){closeWall();return}
+  if('sing' in d){unlocked=true;sing();return}
   if(d.qa){quickAction(d.qa);return}
   if(d.devok){api('/hal/api/action',{action:'device_ok',id:d.devok}).then(r=>{toast(r.message,!r.ok);refresh()}).catch(e=>toast(e.message,true));return}
   if(d.phpause){phAction('pihole_pause',{minutes:Number(d.phpause)});return}
