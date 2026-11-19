@@ -314,7 +314,7 @@ function jfList(){const j=(H&&H.jellyfin)||[];if(!j.length)return'';return'<div 
 function vitals(){if(!S)return'';const v=S.vitals,g=(v.gpus||[])[0],n=S.net;return'<div class="vt"><div><div class="k">CPU</div><div class="v">'+f0(v.cpu.pct)+'<small>%</small></div></div><div><div class="k">RAM</div><div class="v">'+f0(v.mem.pct)+'<small>%</small></div></div><div><div class="k">GPU</div><div class="v">'+(g?f0(g.util)+'<small>%</small>':'—')+'</div></div><div><div class="k">PING</div><div class="v">'+f0(n.ping_ms)+'<small>ms</small></div></div></div>'}
 function systemsList(){if(!S)return'<div class="list"><div class="empty">'+(window.HAL_OFF?esc(window.HAL_OFF):'I\'m thinking…')+'</div></div>';
   const tabOf={services:'services',network:'shield',storage:'drives',hardware:'vitals',security:'shield',power:'shield'};
-  return'<div class="list">'+S.systems.map(x=>'<button class="row" data-hal="'+tabOf[x.id]+'"><span class="s '+x.level+'"></span><span class="t"><b>'+esc(x.name)+'</b><span>'+esc(x.detail)+'</span></span><span class="m"'+(x.level!=='ok'?' style="color:var(--'+(x.level==='critical'?'red2':'amber')+')"':'')+'>'+esc(x.count||(x.level==='ok'?'':'LOOK'))+' ›</span></button>').join('')+
+  return'<div class="list">'+S.systems.map(x=>'<button class="row" '+(x.id==='pihole'?'data-pihole':'data-hal="'+tabOf[x.id]+'"')+'><span class="s '+x.level+'"></span><span class="t"><b>'+esc(x.name)+'</b><span>'+esc(x.detail)+'</span></span><span class="m"'+(x.level!=='ok'?' style="color:var(--'+(x.level==='critical'?'red2':'amber')+')"':'')+'>'+esc(x.count||(x.level==='ok'?'':'LOOK'))+' ›</span></button>').join('')+
     '<button class="row" data-hal="events"><span class="s '+(S.security.events&&S.security.events.critical?'critical':S.security.events&&S.security.events.total?'warning':'')+'"></span><span class="t"><b>Windows events</b><span>'+esc(S.security.events?(S.security.events.total?S.security.events.total+' worth knowing about this week':'Nothing to worry about this week'):'Drive errors, crashes, failed updates')+'</span></span><span class="m">›</span></button></div>'}
 
 /* ---------- tabs ---------- */
@@ -529,8 +529,24 @@ async function act(fn,ok){try{const r=await fn();if(ok)toast(typeof ok==='functi
 /* ---------- settings ---------- */
 /* ---------- Connections: SABnzbd, indexers, Kodi (the desktop app's settings, edited here) ---------- */
 let CONN=null;
+// ---- Pi-hole (the Raspberry Pi that blocks ads for the whole house) ----
+const big=n=>n==null?'—':Number(n).toLocaleString();
+function openPihole(){const p=S&&S.pihole;if(!p||!p.found){openConnections();return}
+  let x='<h2 style="margin:0 0 4px">Pi-hole</h2><p class="hint" style="text-align:left;margin:0 0 12px">Pi-hole '+esc(p.version||'')+' at '+esc(p.host)+(p.t?' · checked '+ago(p.t):'')+'</p>';
+  if(!p.ok)x+='<div class="warnbox">'+esc(p.need_password?p.error+' Add it under Connections.':'It isn\'t answering: '+p.error)+'</div>';
+  else{const on=p.blocking!==false;
+    x+='<div class="card"><h3><span class="k">AD BLOCKING</span><span class="mono" style="color:var(--'+(on?'green':p.timer?'amber':'red2')+')">● '+(on?'ON':p.timer?'PAUSED · '+mmss(p.timer)+' LEFT':'OFF')+'</span></h3>'+
+      '<div class="wgrid" style="margin-top:12px"><div><span class="k">BLOCKED TODAY</span><b>'+big(p.blocked)+'</b></div><div><span class="k">OF ALL LOOKUPS</span><b>'+(p.percent==null?'—':Number(p.percent).toFixed(1)+'%')+'</b></div><div><span class="k">DEVICES</span><b>'+big(p.clients)+'</b></div></div>'+
+      '<div class="sub" style="margin-top:10px;color:var(--soft);font-size:13px">'+big(p.queries)+' lookups today · '+big(p.domains)+' sites on the block lists'+(p.gravity_t?' · lists updated '+ago(p.gravity_t):'')+'</div></div>';
+    x+=on?'<div class="sec"><span>PAUSE BLOCKING</span></div><div class="crow" style="margin-top:0"><button class="btn wide half" data-phpause="5">5 min</button><button class="btn wide half" data-phpause="30">30 min</button><button class="btn wide half" data-phpause="60">1 hour</button></div><p class="hint" style="text-align:left">For when a site or app breaks. It turns itself back on.</p>'
+      :'<button class="btn r wide big" data-phresume>Turn ad blocking back on</button>';
+    if(p.top_blocked&&p.top_blocked.length)x+='<div class="sec"><span>MOST BLOCKED</span></div><div class="list">'+p.top_blocked.map(d=>'<div class="row"><span class="t"><b>'+esc(d[0])+'</b></span><span class="m">'+big(d[1])+'</span></div>').join('')+'</div>';
+    if(p.top_clients&&p.top_clients.length)x+='<div class="sec"><span>BUSIEST DEVICES</span></div><div class="list">'+p.top_clients.map(d=>'<div class="row"><span class="t"><b>'+esc(d[0])+'</b></span><span class="m">'+big(d[1])+'</span></div>').join('')+'</div>'}
+  x+='<button class="btn wide" data-conn style="margin-top:12px">Address and password</button><button class="btn wide" id="phclose" style="margin-top:8px">Close</button>';
+  $('panel').innerHTML=x;$('sheet').classList.remove('hidden');$('phclose').onclick=()=>$('sheet').classList.add('hidden')}
+async function phAction(action,extra){try{const r=await api('/hal/api/action',Object.assign({action},extra||{}));toast(r.message,!r.ok);setTimeout(async()=>{await refresh();if(!$('sheet').classList.contains('hidden')&&$('phclose'))openPihole()},1500)}catch(e){toast(e.message,true)}}
 async function openConnections(){$('panel').innerHTML='<h2 style="margin:0">Connections</h2><p class="hint" style="text-align:left">I\'m reading the settings…</p>';$('sheet').classList.remove('hidden');
-  try{CONN=await api('/api/connections');CONN.indexers.forEach(x=>x.orig=x.index)}catch(e){toast(e.message,true);$('sheet').classList.add('hidden');return}renderConn()}
+  try{CONN=await api('/api/connections');CONN.indexers.forEach(x=>x.orig=x.index);try{CONN.ph=await api('/hal/api/pihole')}catch(e){CONN.ph=null}}catch(e){toast(e.message,true);$('sheet').classList.add('hidden');return}renderConn()}
 function keyPh(set,what){return set?'Saved · type to replace':'Not set yet'}
 function renderConn(){const c=CONN;
   let x='<h2 style="margin:0 0 4px">Connections</h2><p class="hint" style="text-align:left;margin:0 0 10px">“I can give you my complete assurance that everything is connected, '+esc(NAME())+'.” Keys are encrypted on the PC and never shown here.</p>';
@@ -547,18 +563,23 @@ function renderConn(){const c=CONN;
   x+='<div class="cbox" style="margin-top:14px"><h3>Kodi on the TV <button class="btn" data-ctest="kodi">Test</button></h3><label class="fld">Address</label><input class="inp" id="c_kodi_url" value="'+esc(c.kodi.url)+'" placeholder="http://192.168.68.62:8080" autocapitalize="off" autocorrect="off" inputmode="url">'+
      '<label class="fld">User name</label><input class="inp" id="c_kodi_user" value="'+esc(c.kodi.username)+'" autocapitalize="off" autocorrect="off">'+
      '<label class="fld">Password</label><input class="inp" id="c_kodi_pw" type="password" placeholder="'+keyPh(c.kodi.password_set,'password')+'" autocomplete="off"></div>';
+  if(c.ph){const f=c.ph.found||{};x+='<div class="cbox" style="margin-top:14px"><h3>Pi-hole <button class="btn" data-ctest="pihole">Test</button></h3>'+
+     '<label class="fld">Address'+(f.found&&!c.ph.url?' (found it at '+esc(f.host)+')':'')+'</label><input class="inp" id="c_ph_url" value="'+esc(c.ph.url)+'" placeholder="'+(f.found?'Blank is fine':'Blank: I look for it')+'" autocapitalize="off" autocorrect="off" inputmode="url">'+
+     '<label class="fld">Password (the one you sign in to Pi-hole with)</label><input class="inp" id="c_ph_pw" type="password" placeholder="'+keyPh(c.ph.password_set,'password')+'" autocomplete="off"></div>'}
   x+='<p class="hint" style="text-align:left">Jellyfin and the TV\'s power settings are in the classic app (Jellyfin and Kodi tabs).</p>';
   x+='<button class="btn r wide" id="csave" style="margin-top:6px">Save</button><button class="btn wide" id="cclose" style="margin-top:8px">Close</button>';
   $('panel').innerHTML=x;$('cclose').onclick=()=>$('sheet').classList.add('hidden');$('csave').onclick=saveConn}
-function readConn(){const c=CONN;c.sab.url=$('c_sab_url').value;c.sab.key=$('c_sab_key').value;c.kodi.url=$('c_kodi_url').value;c.kodi.username=$('c_kodi_user').value;c.kodi.pw=$('c_kodi_pw').value;
+function readConn(){const c=CONN;if(c.ph&&$('c_ph_url')){c.ph.newurl=$('c_ph_url').value.trim();c.ph.pw=$('c_ph_pw').value}c.sab.url=$('c_sab_url').value;c.sab.key=$('c_sab_key').value;c.kodi.url=$('c_kodi_url').value;c.kodi.username=$('c_kodi_user').value;c.kodi.pw=$('c_kodi_pw').value;
   document.querySelectorAll('[data-ix]').forEach(el=>{const ix=c.indexers[Number(el.dataset.ix)];ix[el.dataset.f]=el.type==='checkbox'?el.checked:el.value})}
 async function saveConn(){readConn();const c=CONN;const body={sab_url:c.sab.url,sab_api_key:(c.sab.key||'').trim(),kodi_url:c.kodi.url,kodi_username:c.kodi.username,kodi_password:c.kodi.pw||'',
     indexers:c.indexers.map(ix=>({index:ix.orig,name:ix.name,url:ix.url,enabled:!!ix.enabled,api_key:(ix.api_key||'').trim()}))};
+  if(c.ph&&(c.ph.pw||c.ph.newurl!==(c.ph.url||''))){try{await api('/hal/api/pihole',{url:c.ph.newurl,password:c.ph.pw||''})}catch(e){toast('Pi-hole: '+e.message,true);return}}
   try{const r=await api('/api/connections',body);toast(r.warning?'Saved, but: '+r.warning:'Saved. I\'ll use the new settings from now on, '+NAME()+'.',!!r.warning);$('sheet').classList.add('hidden');CONN=null;refresh()}catch(e){toast(e.message,true)}}
 async function testConn(what,i){readConn();const c=CONN;let body={what};
   if(what==='sab')body={what,url:c.sab.url,key:(c.sab.key||'').trim()};
   if(what==='kodi')body={what,url:c.kodi.url,username:c.kodi.username,password:c.kodi.pw||''};
   if(what==='indexer'){const ix=c.indexers[i];body={what,index:ix.orig,url:ix.url,key:(ix.api_key||'').trim()}}
+  if(what==='pihole'){toast('Looking for the Pi-hole…');try{const r=await api('/hal/api/pihole',{action:'test',url:c.ph.newurl,password:c.ph.pw||''});toast(r.message,!r.ok)}catch(e){toast(e.message,true)}return}
   toast('Testing…');try{const r=await api('/api/connections/test',body);toast(r.message,!r.ok)}catch(e){toast(e.message,true)}}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-ctest],[data-cadd],[data-cdel],[data-conn]');if(!b)return;const d=b.dataset;
   if('conn' in d){openConnections();return}
@@ -574,7 +595,7 @@ function openSettings(){const sw=(id,t,sub,on)=>'<label class="sw"><span>'+t+(su
    '<div class="list" style="margin-top:12px"><a class="row" href="/hal/?tab=log&settings=1&from=app" style="color:inherit;text-decoration:none"><span class="t"><b>HAL: name, alerts, UPS, voice</b><span>HAL\'s own settings</span></span><span class="m">›</span></a>'+
    '<button class="row" data-update><span class="t"><b>Update everything</b><span>Newest version of the apps, from GitHub'+(S&&S.update&&S.update.result?' · last: '+esc(S.update.result.state==='updated'?'v'+S.update.result.version:S.update.result.state==='uptodate'?'up to date':'failed')+' '+esc(ago(S.update.result.t)):'')+'</span></span><span class="m">›</span></button>'+
    '<a class="row" href="/" style="color:inherit;text-decoration:none"><span class="t"><b>Classic NZB app</b><span>Indexers, saved searches, phone alerts, drives</span></span><span class="m">›</span></a>'+
-   '<button class="row" data-conn><span class="t"><b>Connections</b><span>SABnzbd, your indexers and Kodi</span></span><span class="m">›</span></button></div>'+
+   '<button class="row" data-conn><span class="t"><b>Connections</b><span>SABnzbd, your indexers, Kodi and Pi-hole</span></span><span class="m">›</span></button></div>'+
    '<button class="btn wide" id="sclose" style="margin-top:12px">Close</button><button class="btn wide" id="sforget" style="margin-top:8px;background:none;color:var(--muted)">Forget the access code on this device</button>';
   $('sheet').classList.remove('hidden');$('sclose').onclick=()=>$('sheet').classList.add('hidden');
   if($('stalk'))$('stalk').onchange=e=>{LS.set('hal_talk',e.target.checked?'on':'off');if(!e.target.checked&&CAN_SPEAK)speechSynthesis.cancel();render()};
@@ -616,6 +637,9 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if(d.sclear){api('/api/saved',{action:'clear',id:d.sclear}).then(v=>{SAVED=v;render()}).catch(e=>toast(e.message,true));return}
   if(d.sopen!==undefined){getCat=d.scat||'';LS.set('app_cat',getCat);libView=null;show('get');setTimeout(()=>{if($('sq'))$('sq').value=d.sopen;doSearch(d.sopen)},50);return}
   if(d.play){c.disabled=true;act(()=>api('/api/home/play',{id:d.play}),r=>r&&r.started_tv?'Turning the TV on. It\'ll start in a moment.':'Starting it on the TV.');return}
+  if('pihole' in d){openPihole();return}
+  if(d.phpause){phAction('pihole_pause',{minutes:Number(d.phpause)});return}
+  if('phresume' in d){phAction('pihole_resume');return}
   if(d.item){const p=d.item.split(':');openItem(p[0],p[1]);return}
   if(d.wplay!==undefined){wOpen(d.wplay);return}
   if('wclose' in d){wClose();return}

@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -449,6 +449,9 @@ DEFAULT_SETTINGS = {
     "ups_shutdown": False,          # shut the PC down when the UPS battery runs low
     "ups_shutdown_pct": 25, "ups_shutdown_min": 5,
     "ignored_services": [],
+    "pihole_url": "",               # blank: look for it among the PC's DNS servers
+    "pihole_password": "",          # dpapi:... (Pi-hole 6 password / app password, or Pi-hole 5 API token)
+    "pihole_off": False,            # don't watch a Pi-hole at all
 }
 
 
@@ -482,7 +485,7 @@ SETTING_RANGES = {"down_after_s": (15, 900), "cpu_alert": (50, 100), "ram_alert"
 def validate_settings(body: dict, current: dict) -> dict:
     s = dict(current)
     for k, v in body.items():
-        if k not in DEFAULT_SETTINGS:
+        if k not in DEFAULT_SETTINGS or k.startswith("pihole_"):   # Pi-hole has its own page (/api/pihole)
             continue
         d = DEFAULT_SETTINGS[k]
         if isinstance(d, bool):
@@ -512,6 +515,211 @@ def validate_settings(body: dict, current: dict) -> dict:
     if not s["ping_host"]:
         s["ping_host"] = "1.1.1.1"
     return s
+
+
+# ==============================================================================
+# PI-HOLE (the Raspberry Pi that blocks ads for the whole house)
+# ==============================================================================
+# Works with Pi-hole 6 (/api, session login) and Pi-hole 5 (/admin/api.php, API token); which one is
+# worked out on its own. With no address set, HAL looks for it among the PC's DNS servers.
+
+DNS_SERVERS_PS = r"""
+Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses } |
+  Select-Object -Unique | ConvertTo-Json -Compress
+"""
+
+
+def dpapi_protect(text: str) -> str:
+    """Encrypts a secret for this Windows user (dpapi:<base64>); stored as-is elsewhere (tests, Linux)."""
+    if not text or not IS_WINDOWS:
+        return text
+    import ctypes.wintypes as wt
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wt.DWORD), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
+
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    crypt32.CryptProtectData.argtypes = [ctypes.POINTER(DATA_BLOB), ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_void_p,
+                                         ctypes.c_void_p, wt.DWORD, ctypes.POINTER(DATA_BLOB)]
+    crypt32.CryptProtectData.restype = wt.BOOL
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    raw = text.encode("utf-8")
+    buf = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
+    out = DATA_BLOB()
+    if not crypt32.CryptProtectData(ctypes.byref(DATA_BLOB(len(raw), buf)), "HAL 9000", None, None, None, 0, ctypes.byref(out)):
+        raise OSError("Windows couldn't encrypt the password.")
+    try:
+        return "dpapi:" + base64.b64encode(ctypes.string_at(out.pbData, out.cbData)).decode("ascii")
+    finally:
+        kernel32.LocalFree(out.pbData)
+
+
+def dns_servers() -> list[str]:
+    """The PC's DNS servers (private IPv4 only): where the Pi-hole usually is."""
+    found: list[str] = []
+    if IS_WINDOWS:
+        res = sm.run_powershell_json(DNS_SERVERS_PS, timeout=20)
+        found = [res] if isinstance(res, str) else [str(x) for x in res or []]
+    else:
+        try:
+            found = re.findall(r"^\s*nameserver\s+(\S+)", Path("/etc/resolv.conf").read_text(), re.M)
+        except OSError:
+            pass
+    out = []
+    for a in found:
+        try:
+            ip = ipaddress.ip_address(a)
+        except ValueError:
+            continue
+        if ip.version == 4 and ip.is_private and not ip.is_loopback and a not in out:
+            out.append(a)
+    return out[:4]
+
+
+def pihole_base(text: str) -> str:
+    """'192.168.68.5', 'pi.hole', 'http://192.168.68.5/admin/' -> 'http://192.168.68.5' ('' if blank)."""
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = "http://" + text
+    p = urllib.parse.urlsplit(text)
+    if p.scheme not in ("http", "https") or not p.hostname or p.username or p.password \
+            or not re.fullmatch(r"[A-Za-z0-9.\-]{1,253}", p.hostname):
+        raise ValueError("Use the Pi-hole's address, like 192.168.68.5 or http://pi.hole.")
+    return f"{p.scheme}://{p.hostname}" + (f":{p.port}" if p.port else "")
+
+
+def _ph_req(url: str, method: str = "GET", body=None, headers: dict | None = None, timeout: float = 5.0):
+    """(HTTP status, parsed JSON or None). Network failures raise OSError."""
+    h = {"Accept": "application/json", "User-Agent": f"HAL9000/{VERSION}"}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        h["Content-Type"] = "application/json"
+    h.update(headers or {})
+    req = urllib.request.Request(url, data=data, method=method, headers=h)
+    try:
+        with _OPENER.open(req, timeout=timeout) as resp:
+            status, raw = resp.status, resp.read(2_000_000)
+    except urllib.error.HTTPError as exc:
+        status, raw = exc.code, exc.read(200_000)
+    except urllib.error.URLError as exc:
+        raise OSError(str(exc.reason)) from None
+    try:
+        return status, json.loads(raw or b"null")
+    except ValueError:
+        return status, None
+
+
+def pihole_detect(base: str, timeout: float = 4.0) -> int:
+    """6 or 5 if a Pi-hole answers at base, else 0."""
+    try:
+        st, d = _ph_req(base + "/api/auth", timeout=timeout)
+        if st in (200, 401) and isinstance(d, dict) and ("session" in d or "error" in d):
+            return 6
+        st, d = _ph_req(base + "/admin/api.php?versions", timeout=timeout)
+        if st == 200 and isinstance(d, (dict, list)):
+            return 5
+    except OSError:
+        pass
+    return 0
+
+
+class PiHoleAuthError(Exception):
+    pass
+
+
+class PiHole:
+    """One Pi-hole. Keeps one Pi-hole 6 session (they're limited) and signs in again when it runs out."""
+
+    def __init__(self, base: str = "", password: str = "", version: int = 0):
+        self.base, self.password, self.version = base, password, version
+        self.sid = ""
+        self.lock = threading.Lock()
+
+    def _login(self) -> None:
+        st, d = _ph_req(self.base + "/api/auth", "POST", {"password": self.password})
+        sess = (d or {}).get("session") if isinstance(d, dict) else None
+        if st == 200 and isinstance(sess, dict) and sess.get("valid"):
+            self.sid = str(sess.get("sid") or "")
+            return
+        if st == 429:
+            raise OSError("Pi-hole says too many sign-ins; I'll try again shortly.")
+        raise PiHoleAuthError("Pi-hole needs its password." if not self.password else "Pi-hole didn't accept the password.")
+
+    def _v6(self, method: str, path: str, body=None):
+        for attempt in (0, 1):
+            st, d = _ph_req(self.base + path, method, body, {"X-FTL-SID": self.sid} if self.sid else None)
+            if st == 401 and attempt == 0:
+                self.sid = ""
+                self._login()
+                continue
+            if st == 401:
+                raise PiHoleAuthError("Pi-hole didn't accept the password.")
+            if st >= 400 or not isinstance(d, dict):
+                raise OSError(f"Pi-hole answered HTTP {st}.")
+            return d
+        raise OSError("Pi-hole didn't answer.")
+
+    def _v5(self, query: str):
+        st, d = _ph_req(f"{self.base}/admin/api.php?{query}&auth={urllib.parse.quote(self.password)}")
+        if st >= 400:
+            raise OSError(f"Pi-hole answered HTTP {st}.")
+        if not isinstance(d, dict) or not d:   # an empty answer means the token is missing or wrong
+            raise PiHoleAuthError("Pi-hole needs its API token (Settings › API)." if not self.password
+                                  else "Pi-hole didn't accept the API token.")
+        return d
+
+    def summary(self) -> dict:
+        with self.lock:
+            if self.version == 6:
+                d = self._v6("GET", "/api/stats/summary")
+                b = self._v6("GET", "/api/dns/blocking")
+                q, g = d.get("queries") or {}, d.get("gravity") or {}
+                out = {"queries": to_int(q.get("total")), "blocked": to_int(q.get("blocked")),
+                       "percent": round(to_float(q.get("percent_blocked"), 0) or 0, 1),
+                       "clients": to_int((d.get("clients") or {}).get("active")), "domains": to_int(g.get("domains_being_blocked")),
+                       "gravity_t": to_int(g.get("last_update")) or None,
+                       "blocking": str(b.get("blocking")) == "enabled", "timer": to_float(b.get("timer")) or None}
+                try:
+                    td = self._v6("GET", "/api/stats/top_domains?blocked=true&count=5")
+                    tc = self._v6("GET", "/api/stats/top_clients?count=5")
+                    out["top_blocked"] = [[str(x.get("domain")), to_int(x.get("count"))] for x in td.get("domains") or []][:5]
+                    out["top_clients"] = [[str(x.get("name") or x.get("ip")), to_int(x.get("count"))] for x in tc.get("clients") or []][:5]
+                except OSError:
+                    out["top_blocked"], out["top_clients"] = [], []
+                return out
+            d = self._v5("summaryRaw")
+            out = {"queries": to_int(d.get("dns_queries_today")), "blocked": to_int(d.get("ads_blocked_today")),
+                   "percent": round(to_float(d.get("ads_percentage_today"), 0) or 0, 1), "clients": to_int(d.get("unique_clients")),
+                   "domains": to_int(d.get("domains_being_blocked")),
+                   "gravity_t": to_int((d.get("gravity_last_updated") or {}).get("absolute")) or None,
+                   "blocking": str(d.get("status")) == "enabled", "timer": None, "top_blocked": [], "top_clients": []}
+            try:
+                ti = self._v5("topItems=5")
+                out["top_blocked"] = [[k, to_int(v)] for k, v in (ti.get("top_ads") or {}).items()][:5]
+                tc = self._v5("topClients=5")
+                out["top_clients"] = [[k.split("|")[0] or k, to_int(v)] for k, v in (tc.get("top_sources") or {}).items()][:5]
+            except (OSError, PiHoleAuthError):
+                pass
+            return out
+
+    def set_blocking(self, enabled: bool, seconds: int = 0) -> None:
+        with self.lock:
+            if self.version == 6:
+                self._v6("POST", "/api/dns/blocking", {"blocking": enabled, "timer": seconds or None})
+            else:
+                self._v5("enable" if enabled else f"disable={int(seconds)}")
+
+    def logout(self) -> None:
+        if self.version == 6 and self.sid:
+            try:
+                _ph_req(self.base + "/api/auth", "DELETE", headers={"X-FTL-SID": self.sid}, timeout=3)
+            except OSError:
+                pass
+            self.sid = ""
 
 
 # ==============================================================================
@@ -1105,6 +1313,9 @@ class Hal:
         self.ups: dict | None = None
         self.ups_error = ""
         self.cleanup: dict = {}
+        self.ph: dict = {}                    # Pi-hole: what the last check found
+        self.pihole: PiHole | None = None
+        self._ph_search = 0.0
         self.winevents: dict = {"events": [], "t": 0.0, "busy": False}
         self.jobs: dict[str, dict] = {}       # restarts in progress
         self.restarts: dict[str, list] = {}   # restart times per service (auto-restart limit)
@@ -1153,11 +1364,13 @@ class Hal:
             self.monitor = sm.SystemMonitor(ms)
             self.monitor.start()
         for fn, name in ((self._service_loop, "services"), (self._network_loop, "network"), (self._power_loop, "power"),
-                         (self._slow_loop, "slow"), (self._history_loop, "history")):
+                         (self._slow_loop, "slow"), (self._history_loop, "history"), (self._pihole_loop, "pihole")):
             threading.Thread(target=self._guard(fn), name=f"hal-{name}", daemon=True).start()
 
     def stop(self) -> None:
         self.stop_evt.set()
+        if self.pihole:
+            self.pihole.logout()
         self.save()
 
     def _guard(self, fn):
@@ -1425,6 +1638,88 @@ class Hal:
             self.stop_evt.wait(15)
 
     # ---- power / UPS ----
+    # ---- Pi-hole ----
+    PH_EVERY = 30
+    PH_SEARCH_EVERY = 600
+
+    def _pihole_loop(self) -> None:
+        while not self.stop_evt.is_set():
+            self.check_pihole()
+            self.stop_evt.wait(self.PH_EVERY)
+
+    def _pihole_client(self) -> PiHole | None:
+        """The Pi-hole to watch: the address in settings, else one found among the PC's DNS servers."""
+        s = self.settings
+        if s.get("pihole_off"):
+            return None
+        pw = dpapi_unprotect(s.get("pihole_password") or "")
+        try:
+            base = pihole_base(s.get("pihole_url") or "")
+        except ValueError:
+            base = ""
+        cur = self.pihole
+        if cur and (not base or cur.base == base):
+            cur.password = pw
+            return cur
+        if not base:      # look for it, but not every 30 s
+            if time.time() - self._ph_search < self.PH_SEARCH_EVERY:
+                return None
+            self._ph_search = time.time()
+            for ip in dns_servers():
+                v = pihole_detect(f"http://{ip}")
+                if v:
+                    self.pihole = PiHole(f"http://{ip}", pw, v)
+                    log.info("Found Pi-hole %s at %s", v, ip)
+                    return self.pihole
+            return None
+        v = pihole_detect(base)
+        if not v:
+            raise OSError(f"Nothing at {base} answers like a Pi-hole.")
+        if cur:
+            cur.logout()
+        self.pihole = PiHole(base, pw, v)
+        return self.pihole
+
+    def check_pihole(self) -> None:
+        now = time.time()
+        prev = self.ph
+        try:
+            ph = self._pihole_client()
+            if ph is None:
+                with self.lock:
+                    self.ph = {} if self.settings.get("pihole_off") or not prev.get("found") else {**prev, "t": now}
+                return
+            summ = ph.summary()
+            state = {"found": True, "ok": True, "base": ph.base, "version": ph.version, "fails": 0, "error": "",
+                     "need_password": False, "t": now, **summ}
+        except PiHoleAuthError as exc:
+            state = {**prev, "found": True, "ok": False, "need_password": True, "error": str(exc), "fails": 0, "t": now,
+                     "base": self.pihole.base if self.pihole else prev.get("base", ""), "version": self.pihole.version if self.pihole else 0}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            if not prev.get("found") and not self.settings.get("pihole_url"):
+                return
+            state = {**prev, "found": True, "ok": False, "need_password": False, "error": str(exc)[:160] or "No answer.",
+                     "fails": to_int(prev.get("fails")) + 1, "t": now}
+        with self.lock:
+            self.ph = state
+        if prev.get("fails", 0) < 2 <= state.get("fails", 0):
+            self.add_event("critical", "Pi-hole isn't answering",
+                           f"Websites may stop loading on every device in the house, {self.settings['name']}. Check the Raspberry Pi has power.", push=True)
+        elif prev.get("fails", 0) >= 2 and state.get("ok"):
+            self.add_event("ok", "Pi-hole is back", "Ad blocking is answering again.", push=bool(self.settings.get("push_recoveries")))
+
+    def pihole_view(self) -> dict:
+        ph = dict(self.ph)
+        if not ph.get("found"):
+            return {"found": False, "off": bool(self.settings.get("pihole_off"))}
+        timer = ph.get("timer")
+        if timer and ph.get("t"):
+            timer = max(0, timer - (time.time() - ph["t"]))
+        return {"found": True, "ok": ph.get("ok", False), "version": ph.get("version"), "host": urllib.parse.urlsplit(ph.get("base", "")).hostname or "",
+                "error": ph.get("error", ""), "need_password": ph.get("need_password", False), "fails": ph.get("fails", 0),
+                "blocking": ph.get("blocking"), "timer": round(timer) if timer else None,
+                **{k: ph.get(k) for k in ("queries", "blocked", "percent", "clients", "domains", "gravity_t", "top_blocked", "top_clients", "t")}}
+
     def _power_loop(self) -> None:
         while not self.stop_evt.is_set():
             self.check_ups()
@@ -1755,6 +2050,18 @@ class Hal:
                 add("ups_load", "warning", "The UPS is overloaded", f"Load {ups.get('load') or 0:.0f}%.", "shield", 30)
         if self.ups_error:
             add("ups_err", "warning", "I've lost contact with the UPS", self.ups_error, "shield", 60)
+        ph = self.ph
+        if ph.get("found"):
+            if ph.get("fails", 0) >= 2:
+                add("pihole", "critical", "Pi-hole isn't answering",
+                    "Websites may stop loading on every device in the house. Check the Raspberry Pi has power.", "shield")
+            elif ph.get("need_password"):
+                add("pihole_pw", "info", "I can't sign in to Pi-hole", (ph.get("error") or "") + " Add it in Settings › Connections.", "shield")
+            elif ph.get("ok") and ph.get("blocking") is False and not ph.get("timer"):
+                add("pihole_off", "warning", "Pi-hole's ad blocking is off", "Turn it back on from the Pi-hole row on the System page.", "shield", 120)
+            elif ph.get("ok") and ph.get("gravity_t") and now - ph["gravity_t"] > 14 * 86400:
+                add("pihole_lists", "info", f"Pi-hole's block lists are {(now - ph['gravity_t']) / 86400:.0f} days old",
+                    "They normally update every week. On the Pi: pihole -g", "shield")
         return issues
 
     # ---- hiding alerts for a while ----
@@ -1914,6 +2221,15 @@ class Hal:
              "detail": (("On battery · " if ups["on_battery"] else "Mains · ") + f"UPS {ups.get('charge') or 0:.0f}%" +
                         (f" · {ups['load']:.0f}% load" if ups.get("load") is not None else "")) if ups else (plan or "No UPS connected")},
         ]
+        ph = self.pihole_view()
+        if ph["found"]:
+            if ph["ok"]:
+                detail = (f"{ph['blocked']:,} blocked today · {ph['percent']:.0f}%" if ph.get("blocking") or ph.get("blocking") is None
+                          else f"Paused · back in {fmt_dur(ph['timer'])}" if ph.get("timer") else "Ad blocking is OFF")
+            else:
+                detail = "Needs its password" if ph["need_password"] else "Not answering"
+            systems.append({"id": "pihole", "name": "Pi-hole", "level": lvl({"pihole", "pihole_pw", "pihole_off", "pihole_lists"}),
+                            "tab": "shield", "detail": detail})
         name = s["name"]
         return {
             "version": VERSION, "host": socket.gethostname(), "now": now, "uptime": snap.get("uptime"), "boot": snap.get("boot"),
@@ -1937,6 +2253,7 @@ class Hal:
             "net": net, "services": services, "devices": self.devices, "drives": drives, "security": security, "power": power,
             "unread": self.unread,
             "update": update_view(),
+            "pihole": ph,
         }
 
 
@@ -2021,6 +2338,12 @@ def make_demo_hal(ups_mode: str = "online") -> Hal:
                    {"id": "ix:api.nzbgeek.info", "name": "NZBGeek indexer", "host": "api.nzbgeek.info", "ms": 142, "up": True, "critical": True, "detail": "api.nzbgeek.info"}]
     hal.net = {"gateway": "192.168.68.1", "gateway_ms": 1.0, "gw_fails": 0, "dns": True, "tailscale": "100.101.12.7", "t": now}
     hal.security = {"failed": 0, "unexpected": 0, "unexpected7": 0, "bsod": 0, "disk_errors": 0, "t": now}
+    hal.ph = {"found": True, "ok": True, "base": "http://192.168.68.53", "version": 6, "fails": 0, "error": "", "need_password": False,
+              "t": now, "queries": 84213, "blocked": 18204, "percent": 21.6, "clients": 14, "domains": 412806, "gravity_t": now - 2 * 86400,
+              "blocking": True, "timer": None,
+              "top_blocked": [["ads.example-tracker.com", 2104], ["telemetry.tv-maker.net", 1630], ["metrics.app-stats.io", 911],
+                              ["pixel.adnetwork.com", 640], ["beacon.streaming-ads.tv", 402]],
+              "top_clients": [["living-room-tv", 22140], ["hal9000", 18032], ["iphone", 9311], ["kodi", 4210], ["ipad", 2004]]}
     hal.updates = {"ok": True, "updates": [{"title": "2026-11 Cumulative Update for Windows 11", "reboot": True}], "t": now - 3600}
     def iso(sec_ago):
         return datetime.utcfromtimestamp(now - sec_ago).isoformat() + "Z"
@@ -2159,6 +2482,53 @@ def start_update(hal: "Hal") -> dict:
     return {"ok": True, "updating": True, "message": f"Updating now. I'll be back in about a minute, {name}."}
 
 
+def pihole_settings(hal: Hal, body: dict) -> dict:
+    """Settings › Connections › Pi-hole: test or save its address and password (blank password keeps the saved one)."""
+    s = dict(hal.settings)
+    url = pihole_base(body.get("url", s.get("pihole_url", "")))
+    pw = str(body.get("password") or "")
+    if len(pw) > 200 or any(c in pw for c in "\r\n\x00"):
+        raise ValueError("That password doesn't look right.")
+    if not pw and not body.get("clear_password"):
+        pw = dpapi_unprotect(s.get("pihole_password") or "")
+    name = s["name"]
+    if body.get("action") == "test":
+        base = url or (hal.pihole.base if hal.pihole else "")
+        if not base:
+            for ip in dns_servers():
+                if pihole_detect(f"http://{ip}"):
+                    base = f"http://{ip}"
+                    break
+        if not base:
+            return {"ok": False, "message": "I couldn't find a Pi-hole. Type its address (the Raspberry Pi's IP)."}
+        v = pihole_detect(base)
+        if not v:
+            return {"ok": False, "message": f"Nothing at {base} answers like a Pi-hole."}
+        ph = PiHole(base, pw, v)
+        try:
+            summ = ph.summary()
+        except PiHoleAuthError as exc:
+            return {"ok": False, "message": f"Found Pi-hole {v} at {base}, but: {exc}"}
+        except OSError as exc:
+            return {"ok": False, "message": f"Found Pi-hole {v} at {base}, but it didn't answer: {exc}"}
+        finally:
+            ph.logout()
+        return {"ok": True, "message": f"Pi-hole {v} at {base} is answering, {name}: {summ['blocked']:,} blocked today."}
+    s["pihole_url"] = url
+    s["pihole_off"] = bool(body.get("off"))
+    if body.get("clear_password"):
+        s["pihole_password"] = ""
+    elif body.get("password"):
+        s["pihole_password"] = dpapi_protect(pw)
+    if hal.pihole:
+        hal.pihole.logout()
+    hal.pihole, hal._ph_search = None, 0.0
+    hal.update_settings(s)
+    threading.Thread(target=hal.check_pihole, daemon=True).start()
+    log.info("Pi-hole settings saved (address %s, password %s)", url or "auto", "set" if s["pihole_password"] else "none")
+    return {"ok": True, "message": f"Saved. I'll keep an eye on the Pi-hole, {name}."}
+
+
 def run_action(hal: Hal, action: str, body: dict) -> dict:
     name = hal.settings["name"]
     if hal.monitor.__class__.__name__ == "DemoMonitor":
@@ -2218,6 +2588,23 @@ def run_action(hal: Hal, action: str, body: dict) -> dict:
         res = start_update(hal)
         log.info("Action update: %s %s", res.get("ok"), res.get("message"))
         return res
+    elif action in ("pihole_pause", "pihole_resume"):
+        ph = hal.pihole
+        if not ph or not hal.ph.get("found"):
+            return {"ok": False, "message": f"I haven't found a Pi-hole, {name}."}
+        minutes = to_int(body.get("minutes"), 5)
+        if action == "pihole_pause" and minutes not in (5, 30, 60):
+            raise ValueError("Pause for 5, 30 or 60 minutes.")
+        try:
+            ph.set_blocking(action == "pihole_resume", 0 if action == "pihole_resume" else minutes * 60)
+            ok = True
+            msg = (f"Ad blocking paused for {minutes} minutes. It turns itself back on." if action == "pihole_pause"
+                   else f"Ad blocking is back on, {name}.")
+        except PiHoleAuthError as exc:
+            ok, msg = False, str(exc) + " Add it in Settings › Connections."
+        except OSError as exc:
+            ok, msg = False, f"Pi-hole didn't answer: {exc}"
+        threading.Thread(target=hal.check_pihole, daemon=True).start()
     elif action == "clear_log":
         with hal.lock:
             hal.events.clear()
@@ -2524,7 +2911,7 @@ class HalRoutes:
                 self._h_json(200, {"events": ev[:200]})
             elif path == "/api/settings":
                 url, _tok = ntfy_target(hal.settings)
-                self._h_json(200, {"settings": hal.settings, "push_ready": bool(url),
+                self._h_json(200, {"settings": {k: v for k, v in hal.settings.items() if k != "pihole_password"}, "push_ready": bool(url),
                                    "push_from_phone_app": bool(url) and not hal.settings.get("ntfy_url"),
                                    "services": [{"id": s["id"], "name": s["name"]} for s in SERVICES],
                                    "restart_methods": {sid: hal.restart_method(sid) for sid in SERVICE_IDS} if q.get("methods") else {}})
@@ -2534,6 +2921,10 @@ class HalRoutes:
                 self._h_json(200, hal.winevents_view())
             elif path == "/api/cleanup":
                 self._h_json(200, hal.cleanup_info(refresh=bool(q.get("refresh"))))
+            elif path == "/api/pihole":
+                s = hal.settings
+                self._h_json(200, {"url": s.get("pihole_url", ""), "password_set": bool(s.get("pihole_password")),
+                                   "off": bool(s.get("pihole_off")), "found": hal.pihole_view()})
             else:
                 self._h_json(404, {"error": "Not found."})
         self._h_guarded(run)
@@ -2580,6 +2971,8 @@ class HalRoutes:
                 self._h_json(200, {"ok": bool(n), "message": (f"Very well, {name}. I'll keep quiet about it until {until} tomorrow"
                                                               if hours == 24 else f"Very well, {name}. Hidden until {until}") +
                                    ", unless it gets worse." if n else "That alert has already gone away."})
+            elif path == "/api/pihole":
+                self._h_json(200, pihole_settings(hal, body))
             elif path == "/api/settings":
                 new = validate_settings(body, hal.settings)
                 hal.update_settings(new)

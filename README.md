@@ -36,6 +36,17 @@ run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardware
 **Options > Remote Web Server > Run** (port 8085; the app also reads its WMI feed when that's available).
 Run as administrator to see drive temperatures and wear.
 
+## Pi-hole in HAL
+
+HAL watches the Pi-hole (Pi-hole 6 or 5, worked out on its own). With no address set it looks for it
+among the PC's DNS servers. **System › Pi-hole** in the app shows what was blocked today, the most
+blocked sites and the busiest devices, with **Pause 5 min / 30 min / 1 hour** (it turns itself back on)
+and **Turn back on**. HAL alerts when the Pi-hole stops answering (websites stop loading everywhere),
+when blocking is left off, or when the block lists are over two weeks old.
+
+Address and password: **Settings › Connections › Pi-hole** (the password you sign in to Pi-hole with,
+or a Pi-hole 6 app password; on Pi-hole 5 the API token). It's stored encrypted in `hal_settings.json`.
+
 ## Watch on the phone (home Wi-Fi only)
 
 In the app, **Watch › Your library**: tap a movie (or an episode) for its page, then **Watch on phone**.
