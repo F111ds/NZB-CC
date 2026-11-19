@@ -2,7 +2,6 @@ package com.gathin.tvhome;
 
 import android.animation.ValueAnimator;
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -73,6 +72,9 @@ public class HalDream extends DreamService {
     private boolean ttsReady;
     private String lastSay = "", shownQuote = "";
     private boolean speaking;
+    private boolean saidOnStart;
+    private long lastTalkAt;
+    private String pendingSay = "";
 
     @Override
     protected void attachBaseContext(Context base) {
@@ -213,6 +215,11 @@ public class HalDream extends DreamService {
             tts.setSpeechRate(0.85f);
             tts.setOnUtteranceProgressListener(new Talk());
             ttsReady = true;
+            android.util.Log.i("HalDream", "Text-to-speech ready: " + tts.getDefaultEngine() + ", voice " + (tts.getVoice() != null ? tts.getVoice().getName() : "?"));
+            // The readings may have come in before the voice was ready: say them now.
+            main.post(() -> {
+                if (running && !pendingSay.isEmpty()) maybeTalk(pendingSay);
+            });
         });
         refresh();
         main.postDelayed(this::drift, DRIFT_MS);
@@ -369,6 +376,8 @@ public class HalDream extends DreamService {
             for (Voice v : tts.getVoices()) {
                 Locale l = v.getLocale();
                 if (l == null || !"en".equals(l.getLanguage()) || v.isNetworkConnectionRequired()) continue;
+                // A voice listed but not downloaded says nothing at all.
+                if (v.getFeatures() != null && v.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)) continue;
                 String n = v.getName().toLowerCase(Locale.US);
                 int s = 0;
                 if (n.contains("male") && !n.contains("female")) s += 10;
@@ -380,8 +389,9 @@ public class HalDream extends DreamService {
                     best = v;
                 }
             }
-            if (best != null) tts.setVoice(best);
-            else tts.setLanguage(Locale.UK);
+            if (best == null || tts.setVoice(best) != TextToSpeech.SUCCESS) {
+                if (tts.setLanguage(Locale.UK) < TextToSpeech.LANG_AVAILABLE) tts.setLanguage(Locale.US);
+            }
         } catch (Exception e) {
             tts.setLanguage(Locale.US);
         }
@@ -392,18 +402,28 @@ public class HalDream extends DreamService {
         return h >= QUIET_FROM || h < QUIET_TO;
     }
 
+    /** HAL speaks each time the screensaver starts, then every 30 minutes while it keeps running; never in quiet hours. */
     private void maybeTalk(String say) {
-        if (!ttsReady || speaking || say.isEmpty() || quietNow()) return;
-        SharedPreferences p = getSharedPreferences("hal_dream", MODE_PRIVATE);
-        long last = p.getLong("last_talk", 0), now = System.currentTimeMillis();
-        if (now - last < TALK_EVERY_MS) return;   // at most every 30 minutes, however often the screensaver starts
-        p.edit().putLong("last_talk", now).putString("last_say", say).apply();
+        if (say.isEmpty()) return;
+        if (!ttsReady) {
+            pendingSay = say;
+            return;
+        }
+        pendingSay = "";
+        if (speaking || quietNow()) return;
+        long now = System.currentTimeMillis();
+        if (saidOnStart && now - lastTalkAt < TALK_EVERY_MS) return;
+        saidOnStart = true;
+        lastTalkAt = now;
         lastSay = say;
         Bundle b = new Bundle();
         b.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, android.media.AudioManager.STREAM_MUSIC);
+        b.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1f);
         speaking = true;
         reveal(0f);
-        tts.speak(say, TextToSpeech.QUEUE_FLUSH, b, "hal");
+        int r = tts.speak(say, TextToSpeech.QUEUE_FLUSH, b, "hal");
+        android.util.Log.i("HalDream", "speak -> " + r);
+        if (r != TextToSpeech.SUCCESS) speaking = false;
     }
 
     /** Shows the part of HAL's line he has said so far (the rest faint). */
