@@ -104,6 +104,8 @@ if ($UpdateOnly) {
     Write-Host $out.Trim()
     if ($out -notmatch 'Success') { throw 'The TV did not take the new app (see above). Run install-on-tv.ps1 without -UpdateOnly from the PC.' }
     @(
+        # HAL is a screen of his own now (the HAL tile), not a screensaver: back to the photos if HAL was picked.
+        "c=`$(settings get secure screensaver_components); case `"`$c`" in *HalDream*) settings put secure screensaver_components $pkg/.PhotoDream ;; esac",
         "am force-stop $pkg",
         "am start -W -a android.intent.action.MAIN -c android.intent.category.HOME -n $pkg/.MainActivity"
     ) | & $py -I tools\tv.py --batch | Out-Null
@@ -243,7 +245,7 @@ Step 'Restarting Home'
     "pm grant $pkg android.permission.ACCESS_FINE_LOCATION 2>/dev/null; echo granted",
     "cmd package set-home-activity --user 0 $pkg/.MainActivity",
     # Photos the first time; after that whichever of ours you picked in Settings (Photos or HAL 9000) stays.
-    "c=`$(settings get secure screensaver_components); case `"`$c`" in *HalDream*|*PhotoDream*) ;; *) settings put secure screensaver_components $pkg/.PhotoDream ;; esac",
+    "c=`$(settings get secure screensaver_components); case `"`$c`" in *PhotoDream*) ;; *) settings put secure screensaver_components $pkg/.PhotoDream ;; esac",
     "settings put secure screensaver_enabled 1",
     "am force-stop $pkg",
     "am start -W -a android.intent.action.MAIN -c android.intent.category.HOME -n $pkg/.MainActivity"

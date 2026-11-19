@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1502,6 +1502,8 @@ def siri_intent(q: str) -> str:
         return "sleep"
     if has("restart", "reboot", "shut", "shutdown", "power off"):
         return "refuse"
+    if has("tv", "television", "screen") and has("show", "yourself", "display", "put", "appear"):
+        return "tv_show"
     if has("tv", "television", "kodi"):
         return "tv_on" if has("on", "start", "open", "wake") else "tv"
     if has("download", "downloads", "downloading", "queue", "sab", "sabnzbd"):
@@ -1704,6 +1706,8 @@ class FunMixin:
             r = act(intent)
             return {"say": (f"Locking the PC, {name}." if intent == "lock" else f"Goodnight, {name}. Putting the PC to sleep.") if r.get("ok") else r.get("message"),
                     "intent": intent}
+        if intent == "tv_show":
+            return {"say": tv_show(self, "")["message"], "intent": intent}
         if intent == "tv_on":
             return {"say": tv_on_via_phone_server(self) if not demo else "Demo mode: nothing was changed.", "intent": intent}
         if intent in ("morning", "week"):
@@ -1773,12 +1777,88 @@ def tv_brief(st: dict) -> dict:
     say = st["hal"]["greeting"] + " " + st["hal"]["quote"]
     if alerts and alerts[0]["title"] not in say:
         say += " " + alerts[0]["title"] + "."
-    return {"greeting": st["hal"]["greeting"], "say": spoken(say), "alerts": alerts, "voice": dict(TV_VOICE),
+    name = st["hal"]["name"]
+    lines = [{"text": st["hal"]["greeting"] + " " + st["hal"]["quote"], "say": spoken(say)}]
+    if not alerts:
+        for q in random.sample(QUOTES_OK, min(4, len(QUOTES_OK))):
+            q = q.format(name=name)
+            if q != st["hal"]["quote"]:
+                lines.append({"text": q, "say": spoken(q)})
+    if ph.get("ok") and ph.get("blocked"):
+        q = f"Pi-hole has blocked {int(ph['blocked']):,} ads today, {name}."
+        lines.append({"text": q, "say": spoken(q)})
+    for a in alerts[1:]:
+        lines.append({"text": a["title"] + ".", "say": spoken(a["title"] + ".")})
+    return {"greeting": st["hal"]["greeting"], "say": spoken(say), "alerts": alerts, "voice": dict(TV_VOICE), "lines": lines[:8],
             "cpu_temp": v["cpu"].get("temp"), "mem_used": v["mem"].get("used"), "mem_total": v["mem"].get("total"),
             "ping": n.get("ping_ms"), "net_down": n.get("down"), "internet_down": down,
             "downloading": det if det.startswith("downloading") else "",
             "kuma_up": km.get("up") if km.get("ok") else None, "kuma_total": len(km.get("monitors") or []) if km.get("ok") else None,
             "ads_on": ph.get("blocking") is not False if ph.get("ok") else None}
+
+
+TV_PACKAGE = "com.gathin.tvhome"
+TV_PHRASES_MAX = 20
+
+
+def tv_host() -> str:
+    """The TV's address: what the TV installer remembered, else Kodi's address (Kodi runs on the TV)."""
+    try:
+        h = (BASE_DIR / "tv_host.txt").read_text(encoding="utf-8").strip()
+        if h:
+            return h
+    except OSError:
+        pass
+    try:
+        url = str(nzb_config().get("kodi_url") or "")
+        return urllib.parse.urlsplit(url if "://" in url else "http://" + url).hostname or ""
+    except ValueError:
+        return ""
+
+
+def tv_adb(command: str, timeout: float = 30) -> tuple[bool, str]:
+    """Runs a shell command on the TV through the TV tools (tv-launcher/tools/tv.py, the installer's ADB key)."""
+    folder = BASE_DIR / "tv-launcher"
+    py = folder / "tools" / "venv" / ("Scripts/python.exe" if IS_WINDOWS else "bin/python")
+    if not py.exists():
+        return False, "The TV tools aren't set up on this PC yet: run tv-launcher\\install-on-tv.ps1 once."
+    host = tv_host()
+    if not host:
+        return False, "I don't know the TV's address yet: run tv-launcher\\install-on-tv.ps1 once."
+    try:
+        r = subprocess.run([str(py), "-I", "tools/tv.py", command], cwd=str(folder), env=dict(os.environ, TV_HOST=host),
+                           capture_output=True, text=True, timeout=timeout,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.TimeoutExpired:
+        return False, "The TV didn't answer in time. Is it on?"
+    except OSError as exc:
+        return False, f"Couldn't run the TV tools: {exc}"
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    return r.returncode == 0, out[-400:]
+
+
+def tv_show(hal, say: str = "") -> dict:
+    """Opens HAL's screen on the TV (over whatever is on), optionally saying a message."""
+    name = hal.settings["name"]
+    say = re.sub(r"\s+", " ", str(say or "")).strip()[:300]
+    if hal.monitor.__class__.__name__ == "DemoMonitor":
+        return {"ok": True, "message": "Demo mode: nothing was sent to the TV."}
+    cmd = f"am start -n {TV_PACKAGE}/.HalActivity -f 0x10000000"
+    if say:
+        cmd += " --es say_b64 " + base64.b64encode(say.encode("utf-8")).decode("ascii")
+    ok, out = tv_adb(cmd)
+    if ok and ("Error" in out or "does not exist" in out):
+        ok = False
+    if not ok:
+        why = out.splitlines()[-1] if out else "no answer"
+        if "does not exist" in out or "Unable to resolve" in out:
+            why = "the TV has an older app. Run Update everything first."
+        log.info("TV show failed: %s", out[-200:])
+        return {"ok": False, "message": f"I couldn't reach the TV, {name}: {why}"}
+    with hal.lock:
+        hal.tv_seen = time.time()
+    log.info("TV: HAL shown%s", " with a message" if say else "")
+    return {"ok": True, "message": (f"On the TV now, {name}. He'll say it in a moment." if say else f"I'm on the TV now, {name}.")}
 
 
 def tv_on_via_phone_server(hal) -> str:
@@ -1819,6 +1899,8 @@ class Hal(FunMixin):
         self.pihole_found = str(st.get("pihole_found") or "")     # where the Pi-hole was last found (no address set)
         self.kuma: dict = {}
         self._counters_init(st)
+        self.tv_seen = 0.0                  # when HAL's TV screen last asked for readings
+        self.tv_phrases: list[str] = [str(x)[:120] for x in (st.get("tv_phrases") or []) if str(x).strip()][:TV_PHRASES_MAX]
         self._snooze_gone: dict[str, float] = {}
         self.services: dict[str, dict] = {}
         self.devices: list[dict] = []
@@ -1911,7 +1993,7 @@ class Hal(FunMixin):
                     "launch": self.launch, "power_log": self.power_log[-50:], "snoozed": self.snoozed,
                     "update_seen": self.update_seen, "known_devices": dict(list(self.known_devices.items())[-1000:]),
                     "new_devices": self.new_devices, "devices_seeded": self.devices_seeded, "pihole_found": self.pihole_found,
-                    "counters": self.counters, "brief_sent": self.brief_sent}
+                    "counters": self.counters, "brief_sent": self.brief_sent, "tv_phrases": self.tv_phrases}
         save_json(STATE_FILE, data)
 
     def update_settings(self, s: dict) -> None:
@@ -2917,6 +2999,7 @@ class Hal(FunMixin):
             "pihole": ph,
             "kuma": kv,
             "record": self.record(),
+            "tvhal": {"open": now - self.tv_seen < 45},
         }
 
 
@@ -3634,6 +3717,12 @@ class HalRoutes:
             elif path == "/api/cleanup":
                 self._h_json(200, hal.cleanup_info(refresh=bool(q.get("refresh"))))
             elif path == "/api/brief":
+                if (q.get("from") or [""])[0] == "tv":
+                    with hal.lock:
+                        hal.tv_seen = 0.0 if q.get("closed") else time.time()
+                    if q.get("closed"):
+                        self._h_json(200, {"ok": True})
+                        return
                 kind = (q.get("kind") or ["now"])[0]
                 if kind not in ("now", "morning", "weekly"):
                     raise ValueError("Unknown briefing.")
@@ -3645,6 +3734,8 @@ class HalRoutes:
                                    "ads": ph.get("blocked") if ph.get("ok") else None, "kuma_down": km.get("down") if km.get("ok") else None,
                                    "fullest": {"mount": full["mount"], "pct": full["pct"], "free": full["free"]} if full else None,
                                    "record": st["record"], **tv_brief(st)})
+            elif path == "/api/tv/phrases":
+                self._h_json(200, {"phrases": list(hal.tv_phrases), "open": time.time() - hal.tv_seen < 45})
             elif path == "/api/kuma":
                 self._h_json(200, {"url": hal.settings.get("kuma_url", ""), "key_set": bool(hal.settings.get("kuma_key")),
                                    "found": hal.kuma_view()})
@@ -3702,6 +3793,21 @@ class HalRoutes:
                 self._h_json(200, pihole_settings(hal, body))
             elif path == "/api/kuma":
                 self._h_json(200, kuma_settings(hal, body))
+            elif path == "/api/tv/show":
+                self._h_json(200, tv_show(hal, str(body.get("say") or "")))
+            elif path == "/api/tv/phrases":
+                text = re.sub(r"\s+", " ", str(body.get("text") or "")).strip()[:120]
+                with hal.lock:
+                    if body.get("action") == "add" and text:
+                        if text not in hal.tv_phrases:
+                            hal.tv_phrases.insert(0, text)
+                            del hal.tv_phrases[TV_PHRASES_MAX:]
+                    elif body.get("action") == "delete":
+                        hal.tv_phrases = [x for x in hal.tv_phrases if x != text]
+                    else:
+                        raise ValueError("Add or delete a phrase.")
+                hal.save()
+                self._h_json(200, {"ok": True, "phrases": list(hal.tv_phrases)})
             elif path == "/api/siri":
                 q_text = str(body.get("q") or body.get("text") or "")[:300]
                 res = hal.siri(q_text)

@@ -234,18 +234,24 @@
             </intent-filter>
         </service>
 
-        <!-- NZB-CC: HAL 9000 as the screensaver: his eye, live readings from the PC, and he talks. -->
-        <service
-            android:name=".HalDream"
+        <!-- NZB-CC: HAL 9000's screen, on demand: the HAL tile on Home, or the phone app (the PC opens it over adb,
+             optionally with a message in say_b64). Back closes it; OK makes HAL talk. -->
+        <activity
+            android:name=".HalActivity"
             android:enabled="${fullLauncher}"
             android:label="HAL 9000"
+            android:icon="@drawable/hal_icon"
+            android:banner="@drawable/hal_banner"
             android:exported="true"
-            android:permission="android.permission.BIND_DREAM_SERVICE">
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|uiMode"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
             <intent-filter>
-                <action android:name="android.service.dreams.DreamService" />
-                <category android:name="android.intent.category.DEFAULT" />
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
-        </service>
+        </activity>
 
         <!-- tools/theme.sh writes the theme through this where the shell can't reach Android/data;
              see ThemeProvider. WRITE_SECURE_SETTINGS: the adb shell has it, ordinary apps don't. -->

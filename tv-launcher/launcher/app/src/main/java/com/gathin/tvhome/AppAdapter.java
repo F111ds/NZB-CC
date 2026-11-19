@@ -335,7 +335,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         for (ResolveInfo ri : found) {
             if (ri.activityInfo == null) continue;
             String pkg = ri.activityInfo.packageName;
-            if (pkg.equals(ctx.getPackageName()) || !ri.activityInfo.exported
+            // NZB-CC: the launcher's own screens stay off Home, except HAL's (its own tile).
+            boolean hal = pkg.equals(ctx.getPackageName()) && ri.activityInfo.name.endsWith(".HalActivity");
+            if ((pkg.equals(ctx.getPackageName()) && !hal) || !ri.activityInfo.exported
                     || !LibraryApps.visible(tvPackages.contains(pkg), hidden.contains(pkg), added.contains(pkg), removed.contains(pkg))) continue;
             ComponentName component = new ComponentName(pkg, ri.activityInfo.name);
             Cards.Card card = cardByPkg.get(pkg);
@@ -346,7 +348,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     appLabels.containsKey(pkg) ? appLabels.get(pkg) : String.valueOf(ri.loadLabel(pm)), pkg);
             if (!seen.add(pkg + '\n' + label)) continue;
             // NZB-CC: only the home_apps on Home, plus any app added from the App library
-            if (!homeApps.isEmpty() && homeRank(pkg, label) < 0 && !added.contains(pkg)) continue;
+            if (!homeApps.isEmpty() && homeRank(pkg, label) < 0 && !added.contains(pkg) && !hal) continue;
             Drawable banner = null;
             // uniform_tiles draws the icon, so an app's banner is never loaded. A module card keeps its banner.
             if (!(uniformTiles && card == null)) {
@@ -370,6 +372,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             if (saved != 0) return saved;
             if (!homeApps.isEmpty()) {   // NZB-CC: home_apps sets the order until the owner moves something
                 int ra = homeRank(a.pkg, a.label), rb = homeRank(b.pkg, b.label);
+                // NZB-CC: HAL's tile comes right after the home_apps
+                if (ra < 0 && a.component.getClassName().endsWith(".HalActivity")) ra = homeApps.size();
+                if (rb < 0 && b.component.getClassName().endsWith(".HalActivity")) rb = homeApps.size();
                 if (ra < 0) ra = Integer.MAX_VALUE;   // added from the library: after the home_apps
                 if (rb < 0) rb = Integer.MAX_VALUE;
                 if (ra != rb) return Integer.compare(ra, rb);

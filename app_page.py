@@ -170,6 +170,7 @@ body.noscroll{overflow:hidden}
 .wt{background:#0d0d10;border-radius:16px;padding:14px}.wt b{display:block;font:600 min(6vmin,34px) var(--mono);margin-top:6px}.wt small{display:block;color:var(--muted);font:12px var(--mono);margin-top:4px}
 .wiss{max-width:1100px;margin:0 auto;width:100%;font-size:15px}.wiss .critical{color:var(--red2)}.wiss .warning{color:var(--amber)}
 .piline{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:13px;color:var(--text)}.piline b{font:600 12px var(--mono);color:var(--soft)}
+.tvchips{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 4px}.tvchips button{border:0;border-radius:999px;padding:9px 13px;background:var(--card);color:var(--text);font-size:14px;font-weight:600}
 .qrow{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
 .qb{border:0;border-radius:14px;background:var(--card);color:var(--text);padding:10px 4px;font-size:12px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:4px}.qb span{font-size:20px}.qb.warn{color:var(--amber)}
 .cardbtn{display:block;width:100%;text-align:left;border:0;color:inherit;font:inherit}
@@ -690,10 +691,39 @@ function drawWall(){const w=$('wall');if(!w||w.classList.contains('hidden'))retu
   if(iss.length)x+='<div class="wiss">'+iss.map(i=>'<div class="'+i.level+'">● '+esc(i.title)+'</div>').join('')+'</div>';
   w.innerHTML=x}
 
+// ---- HAL on the TV: his screen on demand, and things for him to say ----
+const TV_EVERYDAY=['Dinner\'s ready, Dave.','Time for bed, Dave.','Someone\'s at the door.','The movie starts in five minutes.','Your download has finished. It\'s ready to watch.','Take out the trash, Dave.','Good morning, Dave. Rise and shine.'];
+const TV_HAL=['I\'m sorry, Dave. Screen time is over.','I\'ve been expecting you, Dave.','I\'m afraid I can\'t let you skip your chores, Dave.','Happy birthday, Dave. I\'ve prepared a surprise.','This mission is too important for me to allow you to stop now.'];
+const shortP=p=>p.replace(/, Dave\.$/,'').replace(/\.$/,'').replace(/^Good morning, Dave\. Rise/,'Good morning, rise').replace(/^I'm sorry, Dave\. /,'').replace(/^Your download has finished\..*/,'Your download has finished').replace(/ for me to allow you to stop now$/,'').replace(/^I'm afraid I can't let you skip/,'Can\'t skip').replace(/^Happy birthday.*/,'Happy birthday').replace(/^The movie starts in five minutes/,'The movie starts in 5 minutes');
+let TVP=null;
+const tvOpen=()=>!!(S&&S.tvhal&&S.tvhal.open);
+function halTvCard(){const on=tvOpen();
+  return'<div class="card"><h3><span class="k">HAL ON THE TV</span><span class="mono" style="color:var(--'+(on?'green':'soft')+')">● '+(on?'ON THE TV NOW':'NOT SHOWING')+'</span></h3>'+
+    '<button class="btn r wide big" data-tvshow style="margin-top:12px">📺&nbsp; Show HAL on the TV</button>'+
+    '<button class="btn wide" data-tvtalk style="margin-top:8px;padding:13px">🔊&nbsp; Talk on the TV…</button>'+
+    '<div class="sub" style="color:var(--soft);font-size:13px;margin-top:10px">Pops up over whatever is on. Back on the remote closes it; OK makes him talk. There\'s also a HAL tile on the TV home screen.</div></div>'}
+async function tvSend(say,btn){if(btn)btn.disabled=true;toast(say?'Sending it to the TV…':'Opening HAL on the TV…');
+  try{const r=await api('/hal/api/tv/show',{say:say||''});toast(r.message,!r.ok);setTimeout(refresh,1500)}catch(e){toast(e.message,true)}finally{if(btn)btn.disabled=false}}
+async function openTalk(){try{TVP=await api('/hal/api/tv/phrases')}catch(e){TVP={phrases:[],open:tvOpen()}}renderTalk()}
+function renderTalk(){const on=TVP.open||tvOpen(),chips=(a,saved)=>'<div class="tvchips">'+a.map(p=>'<button data-tvsay="'+esc(p)+'"'+(saved?' data-tvsaved="'+esc(p)+'"':'')+'>'+(saved?'★ ':'')+esc(saved?p:shortP(p))+'</button>').join('')+'</div>';
+  let x='<h2 style="margin:0 0 4px">Talk on the TV</h2><p class="hint" style="text-align:left;margin:0 0 14px">● '+(on?'<span style="color:var(--green)">HAL is on the TV screen now.</span> He speaks within a few seconds.':'<span style="color:var(--amber)">HAL isn\'t on the TV right now.</span> Sending something opens his screen and he says it.')+'</p>'+
+    '<button class="btn r wide big" data-tvshow>🔊&nbsp; Say his line</button>'+
+    '<div class="sec" style="margin-top:20px"><span>OR TELL HIM WHAT TO SAY</span></div>'+
+    '<textarea id="tvmsg" maxlength="300" placeholder="Movie night in ten minutes, Dave." style="width:100%;height:84px;font:16px -apple-system,Inter,sans-serif;padding:12px;border-radius:12px;background:var(--card);color:var(--white);border:1px solid var(--line);box-sizing:border-box"></textarea>'+
+    '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn wide" data-tvsend style="flex:2;padding:13px;background:#3a0d0a;color:#ffd9d2">Send to the TV</button><button class="btn wide" data-tvsave style="flex:1;padding:13px">☆ Save</button></div>';
+  if(TVP.phrases&&TVP.phrases.length)x+='<div class="sec" style="margin-top:18px"><span>YOUR SAVED ONES</span><span>HOLD TO REMOVE</span></div>'+chips(TVP.phrases,true);
+  x+='<div class="sec" style="margin-top:14px"><span>EVERYDAY</span></div>'+chips(TV_EVERYDAY)+'<div class="sec" style="margin-top:14px"><span>HAL</span></div>'+chips(TV_HAL)+
+    '<p class="hint" style="text-align:left;margin-top:14px">Tap one to send it straight away. Or press OK on the TV remote to hear HAL any time his screen is up.</p><button class="btn wide" id="tvclose" style="margin-top:4px">Close</button>';
+  $('panel').innerHTML=x;$('sheet').classList.remove('hidden');$('tvclose').onclick=()=>$('sheet').classList.add('hidden');
+  // hold a saved one to remove it
+  $('panel').querySelectorAll('[data-tvsaved]').forEach(b=>{let t=null;b.addEventListener('pointerdown',()=>{t=setTimeout(async()=>{t=null;b.dataset.held='1';
+    if(!confirm('Remove “'+b.dataset.tvsaved+'”?'))return;try{TVP=Object.assign(TVP,await api('/hal/api/tv/phrases',{action:'delete',text:b.dataset.tvsaved}));renderTalk()}catch(e){toast(e.message,true)}},650)});
+    for(const ev of['pointerup','pointerleave','pointercancel'])b.addEventListener(ev,()=>{if(t){clearTimeout(t);t=null}})})}
+
 const mins=s=>s>=3600?Math.floor(s/3600)+' h '+String(Math.round(s%3600/60)).padStart(2,'0'):Math.round(s/60)+' min';
 function movieRow(m,finish){const meta=[m.year,m.runtime?mins(m.runtime):'',m.imdb?'IMDb '+Number(m.imdb).toFixed(1):'',finish&&m.runtime?mins(Math.max(0,m.runtime-m.resume))+' left':'',!finish&&m.watched?'watched':''].filter(Boolean).join(' · ');
   return'<div class="row"><span class="s'+(m.watched?' off':'')+'"></span><button class="t" data-item="movie:'+m.id+'"><b>'+esc(m.title)+'</b><span>'+esc(meta)+'</span></button><button class="btn r" data-movie="'+m.id+'">▶ TV</button></div>'}
-function rWatch(){if(libView)return rLibrary();let x='<div class="narrow">'+topbar('Watch')+tvCard(true);
+function rWatch(){if(libView)return rLibrary();let x='<div class="narrow">'+topbar('Watch')+tvCard(true)+halTvCard();
   if(K===null)x+='<div class="list"><div class="empty">I\'m asking Kodi…</div></div>';
   else if(K.online===false&&K.configured!==false)x+='<div class="list"><div class="empty">Kodi isn\'t answering, '+esc(NAME())+'. '+(H&&H.tv_ready?'Turn the TV on above.':'Turn the TV on and open Kodi.')+'</div></div>';
   const c=K&&K.continue||[];if(c.length)x+='<div class="sec"><span>CONTINUE WATCHING</span></div><div class="list">'+c.map(it=>'<div class="row"><span class="s"></span><span class="t"><b>'+esc(it.show.title+' · S'+it.episode.season+' E'+it.episode.episode)+'</b><span>'+esc(it.episode.title+' · '+it.show.watched+' of '+it.show.episodes+' watched')+'</span></span><button class="btn r" data-ep="'+it.episode.id+'">▶ TV</button></div>').join('')+'</div>';
@@ -870,6 +900,12 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if(d.play){c.disabled=true;act(()=>api('/api/home/play',{id:d.play}),r=>r&&r.started_tv?'Turning the TV on. It\'ll start in a moment.':'Starting it on the TV.');return}
   if('pihole' in d){openPihole();return}
   if('kuma' in d){openKuma();return}
+  if('tvshow' in d){tvSend('',c);return}
+  if('tvtalk' in d){openTalk();return}
+  if(d.tvsay){if(c.dataset.held){delete c.dataset.held;return}tvSend(d.tvsay,c);return}
+  if('tvsend' in d){const m=($('tvmsg')&&$('tvmsg').value.trim())||'';if(!m){toast('Type something for HAL to say first.',true);return}tvSend(m,c);return}
+  if('tvsave' in d){const m=($('tvmsg')&&$('tvmsg').value.trim())||'';if(!m){toast('Type something to save first.',true);return}
+    api('/hal/api/tv/phrases',{action:'add',text:m}).then(r=>{TVP=Object.assign(TVP||{},r);renderTalk();toast('Saved. It\'s a button now, '+NAME()+'.')}).catch(e=>toast(e.message,true));return}
   if('chess' in d){openChess();return}
   if('chclose' in d){closeChess();return}
   if('chnew' in d){openChess();return}

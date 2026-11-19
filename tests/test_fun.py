@@ -91,4 +91,24 @@ assert tb["say"].startswith("Good") and "Z:" not in tb["say"] and "%" not in tb[
 assert tb["alerts"] and all(a["level"] in ("warning", "critical") for a in tb["alerts"]) and len(tb["alerts"]) <= 3
 assert tb["kuma_total"] == 12 and tb["kuma_up"] == 11 and tb["internet_down"] is False and tb["downloading"].startswith("downloading")
 print("tv ok")
+# ---- HAL on the TV, on demand ----
+assert len(tb["lines"]) >= 2 and all(l["text"] and l["say"] for l in tb["lines"])
+h5 = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=type("RealishMonitor", (hs.DemoMonitor,), {})(), start_threads=False)
+sent = []
+hs.tv_adb = lambda cmd, timeout=30: (sent.append(cmd), (True, "Starting: Intent { cmp=com.gathin.tvhome/.HalActivity }"))[1]
+r = hs.tv_show(h5, "Dinner's ready,   Dave.")
+assert r["ok"] and h5.status()["tvhal"]["open"] is True
+import base64 as _b64
+assert sent[-1].startswith("am start -n com.gathin.tvhome/.HalActivity") and "--es say_b64 " in sent[-1]
+assert _b64.b64decode(sent[-1].split("say_b64 ")[1]).decode() == "Dinner's ready, Dave."
+assert "'" not in sent[-1].split("say_b64 ")[1]                                    # nothing for the TV's shell to trip on
+hs.tv_show(h5, "")
+assert "say_b64" not in sent[-1]
+hs.tv_adb = lambda cmd, timeout=30: (True, "Error type 3\nError: Activity class {com.gathin.tvhome/com.gathin.tvhome.HalActivity} does not exist.")
+r = hs.tv_show(h5, "hi")
+assert not r["ok"] and "older app" in r["message"]
+hs.tv_adb = lambda cmd, timeout=30: (False, "The TV didn't answer in time. Is it on?")
+assert "Is it on?" in hs.tv_show(h5, "")["message"]
+assert hs.siri_intent("show yourself on the TV") == "tv_show" and hs.siri_intent("turn on the tv") == "tv_on"
+print("tv on demand ok")
 print("\nALL FUN TESTS PASSED")
