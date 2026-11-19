@@ -45,7 +45,11 @@ assert any("drive Z: is 91% full" in hs.hal_quote(one, "Dave", now=t) or "except
            or "Drive Z: is 91% full" in hs.hal_quote(one, "Dave", now=t) for t in (0,))
 many = one + [{"level": "warning", "title": "x"}]
 assert "2" in hs.hal_quote(many, "Dave", now=0)
-assert "small thing" in hs.hal_quote([{"level": "info", "title": "Windows wants a restart"}], "Dave", now=0)
+for t in range(0, 180 * 6, 180):   # with only a small thing, HAL says what it is (so it can be found)
+    q = hs.hal_quote([{"level": "info", "title": "Windows wants a restart"}], "Dave", now=t)
+    assert "Windows wants a restart" in q, q
+assert "2 small things" in hs.hal_quote([{"level": "info", "title": "a"}, {"level": "info", "title": "b"}], "Dave", now=0)
+assert "I can't reach the router" in hs.hal_quote([{"level": "warning", "title": "I can't reach the router"}], "Dave", now=360)
 print("voice ok")
 
 # ---------------- helpers ----------------
