@@ -68,8 +68,12 @@ function TvSync {
         Say "The TV app was updated too." Green
         return " The TV app was updated too."
     }
-    Say "The TV app couldn't be updated (is the TV on?). It'll try again next time." Yellow
-    return " The TV app couldn't be updated (is the TV on?); it'll try again next time."
+    # Say why, in the TV script's own words (its last line), instead of guessing.
+    $why = @($tvOut -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch '^(At |\+ |CategoryInfo|FullyQualifiedErrorId|~)' })
+    $why = if ($why.Count) { $why[-1] -replace '^.*?:\s*(?=[A-Z])', '' } else { "no answer from the TV" }
+    if ($why.Length -gt 160) { $why = $why.Substring(0, 160) + "..." }
+    Say "The TV app couldn't be updated: $why It'll try again next time." Yellow
+    return " The TV app couldn't be updated: $why Run tv-launcher\install-on-tv.ps1 -TvHost $tvHost -UpdateOnly on the PC to see more; updates try again next time."
 }
 
 function Result($state, $msg, $files) {
