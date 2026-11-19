@@ -2071,6 +2071,11 @@ h1{font-size:26px;margin:0 0 12px}
 .eye::before{content:"";position:absolute;inset:23px;border-radius:50%;
  background:radial-gradient(circle,#FFF6C8 0 5%,#FFC14A 9%,#FF3B1F 20%,#C80E08 38%,#5A0402 62%,#140000 80%,#000 100%);
  box-shadow:0 0 40px 6px rgba(255,42,31,.35),inset 0 0 18px #000;animation:breathe 6s ease-in-out infinite}
+.eye.talking::before{animation:none!important;filter:brightness(var(--b,1)) saturate(calc(.9 + .1*var(--b,1)));
+ box-shadow:0 0 calc(40px*var(--b,1)) calc(6px*var(--b,1)) rgba(255,42,31,calc(.22*var(--b,1))),inset 0 0 18px #000}
+.eye.sm.talking::before{box-shadow:0 0 calc(12px*var(--b,1)) calc(2px*var(--b,1)) rgba(255,42,31,calc(.25*var(--b,1)))}
+button.eye{border:0;padding:0;cursor:pointer}
+.tap{font:600 10px var(--mono);letter-spacing:.14em;color:#52525b;margin:-8px 0 14px;text-align:center}
 .eye::after{content:"";position:absolute;left:44px;top:36px;width:40px;height:22px;border-radius:50%;background:radial-gradient(ellipse,rgba(255,255,255,.22),transparent 70%);transform:rotate(-25deg)}
 .eye.warning{box-shadow:0 0 0 2px #2c2c31,0 0 0 7px #0d0d0f,0 0 0 8px #3b3b42,0 0 0 11px rgba(251,191,36,.55),0 20px 60px rgba(251,191,36,.12)}
 .eye.critical::before{animation:alarm 1.1s ease-in-out infinite}
@@ -2084,6 +2089,9 @@ h1{font-size:26px;margin:0 0 12px}
 @media (prefers-reduced-motion:reduce){.eye::before{animation:none!important}}
 .greet{font:600 11px var(--mono);letter-spacing:.14em;color:var(--muted);margin-top:18px;text-transform:uppercase}
 .quote{font-size:16px;font-style:italic;color:var(--text);text-align:center;margin:8px 8px 4px;min-height:44px}
+#hquote{min-height:68px;display:flex;align-items:center;justify-content:center}
+.quote .caret{display:inline-block;width:2px;height:1em;background:var(--red2);vertical-align:-2px;margin-left:2px;animation:blink .8s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
 .qsub{font:600 11px var(--mono);color:var(--muted);letter-spacing:.1em;text-align:center;margin-bottom:14px}
 /* building blocks */
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
@@ -2169,8 +2177,8 @@ input.field{width:100%;background:var(--card);border:1px solid #26262b;border-ra
 </style></head><body>
 
 <div id="pair" class="hidden">
-  <div class="eyewrap"><div class="eye"></div></div>
-  <p class="quote" style="margin-top:26px">“I'm sorry, Dave. I can't let you in without the access code.”</p>
+  <div class="eyewrap"><div class="eye" id="peye"></div></div>
+  <p class="quote" id="pquote" style="margin-top:26px">“I'm sorry, Dave. I can't let you in without the access code.”</p>
   <p style="font-size:14px;color:var(--soft)">It's the same code as the NZB phone app. The PC shows it when HAL starts (or open <b>mobile_access_key.txt</b> next to hal_server.py).</p>
   <input id="code" class="field" placeholder="Access code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="margin:14px 0 10px">
   <button id="connect" class="btn red wide">Open the pod bay doors</button>
@@ -2208,7 +2216,8 @@ const fr=b=>b==null?'—':(b*8/1e6>=10?(b*8/1e6).toFixed(0):(b*8/1e6).toFixed(1)
 const f0=(n,s='')=>n==null||isNaN(n)?'—':Math.round(n)+s;
 function dur(s){if(s==null)return'—';s=Math.max(0,Math.round(s));if(s<90)return s+' s';if(s<5400)return Math.round(s/60)+' min';if(s<36000)return Math.floor(s/3600)+' h'+(s%3600>=60?' '+Math.floor(s%3600/60)+' min':'');if(s<172800)return Math.round(s/3600)+' h';return Math.floor(s/86400)+' d '+Math.floor(s%86400/3600)+' h'}
 function ago(t){if(!t)return'';const d=Date.now()/1000-t;if(d<60)return'just now';if(d<3600)return Math.round(d/60)+' min ago';const dt=new Date(t*1000),now=new Date();const tm=dt.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});if(dt.toDateString()===now.toDateString())return'Today '+tm;const y=new Date(now-864e5);if(dt.toDateString()===y.toDateString())return'Yesterday '+tm;return dt.toLocaleDateString([],{month:'short',day:'numeric'})+' '+tm}
-function toast(msg,bad){const t=$('toast');t.textContent=msg;t.className='on'+(bad?' bad':'');clearTimeout(toast.h);toast.h=setTimeout(()=>t.className='',3600)}
+function toast(msg,bad){const t=$('toast');t.textContent=msg;t.className='on'+(bad?' bad':'');clearTimeout(toast.h);toast.h=setTimeout(()=>t.className='',3600);
+  const sec=document.querySelector('main section:not(.hidden)');if(sec)murmur(sec.querySelector('.eye'),Math.min(2600,400+msg.length*45))}
 async function api(path,body){
   const o={headers:{'X-Mobile-Token':token}};
   if(body!==undefined){o.method='POST';o.headers['Content-Type']='application/json';o.body=JSON.stringify(body)}
@@ -2218,7 +2227,7 @@ async function api(path,body){
 function showPair(msg){$('app').classList.add('hidden');$('tabs').classList.add('hidden');$('pair').classList.remove('hidden');$('perr').textContent=msg&&token?msg:''}
 async function connect(){const v=$('code').value.trim();if(!v)return;token=v;$('perr').textContent='';
   try{await api('/api/status');try{localStorage.setItem('hal_token',v)}catch(e){}$('pair').classList.add('hidden');start()}
-  catch(e){$('perr').textContent=e.message}}
+  catch(e){$('perr').textContent='';talk($('peye'),$('pquote'),e.message,false)}}
 $('connect').onclick=connect;$('code').onkeydown=e=>{if(e.key==='Enter')connect()};
 
 /* ---------- drawing helpers ---------- */
@@ -2237,10 +2246,9 @@ function rStatus(){
   const h=S.hal,v=S.vitals,n=S.net,g=(v.gpus||[])[0];
   const alerts=S.issues.filter(i=>LV[i.level]>=2).slice(0,4),notes=S.issues.filter(i=>i.level==='info');
   const sysBad=S.systems.filter(x=>LV[x.level]>=2).length;
-  let x='<div class="top"><span class="brand"><b>HAL</b> 9000</span><button class="iconbtn" data-go="log" aria-label="Log and controls">'+svg('bell','#D4D4D8')+(S.unread?'<i></i>':'')+'</button></div>';
-  if(S.power.shutdown_at&&S.power.shutdown_at>S.now)x+='<div class="banner"><b>Shutting down in '+Math.max(0,Math.round(S.power.shutdown_at-S.now))+' s</b><button class="btn red" data-act="cancel_shutdown">Cancel</button></div>';
-  x+='<div class="eyewrap"><div class="eye '+h.level+'"></div><div class="greet">'+esc(h.greeting)+'</div><div class="quote">“'+esc(h.quote)+'”</div>'+
-     '<div class="qsub">UP '+esc(dur(S.uptime).toUpperCase())+' · '+esc(S.host.toUpperCase())+(lastOk?' · LIVE':'')+'</div></div>';
+  let head='<div class="top"><span class="brand"><b>HAL</b> 9000</span><button class="iconbtn" data-go="log" aria-label="Log and controls">'+svg('bell','#D4D4D8')+(S.unread?'<i></i>':'')+'</button></div>';
+  if(S.power.shutdown_at&&S.power.shutdown_at>S.now)head+='<div class="banner"><b>Shutting down in '+Math.max(0,Math.round(S.power.shutdown_at-S.now))+' s</b><button class="btn red" data-act="cancel_shutdown">Cancel</button></div>';
+  let x='';
   x+=alerts.map(i=>'<button class="alert '+i.level+'" data-go="'+esc(i.tab)+'"><span class="s '+i.level+'"></span><span><b>'+esc(i.title)+'</b>'+(i.detail?'<p>'+esc(i.detail)+'</p>':'')+'</span></button>').join('');
   if(notes.length)x+='<button class="alert info" data-go="'+esc(notes[0].tab)+'"><span class="s info"></span><span><b>'+(notes.length>1?notes.length+' small things':'One small thing')+'</b><p>'+esc(notes.map(i=>i.title).join(' · '))+'</p></span></button>';
   const ct=lvlOf(v.cpu.temp,v.limits.cpu_temp-10,v.limits.cpu_temp);
@@ -2251,7 +2259,58 @@ function rStatus(){
    '<button class="tile" data-go="shield"><div class="k">INTERNET</div><div class="v">'+f0(n.ping_ms)+'<small> ms · '+f0(n.loss,'%')+' loss</small></div><div class="bar"><i class="sky" style="width:'+Math.min(100,(n.down||0)/1.25e6)+'%"></i></div></button></div>';
   x+='<div class="sec"><span>CRITICAL SYSTEMS</span><span class="r" style="color:'+(sysBad?'var(--amber)':'var(--green)')+'">'+(S.systems.length-sysBad)+' / '+S.systems.length+' NOMINAL</span></div><div class="list">'+
    S.systems.map(s=>'<button class="row" data-go="'+s.tab+'"><span class="s '+s.level+'"></span><span class="t"><b>'+esc(s.name)+'</b><span>'+esc(s.detail)+'</span></span><span class="m'+(s.level!=='ok'?'" style="color:var(--'+(s.level==='critical'?'red2':'amber')+')':'"')+'>'+esc(s.count||(s.level==='ok'?'OK':s.level.toUpperCase()))+'</span></button>').join('')+'</div>';
-  return x}
+  return {head,body:x}}
+
+/* ---------- HAL talks: the eye flickers with the words (and speaks aloud when tapped) ---------- */
+let lastQuote='',talkRun=null,voiceOn=false;
+const REDUCE=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const CAN_SPEAK='speechSynthesis' in window&&'SpeechSynthesisUtterance' in window;
+function pickVoice(){if(!CAN_SPEAK)return null;const vs=speechSynthesis.getVoices().filter(v=>/^en/i.test(v.lang));
+  return vs.find(v=>/daniel|arthur|aaron|fred|alex|google uk english male|male/i.test(v.name))||vs.find(v=>/en-GB/i.test(v.lang))||vs[0]||null}
+if(CAN_SPEAK)speechSynthesis.onvoiceschanged=()=>{};
+function stopTalk(){if(talkRun){talkRun.stop();talkRun=null}if(CAN_SPEAK&&voiceOn){speechSynthesis.cancel();voiceOn=false}}
+// Types text into textEl while the eye's light rises on vowels and dips at spaces and punctuation.
+function talk(eye,textEl,text,speak){
+  if(talkRun)talkRun.stop();
+  const wrap=s=>'“'+esc(s)+'”';
+  if(REDUCE&&!speak){textEl.innerHTML=wrap(text);return}
+  let raf=0,stopped=false,cur=1,target=1,next=0,bIdx=-1,spoken=false;const t0=performance.now();
+  const cps=speak?14:30;
+  if(speak&&CAN_SPEAK){const u=new SpeechSynthesisUtterance(text);u.rate=.86;u.pitch=.6;u.volume=1;const v=pickVoice();if(v)u.voice=v;
+    u.onboundary=e=>{if(e.charIndex!=null)bIdx=e.charIndex};u.onend=u.onerror=()=>{voiceOn=false};
+    speechSynthesis.cancel();voiceOn=true;spoken=true;speechSynthesis.speak(u)}
+  eye.classList.add('talking');
+  const run={stop(){stopped=true;cancelAnimationFrame(raf);eye.classList.remove('talking');eye.style.removeProperty('--b');textEl.innerHTML=wrap(text)}};
+  talkRun=run;
+  function frame(now){
+    if(stopped)return;
+    let idx=Math.floor((now-t0)/1000*cps);
+    if(bIdx>=0){const end=text.slice(bIdx).search(/\s/);idx=Math.max(Math.min(idx,text.length),end<0?text.length:bIdx+end)}
+    const shown=Math.min(text.length,idx);
+    const busy=spoken?voiceOn:shown<text.length;
+    textEl.innerHTML='“'+esc(text.slice(0,shown))+(busy&&shown<text.length?'<span class="caret"></span>':'”');
+    if(busy){if(now>=next){const ch=text[Math.max(0,shown-1)]||' ';
+        target=/[aeiouyAEIOUY]/.test(ch)?1.5+Math.random()*.45:/[\s,.;:!?—\-]/.test(ch)?.72+Math.random()*.1:1.12+Math.random()*.25;
+        next=now+55+Math.random()*85}}
+    else target=1;
+    cur+=(target-cur)*.32;eye.style.setProperty('--b',cur.toFixed(3));
+    if(!busy&&Math.abs(cur-1)<.015){run.stop();if(talkRun===run)talkRun=null;return}
+    raf=requestAnimationFrame(frame)}
+  raf=requestAnimationFrame(frame)}
+// A short flicker of a small eye (when HAL answers with a message).
+function murmur(eye,ms){if(!eye||REDUCE)return;let cur=1,t0=performance.now(),next=0,target=1;eye.classList.add('talking');
+  (function f(now){if(!eye.isConnected)return;const on=now-t0<ms;if(on&&now>=next){target=Math.random()<.35?.75:1.3+Math.random()*.5;next=now+60+Math.random()*90}if(!on)target=1;
+    cur+=(target-cur)*.3;eye.style.setProperty('--b',cur.toFixed(3));if(!on&&Math.abs(cur-1)<.015){eye.classList.remove('talking');eye.style.removeProperty('--b');return}requestAnimationFrame(f)})(t0)}
+function renderStatus(){
+  const el=$('t-status');
+  if(!$('hero')){el.innerHTML='<div id="hhead"></div><div class="eyewrap" id="hero"><button class="eye" id="heye" aria-label="Hear HAL"></button><div class="greet" id="hgreet"></div><div class="quote" id="hquote"></div><div class="qsub" id="hsub"></div>'+(CAN_SPEAK?'<div class="tap" id="htap">TAP HAL TO HEAR HIM</div>':'')+'</div><div id="hbody"></div>';
+    $('heye').onclick=()=>{if(voiceOn){stopTalk();return}talk($('heye'),$('hquote'),lastQuote,true);const t=$('htap');if(t)t.classList.add('hidden')}}
+  const r=rStatus(),h=S.hal,eye=$('heye');
+  $('hhead').innerHTML=r.head;$('hbody').innerHTML=r.body;
+  eye.className='eye '+h.level+(eye.classList.contains('talking')?' talking':'');
+  $('hgreet').textContent=h.greeting;
+  $('hsub').textContent='UP '+dur(S.uptime).toUpperCase()+' · '+S.host.toUpperCase()+(lastOk?' · LIVE':'');
+  if(h.quote!==lastQuote){lastQuote=h.quote;if(!voiceOn)talk(eye,$('hquote'),lastQuote,false)}}
 
 /* ---------- Vitals ---------- */
 function rVitals(){
@@ -2425,7 +2484,7 @@ $('tabs').onclick=e=>{const b=e.target.closest('button');if(b)show(b.dataset.tab
 function show(t){tab=t;['status','vitals','services','drives','shield','log'].forEach(k=>$('t-'+k).classList.toggle('hidden',k!==t));
   document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.tab===(t==='log'?'status':t)));
   window.scrollTo(0,0);if(t==='log'){events=null;loadEvents()}if(t==='vitals')loadHist(true);if(t==='drives')loadCleanup();render()}
-function render(){if(!S)return;const f={status:rStatus,vitals:rVitals,services:rServices,drives:rDrives,shield:rShield,log:rLog}[tab];
+function render(){if(!S)return;if(tab==='status'){renderStatus();return}const f={vitals:rVitals,services:rServices,drives:rDrives,shield:rShield,log:rLog}[tab];
   const el=$('t-'+tab);el.innerHTML=f();el.querySelectorAll('[data-hold]').forEach(bindHold)}
 async function loadEvents(){try{events=(await api('/api/events')).events;if(S)S.unread=0;if(tab==='log')render()}catch(e){}}
 async function loadHist(force){if(!force&&range!=='live'&&Date.now()-histAt<60000)return;try{hist=(await api('/api/history?range='+range)).series;histAt=Date.now();if(tab==='vitals')render()}catch(e){}}
