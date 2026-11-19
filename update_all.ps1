@@ -146,6 +146,21 @@ try {
     if ($changed.Count) { Say "Old copies: $backup" }
     Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 
+    # --- HAL 9000 inside the phone server (mobile_server.py 3.12+): make sure its Python has psutil ---
+    $embedded = [bool](Select-String -Path (Join-Path $Folder "mobile_server.py") -Pattern 'def start_embedded_hal' -Quiet)
+    if ($embedded) {
+        $pexe = if ($hasTask) { (Get-ScheduledTask -TaskName $TaskName).Actions[0].Execute } else { $exe }
+        $pp = if ($pexe) { Join-Path (Split-Path $pexe) "python.exe" } else { $python }
+        if ($pexe -and (Split-Path $pexe -Leaf) -match '^pyw?\.exe$') { $pp = Join-Path (Split-Path $pexe) "py.exe" }
+        if (-not (Works $pp)) { $pp = $python }
+        if ($pp) {
+            $ErrorActionPreference = 'Continue'
+            & $pp -c "import psutil" 2>$null
+            if ($LASTEXITCODE -ne 0) { Say "Installing psutil (HAL 9000 needs it)..."; & $pp -m pip install --quiet psutil 2>&1 | Out-Null }
+            $ErrorActionPreference = 'Stop'
+        }
+    }
+
     # --- 5. Start the phone server again ---
     if ($hasTask) {
         Start-ScheduledTask -TaskName $TaskName
@@ -160,7 +175,15 @@ try {
         } else { Say "Start the phone server the way you usually do." Yellow }
     } else { Say "The phone server wasn't running; start it the way you usually do." Yellow }
 
-    if ($hasHal) { Start-ScheduledTask -TaskName $HalTask; Say "HAL 9000 started again." Green }
+    if ($hasHal) {
+        $phoneAuto = $hasTask -or (Test-Path (Join-Path ([Environment]::GetFolderPath("Startup")) "NZB Mobile Server.vbs"))
+        if ($embedded -and $phoneAuto) {
+            # HAL runs inside the phone server now: the separate task would only start a second copy.
+            Unregister-ScheduledTask -TaskName $HalTask -Confirm:$false -ErrorAction SilentlyContinue
+            Say "HAL 9000 now runs inside the phone server (one program, one startup, one log)." Green
+            Say "Removed the separate '$HalTask' task. Your HAL icon keeps working; HAL is also at /hal on the phone server's address."
+        } else { Start-ScheduledTask -TaskName $HalTask; Say "HAL 9000 started again." Green }
+    }
 
     $v = if ((Get-Content (Join-Path $Folder "mobile_server.py") -Raw) -match 'VERSION = "([\d.]+)"') { $Matches[1] } else { "?" }
     Say "`nDone. Phone app version $v. Open the desktop apps again, and reopen the app on your phone." Cyan

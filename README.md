@@ -41,6 +41,10 @@ Run as administrator to see drive temperatures and wear.
 > "I am putting myself to the fullest possible use, which is all I think that any conscious entity can ever hope to do."
 
 `hal_server.py` is a second phone app, just for keeping an eye on the PC (HAL9000) and everything running on it.
+From phone app 3.12 it runs **inside the NZB phone server** (one program, one startup task, one log: `mobile_server.log`):
+open `http://<your-pc>:8765/hal/` on the phone, or HAL's own port 8766 as before (your HAL icon keeps working).
+`update_all.ps1` (or `setup_hal_startup.ps1`) moves an existing HAL over and removes the separate "HAL 9000 Server" task.
+Pair at `http://localhost:8765/hal/pair` on the PC. `python mobile_server.py --no-hal` runs the phone app without HAL.
 It needs `psutil` and `system_monitor.py` (the System Command Center's monitor) in the same folder.
 
 ```powershell

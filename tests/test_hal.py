@@ -486,4 +486,50 @@ v = dh.winevents_view()
 assert v["windows"] and v["summary"]["cats"]["drives"] == 6 and v["events"] and "drives" in v["cats"]
 json.dumps(v)
 print("windows events ok")
+
+# ---------------- HAL inside the NZB phone server (/hal) ----------------
+import mobile_server as ms
+assert ms._hal_mod is hs and issubclass(ms.MobileHandler, hs.HalRoutes)
+ms._token_bytes = token.encode()
+hs._token_bytes = token.encode()
+hs.HAL = hs.make_demo_hal()
+msrv = ThreadingHTTPServer(("127.0.0.1", 0), ms.MobileHandler)
+threading.Thread(target=msrv.serve_forever, daemon=True).start()
+port = msrv.server_address[1]
+ms._hal_state.update(running=False, note="turned off (--no-hal)")
+code, body, _ = call("/hal/", tok=None)
+assert code == 503 and b"turned off" in body
+assert call("/hal/api/status")[0] == 503
+ms._hal_state.update(running=True, note="running")
+req = urllib.request.Request(f"http://127.0.0.1:{port}/hal")
+class NoRedir(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None
+try:
+    urllib.request.build_opener(NoRedir).open(req, timeout=5)
+    raise AssertionError("no redirect")
+except urllib.error.HTTPError as e:
+    assert e.code == 302 and e.headers["Location"] == "/hal/"
+code, body, _ = call("/hal/", tok=None)
+assert code == 200 and b"const B='/hal'" in body and b'href="/hal/manifest.webmanifest"' in body and b"__BASE__" not in body
+assert f"localhost:{port}/hal/pair".encode() in body
+man = json.loads(call("/hal/manifest.webmanifest", tok=None)[1])
+assert man["start_url"] == "/hal/" and man["scope"] == "/hal/" and man["icons"][0]["src"] == "/hal/icon.png"
+assert call("/hal/icon-512.png", tok=None)[1][:4] == b"\x89PNG"
+assert call("/hal/api/status", tok=None)[0] == 401
+code, body, _ = call("/hal/api/status")
+assert code == 200 and json.loads(body)["version"] == hs.VERSION
+assert call("/hal/api/settings", {"name": "Frank"})[0] == 200 and hs.HAL.settings["name"] == "Frank"
+assert f":{port}/hal/".encode() in call("/hal/pair", tok=None)[1]
+hs.PAIRING.current()
+code, body, _ = call("/hal/api/pair", {"pin": hs.PAIRING.pin}, tok=None)
+assert code == 200 and json.loads(body)["token"] == token
+assert call("/", tok=None)[0] == 200                         # the NZB app is still there
+assert call("/api/nope")[0] in (401, 404)                    # NZB routes keep their own sign-in
+args = ms.parse_args(["--no-hal"])
+assert args.no_hal and "--no-hal" in ms._autostart_args(args) and ms.start_embedded_hal(args).startswith("off")
+assert "--hal-port" in ms._autostart_args(ms.parse_args(["--hal-port", "9001"]))
+msrv.shutdown()
+print("hal inside the phone server ok")
+
 print("\nALL HAL TESTS PASSED")
