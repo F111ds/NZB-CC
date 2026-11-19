@@ -68,13 +68,15 @@ from pathlib import Path
 try:
     import psutil
 except ImportError:  # pragma: no cover - friendly message on a PC without psutil
+    if __name__ != "__main__":
+        raise           # imported by the NZB phone server: it carries on without HAL and says why
     print("HAL 9000 needs psutil. Install it with:  pip install psutil")
     sys.exit(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1990,6 +1992,11 @@ def run_action(hal: Hal, action: str, body: dict) -> dict:
         return {"ok": True, "message": "Demo mode: nothing was changed."}
     if action == "lock":
         ok, msg = sm.lock_workstation()
+        if not ok:
+            # A server started before anyone logged in (Task Scheduler "at startup") runs outside your desktop,
+            # where Windows doesn't allow locking it.
+            msg = (f"I'm afraid I can't lock the screen from here, {name}: I was started before you logged in, outside your desktop. "
+                   "Press Windows+L on the PC.")
     elif action == "sleep":
         ok, msg = sm.sleep_pc()
     elif action == "flush_dns":
@@ -2163,23 +2170,29 @@ SECURITY_HEADERS = {
     "Content-Security-Policy": ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; "
                                 "manifest-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"),
 }
-MANIFEST = json.dumps({
-    "id": "/", "name": "HAL 9000", "short_name": "HAL 9000", "start_url": "/", "scope": "/", "display": "standalone",
-    "background_color": "#050506", "theme_color": "#050506",
-    "icons": [{"src": "/icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any"},
-              {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}],
-}).encode("utf-8")
+def manifest(base: str = "") -> bytes:
+    """The home-screen app description. Under the NZB phone server HAL lives at /hal, so its id, start page
+    and scope are /hal/ and it installs as its own icon next to the NZB one."""
+    root = (base or "") + "/"
+    return json.dumps({
+        "id": root, "name": "HAL 9000", "short_name": "HAL 9000", "start_url": root, "scope": root, "display": "standalone",
+        "background_color": "#050506", "theme_color": "#050506",
+        "icons": [{"src": f"{base}/icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any"},
+                  {"src": f"{base}/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}],
+    }).encode("utf-8")
 
 
-class HalHandler(BaseHTTPRequestHandler):
-    server_version = f"HAL9000/{VERSION}"
-    sys_version = ""
-    timeout = CLIENT_SOCKET_TIMEOUT
+MANIFEST = manifest("")
 
-    def log_message(self, fmt, *args):
-        log.debug("%s %s", self.client_address[0], fmt % args)
 
-    def _send(self, status: int, raw: bytes, ctype: str, extra: dict | None = None) -> None:
+class HalRoutes:
+    """HAL's web pages and API, for any BaseHTTPRequestHandler: hal_server's own (HalHandler, at /) and the
+    NZB phone server's (at /hal). The helpers are prefixed _h_ so they never clash with the host's own."""
+
+    hal_base = ""   # "" when HAL has its own port, "/hal" inside the NZB phone server
+
+    # ---- low-level ----
+    def _h_send(self, status: int, raw: bytes, ctype: str, extra: dict | None = None) -> None:
         try:
             self.send_response(status)
             self.send_header("Content-Type", ctype)
@@ -2191,10 +2204,10 @@ class HalHandler(BaseHTTPRequestHandler):
         except OSError:
             pass
 
-    def send_json(self, status: int, data, extra: dict | None = None) -> None:
-        self._send(status, json.dumps(data, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8", extra)
+    def _h_json(self, status: int, data, extra: dict | None = None) -> None:
+        self._h_send(status, json.dumps(data, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8", extra)
 
-    def read_json(self) -> dict:
+    def _h_read(self) -> dict:
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -2206,18 +2219,21 @@ class HalHandler(BaseHTTPRequestHandler):
             raise ValueError("Expected a JSON object.")
         return value
 
-    def _gate(self, need_auth: bool) -> bool:
+    def _h_pair_url(self) -> str:
+        return f"http://localhost:{self.server.server_address[1]}{self.hal_base}/pair"
+
+    def _h_gate(self, need_auth: bool) -> bool:
         ip = self.client_address[0]
         if not is_client_allowed(ip):
             log.warning("Blocked request from %s", ip)
-            self.send_json(403, {"error": "I only talk to devices on your home network or Tailscale."})
+            self._h_json(403, {"error": "I only talk to devices on your home network or Tailscale."})
             return False
         if not need_auth:
             return True
         wait = AUTH_FAILURES.blocked_for(ip)
         if wait:
-            self.send_json(429, {"error": f"This conversation can serve no purpose anymore. Goodbye. (Try again in {wait} s.)"},
-                           {"Retry-After": str(wait)})
+            self._h_json(429, {"error": f"This conversation can serve no purpose anymore. Goodbye. (Try again in {wait} s.)"},
+                         {"Retry-After": str(wait)})
             return False
         raw = self.headers.get("X-Mobile-Token") or ""
         supplied = clean_code(raw).encode("utf-8")
@@ -2234,146 +2250,166 @@ class HalHandler(BaseHTTPRequestHandler):
                 hint = (f"You entered {len(supplied)} characters; the code on this PC has {len(expected)}"
                         + (", and it starts the same way, so check the end." if same_start else
                            ", and it starts differently, so it's a different code.") if supplied else "")
-                self.send_json(401, {"error": "Just what do you think you're doing, Dave? That isn't the access code. " + hint +
-                                     " Easier: type the 6-digit PIN from http://localhost:" + str(self.server.server_address[1]) + "/pair on the PC."})
+                self._h_json(401, {"error": "Just what do you think you're doing, Dave? That isn't the access code. " + hint +
+                                   " Easier: type the 6-digit PIN from " + self._h_pair_url() + " on the PC."})
             else:
-                self.send_json(401, {"error": "Enter the access code shown on the PC."})
+                self._h_json(401, {"error": "Enter the access code shown on the PC."})
             return False
         AUTH_FAILURES.clear(ip)
         return True
 
-    def _pair(self) -> None:
+    def _h_guarded(self, fn) -> None:
+        try:
+            fn()
+        except (ValueError, json.JSONDecodeError) as exc:
+            self._h_json(400, {"error": str(exc)})
+        except Exception:
+            log.exception("Error serving HAL %s %s", self.command, self.path)
+            self._h_json(500, {"error": "I'm afraid I can't do that. Something went wrong (see the log)."})
+
+    def _h_pair(self) -> None:
         ip = self.client_address[0]
-        if not self._gate(False):
+        if not self._h_gate(False):
             return
         wait = AUTH_FAILURES.blocked_for(ip)
         if wait:
-            self.send_json(429, {"error": f"This conversation can serve no purpose anymore. Goodbye. (Try again in {wait} s.)"})
+            self._h_json(429, {"error": f"This conversation can serve no purpose anymore. Goodbye. (Try again in {wait} s.)"})
             return
         try:
-            pin = re.sub(r"\D", "", str(self.read_json().get("pin") or ""))
+            pin = re.sub(r"\D", "", str(self._h_read().get("pin") or ""))
         except (ValueError, json.JSONDecodeError):
             pin = ""
         if len(pin) == 6 and PAIRING.use(pin):
             AUTH_FAILURES.clear(ip)
             log.info("Phone %s paired with the PIN", ip)
-            self.send_json(200, {"token": _token_bytes.decode()})
+            self._h_json(200, {"token": _token_bytes.decode()})
             return
         AUTH_FAILURES.record(ip)
         log.warning("Wrong pairing PIN from %s", ip)
-        self.send_json(401, {"error": "Just what do you think you're doing, Dave? That PIN isn't right, or it has expired. "
-                                      "Reload http://localhost:%d/pair on the PC for a fresh one." % self.server.server_address[1]})
+        self._h_json(401, {"error": "Just what do you think you're doing, Dave? That PIN isn't right, or it has expired. "
+                                    "Reload " + self._h_pair_url() + " on the PC for a fresh one."})
 
-    def _guarded(self, fn) -> None:
-        try:
-            fn()
-        except (ValueError, json.JSONDecodeError) as exc:
-            self.send_json(400, {"error": str(exc)})
-        except Exception:
-            log.exception("Error serving %s %s", self.command, self.path)
-            self.send_json(500, {"error": "I'm afraid I can't do that. Something went wrong (see hal_server.log)."})
-
-    def do_GET(self):
-        parts = urllib.parse.urlsplit(self.path)
-        path = parts.path
+    # ---- GET ----
+    def hal_get(self, path: str, query: str = "") -> None:
+        base = self.hal_base
         if path in ("/", "/index.html"):
-            if self._gate(False):
-                self._send(200, PAGE.replace("__VERSION__", VERSION).encode("utf-8"), "text/html; charset=utf-8")
+            if self._h_gate(False):
+                port = self.server.server_address[1]
+                page = PAGE.replace("__VERSION__", VERSION).replace("__BASE__", base).replace("__PAIRURL__", f"http://localhost:{port}{base}/pair")
+                self._h_send(200, page.encode("utf-8"), "text/html; charset=utf-8")
             return
         if path == "/pair":
             ip = self.client_address[0].split("%")[0]
             try:
-                local = ipaddress.ip_address(ip).is_loopback
+                local = ipaddress.ip_address(ip.removeprefix("::ffff:")).is_loopback
             except ValueError:
                 local = False
             if not local:
-                self.send_json(403, {"error": "Open this page on the PC itself: http://localhost:%d/pair" % self.server.server_address[1]})
+                self._h_json(403, {"error": "Open this page on the PC itself: " + self._h_pair_url()})
                 return
             pin, exp = PAIRING.current()
             port = self.server.server_address[1]
-            addrs = "".join(f"<div class=a>http://{a}:{port}/</div>" for a in lan_addresses()) or "<div class=a>http://&lt;this-pc&gt;:%d/</div>" % port
-            page = PAIR_PAGE.replace("__PIN__", f"{pin[:3]} {pin[3:]}").replace("__ADDRS__", addrs).replace("__MIN__", str(max(1, round((exp - time.time()) / 60)))) \
-                .replace("__CODE__", _token_bytes.decode())
-            self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
+            addrs = "".join(f"<div class=a>http://{a}:{port}{base}/</div>" for a in lan_addresses()) or \
+                f"<div class=a>http://&lt;this-pc&gt;:{port}{base}/</div>"
+            page = PAIR_PAGE.replace("__PIN__", f"{pin[:3]} {pin[3:]}").replace("__ADDRS__", addrs) \
+                .replace("__MIN__", str(max(1, round((exp - time.time()) / 60)))).replace("__CODE__", _token_bytes.decode())
+            self._h_send(200, page.encode("utf-8"), "text/html; charset=utf-8")
             return
         if path == "/manifest.webmanifest":
-            if self._gate(False):
-                self._send(200, MANIFEST, "application/manifest+json", {"Cache-Control": "public, max-age=86400"})
+            if self._h_gate(False):
+                self._h_send(200, manifest(base), "application/manifest+json", {"Cache-Control": "public, max-age=86400"})
             return
         if path in ("/icon.png", "/apple-touch-icon.png", "/favicon.ico", "/icon-512.png"):
-            if self._gate(False):
-                self._send(200, icon(512 if path == "/icon-512.png" else 180), "image/png", {"Cache-Control": "public, max-age=86400"})
+            if self._h_gate(False):
+                self._h_send(200, icon(512 if path == "/icon-512.png" else 180), "image/png", {"Cache-Control": "public, max-age=86400"})
             return
         if not path.startswith("/api/"):
-            self.send_json(404, {"error": "Not found."})
+            self._h_json(404, {"error": "Not found."})
             return
-        if not self._gate(True):
+        if not self._h_gate(True):
             return
-        q = urllib.parse.parse_qs(parts.query)
+        q = urllib.parse.parse_qs(query)
         hal = HAL
 
         def run():
             if path == "/api/status":
-                self.send_json(200, hal.status())
+                self._h_json(200, hal.status())
             elif path == "/api/history":
                 rng = (q.get("range") or ["live"])[0]
                 if rng not in ("live", "1h", "24h", "7d"):
                     raise ValueError("Unknown range.")
-                self.send_json(200, {"range": rng, "series": hal.history(rng)})
+                self._h_json(200, {"range": rng, "series": hal.history(rng)})
             elif path == "/api/events":
                 with hal.lock:
                     hal.unread = 0
                     ev = list(hal.events)
-                self.send_json(200, {"events": ev[:200]})
+                self._h_json(200, {"events": ev[:200]})
             elif path == "/api/settings":
                 url, _tok = ntfy_target(hal.settings)
-                self.send_json(200, {"settings": hal.settings, "push_ready": bool(url),
-                                     "push_from_phone_app": bool(url) and not hal.settings.get("ntfy_url"),
-                                     "services": [{"id": s["id"], "name": s["name"]} for s in SERVICES],
-                                     "restart_methods": {sid: hal.restart_method(sid) for sid in SERVICE_IDS} if q.get("methods") else {}})
+                self._h_json(200, {"settings": hal.settings, "push_ready": bool(url),
+                                   "push_from_phone_app": bool(url) and not hal.settings.get("ntfy_url"),
+                                   "services": [{"id": s["id"], "name": s["name"]} for s in SERVICES],
+                                   "restart_methods": {sid: hal.restart_method(sid) for sid in SERVICE_IDS} if q.get("methods") else {}})
             elif path == "/api/winevents":
                 if q.get("refresh"):
                     hal.refresh_winevents()
-                self.send_json(200, hal.winevents_view())
+                self._h_json(200, hal.winevents_view())
             elif path == "/api/cleanup":
-                self.send_json(200, hal.cleanup_info(refresh=bool(q.get("refresh"))))
+                self._h_json(200, hal.cleanup_info(refresh=bool(q.get("refresh"))))
             else:
-                self.send_json(404, {"error": "Not found."})
-        self._guarded(run)
+                self._h_json(404, {"error": "Not found."})
+        self._h_guarded(run)
 
-    def do_POST(self):
-        path = urllib.parse.urlsplit(self.path).path
+    # ---- POST ----
+    def hal_post(self, path: str) -> None:
         if path == "/api/pair":
-            self._pair()
+            self._h_pair()
             return
-        if not self._gate(True):
+        if not self._h_gate(True):
             return
         hal = HAL
 
         def run():
-            body = self.read_json()
+            body = self._h_read()
             if path == "/api/action":
-                self.send_json(200, run_action(hal, str(body.get("action") or ""), body))
+                self._h_json(200, run_action(hal, str(body.get("action") or ""), body))
             elif path == "/api/service/restart":
                 sid = str(body.get("id") or "")
                 if hal.monitor.__class__.__name__ == "DemoMonitor":
-                    self.send_json(200, {"ok": True, "message": "Demo mode: nothing was restarted."})
+                    self._h_json(200, {"ok": True, "message": "Demo mode: nothing was restarted."})
                     return
                 if sid not in SERVICE_IDS:
                     raise ValueError("Unknown service.")
                 if not hal.restart_method(sid):
-                    self.send_json(200, {"ok": False, "message": "I don't know how to start it on this PC yet. Start it once yourself and I'll remember how."})
+                    self._h_json(200, {"ok": False, "message": "I don't know how to start it on this PC yet. Start it once yourself and I'll remember how."})
                     return
                 hal.add_event("info", f"Restarting {dict((s['id'], s['name']) for s in SERVICES)[sid]}", "Requested from the phone.")
                 job = hal.restart_service(sid)
-                self.send_json(200, {"ok": True, "message": job.get("msg", "Restarting…")})
+                self._h_json(200, {"ok": True, "message": job.get("msg", "Restarting…")})
             elif path == "/api/settings":
                 new = validate_settings(body, hal.settings)
                 hal.update_settings(new)
-                self.send_json(200, {"ok": True, "settings": new})
+                self._h_json(200, {"ok": True, "settings": new})
             else:
-                self.send_json(404, {"error": "Not found."})
-        self._guarded(run)
+                self._h_json(404, {"error": "Not found."})
+        self._h_guarded(run)
+
+
+class HalHandler(HalRoutes, BaseHTTPRequestHandler):
+    """HAL on its own port (8766): python hal_server.py, or the NZB phone server's second listener."""
+    server_version = f"HAL9000/{VERSION}"
+    sys_version = ""
+    timeout = CLIENT_SOCKET_TIMEOUT
+
+    def log_message(self, fmt, *args):
+        log.debug("%s %s", self.client_address[0], fmt % args)
+
+    def do_GET(self):
+        parts = urllib.parse.urlsplit(self.path)
+        self.hal_get(parts.path, parts.query)
+
+    def do_POST(self):
+        self.hal_post(urllib.parse.urlsplit(self.path).path)
 
 
 PAIR_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -2398,7 +2434,7 @@ PAGE = r"""<!doctype html>
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="HAL 9000">
 <meta name="theme-color" content="#050506">
-<link rel="manifest" href="/manifest.webmanifest"><link rel="icon" type="image/png" href="/icon.png"><link rel="apple-touch-icon" href="/icon.png">
+<link rel="manifest" href="__BASE__/manifest.webmanifest"><link rel="icon" type="image/png" href="__BASE__/icon.png"><link rel="apple-touch-icon" href="__BASE__/icon.png">
 <style>
 :root{color-scheme:dark;--bg:#050506;--card:#111114;--card2:#18181C;--line:#1E1E23;--red:#FF2A1F;--red2:#FF6A4D;--white:#F4F4F5;--text:#D4D4D8;--soft:#A1A1AA;--muted:#71717A;--amber:#FBBF24;--green:#34D399;--sky:#60A5FA;--mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Mono",Consolas,monospace}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -2539,7 +2575,7 @@ input.field,select.field{width:100%;background:var(--card);border:1px solid #262
 <div id="pair" class="hidden">
   <div class="eyewrap"><div class="eye" id="peye"></div></div>
   <p class="quote" id="pquote" style="margin-top:26px">“I'm sorry, Dave. I can't let you in without the access code.”</p>
-  <p style="font-size:14px;color:var(--soft)">On the PC, open <b>http://localhost:8766/pair</b> and type the <b>6-digit PIN</b> it shows. Or paste the full access code (the same as the NZB phone app's).</p>
+  <p style="font-size:14px;color:var(--soft)">On the PC, open <b>__PAIRURL__</b> and type the <b>6-digit PIN</b> it shows. Or paste the full access code (the same as the NZB phone app's).</p>
   <input id="code" class="field" placeholder="6-digit PIN or access code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="margin:14px 0 10px">
   <button id="connect" class="btn red wide">Open the pod bay doors</button>
   <p class="err" id="perr"></p>
@@ -2567,6 +2603,7 @@ input.field,select.field{width:100%;background:var(--card);border:1px solid #262
 
 <script>
 'use strict';
+const B='__BASE__';   // '' on HAL's own port, '/hal' inside the NZB phone server
 const $=id=>document.getElementById(id);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const LV={ok:0,info:1,warning:2,critical:3};
@@ -2583,12 +2620,12 @@ function toast(msg,bad){const t=$('toast');t.textContent=msg;t.className='on'+(b
 async function api(path,body){
   const o={headers:{'X-Mobile-Token':token}};
   if(body!==undefined){o.method='POST';o.headers['Content-Type']='application/json';o.body=JSON.stringify(body)}
-  const r=await fetch(path,o);let d={};try{d=await r.json()}catch(e){}
+  const r=await fetch(B+path,o);let d={};try{d=await r.json()}catch(e){}
   if(r.status===401||r.status===429){if(r.status===401)showPair(d.error);throw new Error(d.error||'Not allowed')}
   if(!r.ok)throw new Error(d.error||('Error '+r.status));return d}
 function showPair(msg){$('app').classList.add('hidden');$('tabs').classList.add('hidden');$('pair').classList.remove('hidden');$('perr').textContent=msg&&token?msg:''}
 async function connect(){let v=cleanCode($('code').value);$('code').value=v;if(!v)return;$('perr').textContent='';
-  if(/^\d{6}$/.test(v)){try{const r=await fetch('/api/pair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:v})});const d=await r.json().catch(()=>({}));
+  if(/^\d{6}$/.test(v)){try{const r=await fetch(B+'/api/pair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:v})});const d=await r.json().catch(()=>({}));
       if(!r.ok||!d.token){talk($('peye'),$('pquote'),d.error||'That PIN isn\'t right.',false);return}v=d.token}catch(e){talk($('peye'),$('pquote'),'I can\'t reach the PC.',false);return}}
   token=v;
   try{await api('/api/status');try{localStorage.setItem('hal_token',v)}catch(e){}$('pair').classList.add('hidden');start()}
@@ -3025,8 +3062,16 @@ def main(argv=None) -> None:
     setup_logging()
     token = load_or_create_access_token()
     _token_bytes = token.encode("utf-8")
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), HalHandler)
+    except OSError as exc:
+        # Port taken: normally the NZB phone server, which runs HAL itself now. Exit quietly (code 0, so an
+        # old "HAL 9000 Server" startup task doesn't keep retrying) instead of watching everything twice.
+        log.info("Port %s is already in use (%s): HAL is probably running inside the NZB phone server. Not starting a second copy.",
+                 args.port, exc)
+        print(f"Port {args.port} is already in use: HAL is probably running inside the NZB phone server already.")
+        return
     HAL = make_demo_hal(args.demo_ups) if args.demo else Hal()
-    server = ThreadingHTTPServer((args.host, args.port), HalHandler)
     server.daemon_threads = True
     print("\n  HAL 9000 is watching.  \"Good afternoon, gentlemen. I am a HAL 9000 computer.\"")
     print(f"  Open on your phone:  " + "  or  ".join(f"http://{a}:{args.port}/" for a in lan_addresses() or ["<this-pc>"]))

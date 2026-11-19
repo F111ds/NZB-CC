@@ -1,6 +1,11 @@
 <#
   HAL 9000 - start the HAL phone server when you log in to Windows.
 
+  NOTE: from phone app 3.12, HAL runs INSIDE the NZB phone server (mobile_server.py). If the phone server
+  starts with Windows (Task Scheduler task "NZB Mobile Server", from setup_startup.ps1), this script just
+  makes sure psutil is installed, removes the separate "HAL 9000 Server" task, restarts the phone server and
+  opens the pairing page. The steps below are only for a PC without that task.
+
   Keep this file in your NZB Command Center folder (next to hal_server.py) and right-click it >
   Run with PowerShell. It asks for administrator rights once, then:
     1. makes sure Python has psutil (pip install psutil),
@@ -57,6 +62,50 @@ try {
     $twin = if ((Split-Path $python -Leaf) -eq "py.exe") { "pyw" } else { "pythonw" }
     $pyw = Join-Path (Split-Path $python) "$twin.exe"
     if (-not (Test-Path $pyw)) { $wc = Get-Command $twin -ErrorAction SilentlyContinue; $pyw = if ($wc) { $wc.Source } else { $python } }
+
+    # --- HAL inside the NZB phone server (mobile_server.py 3.12+): no separate task needed ---
+    $phoneTaskName = "NZB Mobile Server"
+    $phoneTask = Get-ScheduledTask -TaskName $phoneTaskName -ErrorAction SilentlyContinue
+    $mobile = Join-Path $Folder "mobile_server.py"
+    if ($phoneTask -and (Test-Path $mobile) -and (Select-String -Path $mobile -Pattern 'def start_embedded_hal' -Quiet)) {
+        Say "`nHAL now runs inside the NZB phone server: one program, one startup task, one log." Cyan
+        # psutil for the Python the phone server runs with
+        $pexe = $phoneTask.Actions[0].Execute
+        $pp = Join-Path (Split-Path $pexe) "python.exe"
+        if ((Split-Path $pexe -Leaf) -match '^pyw?\.exe$') { $pp = Join-Path (Split-Path $pexe) "py.exe" }
+        if (Works $pp) {
+            $ErrorActionPreference = 'Continue'
+            & $pp -c "import psutil" 2>$null
+            if ($LASTEXITCODE -ne 0) { Say "Installing psutil for the phone server's Python..."; & $pp -m pip install --quiet psutil 2>&1 | Out-Null }
+            $ErrorActionPreference = 'Stop'
+        }
+        # Retire the separate HAL
+        if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+            Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+            Say "Removed the separate '$TaskName' task." Green
+        }
+        $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        $vbs = Join-Path ([Environment]::GetFolderPath("Startup")) "HAL 9000 Server.vbs"
+        if (Test-Path $vbs) { Remove-Item $vbs -Force }
+        Get-NetFirewallRule -DisplayName "HAL 9000 ($Port)" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+        New-NetFirewallRule -DisplayName "HAL 9000 ($Port)" -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow -Profile Private, Domain | Out-Null
+        # Restart the phone server so it picks HAL up
+        Stop-ScheduledTask -TaskName $phoneTaskName -ErrorAction SilentlyContinue
+        Get-CimInstance Win32_Process -Filter "Name LIKE 'python%' OR Name = 'py.exe'" | Where-Object { $_.CommandLine -match 'mobile_server\.py' } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Start-Sleep 2
+        Start-ScheduledTask -TaskName $phoneTaskName
+        $phonePort = if ("$($phoneTask.Actions[0].Arguments)" -match '--port\s+(\d+)') { $Matches[1] } else { "8765" }
+        $ok = $false; foreach ($i in 1..40) { Start-Sleep 1; if (Up "http://127.0.0.1:$Port/") { $ok = $true; break } }
+        if (-not $ok) { throw "The phone server restarted, but HAL isn't answering on port $Port yet. Look at mobile_server.log in $Folder (it says why HAL is off)." }
+        $ips = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' } | ForEach-Object { $_.IPAddress })
+        Say "`nHAL 9000 is watching, from inside the phone server." Green
+        Say "Your HAL icon keeps working. On the phone HAL is also at:  $(($ips | ForEach-Object { "http://${_}:$phonePort/hal/" }) -join '  or  ')"
+        Say "`nOpening the pairing page (6-digit PIN)..." Cyan
+        Start-Process "http://localhost:$phonePort/hal/pair"
+        return
+    }
 
     # --- The task: at logon, hidden, highest privileges, restarted if it stops ---
     $user = if ($ForUser) { $ForUser } else { "$env:USERDOMAIN\$env:USERNAME" }

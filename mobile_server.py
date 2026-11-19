@@ -15,6 +15,9 @@ A phone version of NZB Command Center, served on your home network:
              "Type on TV": type on the phone into the text box open in Kodi
   * Jellyfin - now playing (pause / stop), library scan, "do I already have it?" search with
              quality, missing episodes, movies below 1080p, show seasons; connect from the phone
+  * HAL 9000 - runs inside this server (the first step towards one all-in-one app): open /hal on
+             the phone, or HAL's own port 8766 as before. Needs psutil and hal_server.py + system_monitor.py
+             in this folder; without them everything else works and the banner says why HAL is off.
   * Drives - every drive's health, temperature, free space, live read/write activity,
              health counters (errors, wear, hours, cycles), volumes and identity, a 24 h
              temperature graph, and phone alerts for problems, heat and low space
@@ -50,6 +53,7 @@ import ctypes
 import ctypes.wintypes
 import gzip
 import hashlib
+import html
 import http.client
 import io
 import ipaddress
@@ -75,7 +79,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.11.1"
+VERSION = "3.12.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -113,6 +117,18 @@ EXTRA_ALLOWED_NETS: list = []
 ALLOW_ANY_CLIENT = False
 
 log = logging.getLogger("mobile")
+
+# HAL 9000 (hal_server.py) runs inside this server: at /hal and on its own port (8766), with this server's
+# access code, log and startup task. Optional: without psutil or hal_server.py the phone app works as before.
+try:
+    import hal_server as _hal_mod
+    HAL_IMPORT_ERROR = ""
+except Exception as _exc:  # noqa: BLE001 - any import problem just means "no HAL"
+    _hal_mod = None
+    HAL_IMPORT_ERROR = ("psutil isn't installed (pip install psutil)" if isinstance(_exc, ImportError) and "psutil" in str(_exc)
+                        else f"{type(_exc).__name__}: {_exc}")
+HAL_PORT = 8766
+_hal_state = {"running": False, "note": "not started", "server": None}
 
 APP_ICON_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAYAAAA9zQYyAAAABmJLR0QA/wD/AP+gvaeTAAAgAElEQVR4nO2deXQc1Z3vv7eqet8k"
@@ -6359,7 +6375,7 @@ def _kodi_page(page: str) -> str:
 KODI_PAGE = _kodi_page(PAGE)
 
 
-class MobileHandler(BaseHTTPRequestHandler):
+class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPRequestHandler):
     server_version = f"NZBMobile/{VERSION}"
     sys_version = ""
     timeout = CLIENT_SOCKET_TIMEOUT
@@ -6449,6 +6465,9 @@ class MobileHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urllib.parse.urlsplit(self.path).path
         if not self._network_ok():
+            return
+        if path == "/hal" or path.startswith("/hal/"):
+            self._hal_route("GET", path)
             return
         if path in ("/", "/index.html"):
             self._send(200, PAGE.replace("__VERSION__", VERSION).encode("utf-8"), "text/html; charset=utf-8")
@@ -6595,9 +6614,36 @@ class MobileHandler(BaseHTTPRequestHandler):
     # ---- POST -----------------------------------------------------------------
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path).path
-        if not self._network_ok() or not self._auth_ok():
+        if not self._network_ok():
+            return
+        if path.startswith("/hal/"):
+            self._hal_route("POST", path)   # HAL checks the access code itself (and lets /hal/api/pair in with a PIN)
+            return
+        if not self._auth_ok():
             return
         self._guarded(lambda: self._route_post(path))
+
+    def _hal_route(self, method: str, path: str) -> None:
+        """HAL 9000's pages and API under /hal (hal_server.HalRoutes)."""
+        if path == "/hal":
+            self._send(302, b"", "text/plain", {"Location": "/hal/"})
+            return
+        if not _hal_state["running"]:
+            msg = f"HAL 9000 isn't running in the phone server: {_hal_state['note']}."
+            if method == "GET" and not path.startswith("/hal/api/"):
+                body = ('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+                        '<body style="background:#050506;color:#F4F4F5;font:16px system-ui;padding:40px 24px;text-align:center">'
+                        f'<h2>HAL 9000</h2><p style="color:#A1A1AA">{html.escape(msg)}</p></body>')
+                self._send(503, body.encode("utf-8"), "text/html; charset=utf-8")
+            else:
+                self.send_json(503, {"error": msg})
+            return
+        self.hal_base = "/hal"
+        sub = path[len("/hal"):] or "/"
+        if method == "GET":
+            self.hal_get(sub, urllib.parse.urlsplit(self.path).query)
+        else:
+            self.hal_post(sub)
 
     def _route_post(self, path: str) -> None:
         body = self.read_json()
@@ -7160,6 +7206,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("--install-autostart", action="store_true", help="start this server hidden whenever you log in to Windows")
     p.add_argument("--remove-autostart", action="store_true", help="stop starting it at login")
+    p.add_argument("--no-hal", action="store_true", help="don't run HAL 9000 inside this server")
+    p.add_argument("--hal-port", type=int, default=int(os.environ.get("HAL_PORT", HAL_PORT)), help="HAL 9000's own port (default 8766)")
     return p.parse_args(argv)
 
 
@@ -7174,7 +7222,59 @@ def _autostart_args(args: argparse.Namespace) -> list[str]:
         out += ["--allow-cidr", cidr]
     if args.allow_any_client:
         out.append("--allow-any-client")
+    if getattr(args, "no_hal", False):
+        out.append("--no-hal")
+    if getattr(args, "hal_port", HAL_PORT) != HAL_PORT:
+        out += ["--hal-port", str(args.hal_port)]
     return out
+
+
+def start_embedded_hal(args: argparse.Namespace) -> str:
+    """Starts HAL 9000 in this process: its watchers, and its own port (so the HAL home-screen icon keeps
+    working). Returns a line for the banner. Never raises: HAL failing must not stop the phone app."""
+    if getattr(args, "no_hal", False):
+        _hal_state["note"] = "turned off (--no-hal)"
+        return "off (--no-hal)"
+    if _hal_mod is None:
+        _hal_state["note"] = HAL_IMPORT_ERROR
+        log.warning("HAL 9000 not started: %s", HAL_IMPORT_ERROR)
+        return f"not available: {HAL_IMPORT_ERROR}"
+    try:
+        srv = ThreadingHTTPServer((args.host, args.hal_port), _hal_mod.HalHandler)
+    except OSError as exc:
+        _hal_state["note"] = (f"port {args.hal_port} is in use, probably by the separate HAL 9000 Server from before. "
+                              "Run update_all.ps1 (or setup_hal_startup.ps1) to move HAL into the phone server")
+        log.warning("HAL 9000 not started inside the phone server: port %s is in use (%s).", args.hal_port, exc)
+        return f"not started: port {args.hal_port} is in use (the separate HAL 9000 Server is probably still running)"
+    try:
+        _hal_mod._token_bytes = _token_bytes
+        _hal_mod.ALLOW_ANY_CLIENT = ALLOW_ANY_CLIENT
+        _hal_mod.EXTRA_ALLOWED_NETS[:] = EXTRA_ALLOWED_NETS
+        _hal_mod.HAL = _hal_mod.Hal()
+    except Exception as exc:  # noqa: BLE001
+        srv.server_close()
+        _hal_state["note"] = f"it failed to start ({exc})"
+        log.exception("HAL 9000 failed to start")
+        return f"failed to start: {exc}"
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.5}, name="hal-http", daemon=True).start()
+    _hal_state.update(running=True, note="running", server=srv)
+    log.info("HAL 9000 %s running inside the phone server: /hal and port %s", _hal_mod.VERSION, args.hal_port)
+    return f"running - /hal on this port, and port {args.hal_port}"
+
+
+def stop_embedded_hal() -> None:
+    if not _hal_state["running"]:
+        return
+    try:
+        _hal_mod.HAL.stop()
+        if _hal_mod.HAL.monitor is not None and hasattr(_hal_mod.HAL.monitor, "stop"):
+            _hal_mod.HAL.monitor.stop()
+        _hal_state["server"].shutdown()
+        _hal_state["server"].server_close()
+    except Exception:  # noqa: BLE001
+        log.exception("Stopping HAL 9000")
+    _hal_state["running"] = False
 
 
 def main(argv=None) -> None:
@@ -7213,6 +7313,7 @@ def main(argv=None) -> None:
     kodi_library_index(background=True)  # warm up so the first search can already show "Already in Kodi"
 
     server = ThreadingHTTPServer((args.host, args.port), MobileHandler)
+    hal_note = start_embedded_hal(args)
     worker = BackgroundWorker()
     worker.start()
     server.daemon_threads = True
@@ -7226,6 +7327,7 @@ def main(argv=None) -> None:
     print(f" Enabled indexers: {len(cfg['indexers'])}   (config changes are picked up automatically)")
     print(f" SABnzbd         : {cfg['sab_url']}")
     print(f" Kodi            : {cfg['kodi']['url'] or 'not set up (add it in the desktop app)'}")
+    print(f" HAL 9000        : {hal_note}")
     print(f" This PC         : http://127.0.0.1:{args.port}")
     print(f" Phone (Wi-Fi)   : http://{local_ip}:{args.port}")
     print()
@@ -7236,6 +7338,9 @@ def main(argv=None) -> None:
     print(f" http://{local_ip}:{args.port}/#k={token}")
     print(" Kodi home-screen icon - open this on the phone, then Add to Home Screen:")
     print(f" http://{local_ip}:{args.port}/kodi#k={token}")
+    if _hal_state["running"]:
+        print(" HAL 9000 - open on the phone (pair with the PIN from http://localhost:%d/hal/pair):" % args.port)
+        print(f" http://{local_ip}:{args.port}/hal/   (or http://{local_ip}:{args.hal_port}/ as before)")
     print()
     if ALLOW_ANY_CLIENT:
         print(" WARNING: --allow-any-client is on; anyone who can reach this port can try the code.")
@@ -7254,6 +7359,7 @@ def main(argv=None) -> None:
         print("\nStopping mobile server...")
     finally:
         worker.stop()
+        stop_embedded_hal()
         server.server_close()
 
 
