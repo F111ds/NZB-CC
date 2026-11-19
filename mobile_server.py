@@ -82,7 +82,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.13.0"
+VERSION = "3.13.1"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -3736,7 +3736,10 @@ class BackgroundWorker:
         report = drive_report(force=True, with_rate=False)
         if not settings["ntfy_url"]:
             return
-        for title, message, prio in drive_alerts(report, settings, self._drive_sent, now):
+        alerts = list(drive_alerts(report, settings, self._drive_sent, now))   # (keeps its "already sent" bookkeeping)
+        if _hal_state["running"]:
+            return   # HAL watches the drives too (and lets you hide an alert for 24 h): one phone alert, not two
+        for title, message, prio in alerts:
             try:
                 send_notification(title, message, tags=("floppy_disk",), priority=prio, settings=settings)
             except UpstreamError as exc:

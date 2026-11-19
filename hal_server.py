@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2079,6 +2079,34 @@ def make_demo_hal(ups_mode: str = "online") -> Hal:
 # 12. ACTIONS (pod bay controls)
 # ==============================================================================
 
+# ---- Lock from the phone when this server runs outside your desktop ----
+LOCK_TASK = "HAL 9000 Lock (from phone)"
+LOCK_PS = r"""
+$u = (Get-CimInstance Win32_ComputerSystem).UserName
+if (-not $u) { @{ ok = $false; nobody = $true } | ConvertTo-Json -Compress; return }
+try {
+  $a = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\rundll32.exe" -Argument 'user32.dll,LockWorkStation'
+  $p = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Limited
+  Register-ScheduledTask -TaskName '__NAME__' -Action $a -Principal $p -Description 'Lets the HAL 9000 app lock the screen from the phone.' -Force -ErrorAction Stop | Out-Null
+  Start-ScheduledTask -TaskName '__NAME__' -ErrorAction Stop
+  @{ ok = $true } | ConvertTo-Json -Compress
+} catch { @{ ok = $false; err = '' + $_.Exception.Message } | ConvertTo-Json -Compress }
+"""
+
+
+def lock_via_session(name: str) -> tuple[bool, str]:
+    """Locks the signed-in user's screen through a Task Scheduler task that runs in their session."""
+    if not IS_WINDOWS:
+        return False, "Locking only works on the Windows PC."
+    res = sm.run_powershell_json(LOCK_PS.replace("__NAME__", LOCK_TASK), timeout=40)
+    if isinstance(res, dict) and res.get("ok"):
+        return True, f"Locked. Nobody gets past the pod bay doors without your PIN, {name}."
+    if isinstance(res, dict) and res.get("nobody"):
+        return True, f"Nobody is logged in, {name}, so the PC is already at the sign-in screen."
+    err = res.get("err") if isinstance(res, dict) else "Windows didn't answer"
+    return False, f"I'm afraid I couldn't lock it: {err}. Press Windows+L on the PC."
+
+
 # ---- Update button: runs update_all.ps1 -Unattended as its own Windows task ----
 # Its own task (as SYSTEM), not a child of this server: the update stops and restarts the phone server, and
 # Task Scheduler ends everything a task started when that task stops.
@@ -2138,10 +2166,9 @@ def run_action(hal: Hal, action: str, body: dict) -> dict:
     if action == "lock":
         ok, msg = sm.lock_workstation()
         if not ok:
-            # A server started before anyone logged in (Task Scheduler "at startup") runs outside your desktop,
-            # where Windows doesn't allow locking it.
-            msg = (f"I'm afraid I can't lock the screen from here, {name}: I was started before you logged in, outside your desktop. "
-                   "Press Windows+L on the PC.")
+            # Started before anyone logged in (Task Scheduler "at startup"), this server runs outside your desktop,
+            # where Windows won't lock it. So ask Windows to run the lock inside your session instead.
+            ok, msg = lock_via_session(name)
     elif action == "sleep":
         ok, msg = sm.sleep_pc()
     elif action == "flush_dns":
