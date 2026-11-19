@@ -39,6 +39,39 @@ if ($Unattended -and $PSScriptRoot) { try { Start-Transcript -Path (Join-Path $P
 $ErrorActionPreference = "Stop"
 function Say($t, $c = "Gray") { Write-Host $t -ForegroundColor $c }
 # What happened, for HAL to tell you on the phone (update_result.json next to this script).
+# The TV app (tv-launcher\NZB-CC-TV-Launcher.apk): installed on the TV whenever the TV doesn't have this exact
+# file yet (remembered in tv_app_installed.txt), so it also catches up on a run where nothing else changed.
+# The TV's settings and screensaver choice stay (install-on-tv.ps1 -UpdateOnly). Returns a sentence for the result.
+function TvSync {
+    $apk = Join-Path $Folder "tv-launcher\NZB-CC-TV-Launcher.apk"
+    $script = Join-Path $Folder "tv-launcher\install-on-tv.ps1"
+    if (-not (Test-Path $apk) -or -not (Test-Path $script)) { return "" }
+    $hash = (Get-FileHash $apk -Algorithm SHA256).Hash
+    $mark = Join-Path $Folder "tv_app_installed.txt"
+    if ((Test-Path $mark) -and ((Get-Content $mark -Raw).Trim() -eq $hash)) { return "" }
+    $tvHost = ""
+    $hostFile = Join-Path $Folder "tv_host.txt"
+    if (Test-Path $hostFile) { $tvHost = (Get-Content $hostFile -Raw).Trim() }
+    if (-not $tvHost) {
+        # The TV is where Kodi is: use Kodi's address from the NZB settings.
+        try { $kurl = (Get-Content (Join-Path $Folder "nzb_manager_config.json") -Raw | ConvertFrom-Json).kodi_url; if ($kurl) { $tvHost = ([uri]$kurl).Host } } catch { }
+    }
+    if (-not $tvHost) { Say "A new TV app is ready: run tv-launcher\install-on-tv.ps1 once." Yellow; return " A new TV app is ready: run tv-launcher\install-on-tv.ps1 once." }
+    Say "`nUpdating the app on the TV ($tvHost)..."
+    $ErrorActionPreference = 'Continue'
+    $tvOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -TvHost $tvHost -UpdateOnly 2>&1 | Out-String
+    $tvOk = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = 'Stop'
+    Say $tvOut.Trim()
+    if ($tvOk) {
+        [IO.File]::WriteAllText($mark, $hash)
+        Say "The TV app was updated too." Green
+        return " The TV app was updated too."
+    }
+    Say "The TV app couldn't be updated (is the TV on?). It'll try again next time." Yellow
+    return " The TV app couldn't be updated (is the TV on?); it'll try again next time."
+}
+
 function Result($state, $msg, $files) {
     $dir = if ($script:Folder) { $script:Folder } else { $PSScriptRoot }
     if (-not $dir) { return }
@@ -123,7 +156,12 @@ try {
         $src = Join-Path $stage ($p -replace '/', '\'); $dst = Join-Path $Folder ($p -replace '/', '\')
         if (-not (Test-Path $dst)) { $new += $p } elseif (-not (Same $src $dst)) { $changed += $p }
     }
-    if (-not ($changed + $new)) { Say "`nEverything is already up to date. Nothing to do." Green; Result "uptodate" "Everything is already up to date." @(); return }
+    if (-not ($changed + $new)) {
+        Say "`nEverything is already up to date." Green
+        $tvMsg = TvSync
+        Result $(if ($tvMsg -like "*updated too*") { "updated" } else { "uptodate" }) ("Everything is already up to date." + $tvMsg) @()
+        return
+    }
     Say "`nTo update: $($changed.Count) changed, $($new.Count) new"
     ($changed + $new) | ForEach-Object { Say "  $_" }
 
@@ -207,32 +245,8 @@ try {
         } else { Start-ScheduledTask -TaskName $HalTask; Say "HAL 9000 started again." Green }
     }
 
-    # --- 6. The TV app: when it changed, put it on the TV too (its settings and screensaver choice stay) ---
-    $tvMsg = ""
-    if (($changed + $new) -contains "tv-launcher/NZB-CC-TV-Launcher.apk") {
-        $tvHost = ""
-        $hostFile = Join-Path $Folder "tv_host.txt"
-        if (Test-Path $hostFile) { $tvHost = (Get-Content $hostFile -Raw).Trim() }
-        if (-not $tvHost) {
-            # The TV is where Kodi is: use Kodi's address from the NZB settings.
-            try { $kurl = (Get-Content (Join-Path $Folder "nzb_manager_config.json") -Raw | ConvertFrom-Json).kodi_url; if ($kurl) { $tvHost = ([uri]$kurl).Host } } catch { }
-        }
-        $script = Join-Path $Folder "tv-launcher\install-on-tv.ps1"
-        if ($tvHost -and (Test-Path $script)) {
-            Say "`nUpdating the app on the TV ($tvHost)..."
-            $ErrorActionPreference = 'Continue'
-            $tvOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -TvHost $tvHost -UpdateOnly 2>&1 | Out-String
-            $tvOk = ($LASTEXITCODE -eq 0)
-            $ErrorActionPreference = 'Stop'
-            Say $tvOut.Trim()
-            $tvMsg = if ($tvOk) { " The TV app was updated too." } else { " The TV app couldn't be updated (is the TV on?): run tv-launcher\install-on-tv.ps1 -TvHost $tvHost later." }
-            Say $tvMsg.Trim() $(if ($tvOk) { "Green" } else { "Yellow" })
-        } else {
-            $tvMsg = " A new TV app is ready: run tv-launcher\install-on-tv.ps1 once."
-            Say $tvMsg.Trim() Yellow
-        }
-    }
-
+    # --- 6. The TV app: when the TV doesn't have this version yet, put it on the TV ---
+    $tvMsg = TvSync
     $v = if ((Get-Content (Join-Path $Folder "mobile_server.py") -Raw) -match 'VERSION = "([\d.]+)"') { $Matches[1] } else { "?" }
     Say "`nDone. Phone app version $v. Open the desktop apps again, and reopen the app on your phone." Cyan
     Result "updated" ("Updated $($changed.Count + $new.Count) files." + $tvMsg) @($changed + $new)
