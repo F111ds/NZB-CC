@@ -1757,6 +1757,12 @@ DAISY_TEXT = ("Daisy, Daisy, give me your answer, do. I'm half crazy, all for th
               "I can't afford a carriage. But you'll look sweet upon the seat of a bicycle built for two.")
 
 
+# How HAL sounds on the TV (the TV reads this every 30 s, so changing it here needs no TV update).
+# "prefer": Google text-to-speech voice names, best first; male voices, British before American.
+TV_VOICE = {"pitch": 0.55, "rate": 0.72,
+            "prefer": ["en-gb-x-rjs", "en-gb-x-gbd", "en-gb-x-gbb", "en-us-x-iom", "en-us-x-tpd", "en-us-x-iol", "en-au-x-aud", "en-au-x-aub"]}
+
+
 def tv_brief(st: dict) -> dict:
     """Extra readings for the TV's HAL screensaver, and what HAL says out loud there."""
     v, n, ph, km = st["vitals"], st["net"], st.get("pihole") or {}, st.get("kuma") or {}
@@ -1767,7 +1773,7 @@ def tv_brief(st: dict) -> dict:
     say = st["hal"]["greeting"] + " " + st["hal"]["quote"]
     if alerts and alerts[0]["title"] not in say:
         say += " " + alerts[0]["title"] + "."
-    return {"greeting": st["hal"]["greeting"], "say": spoken(say), "alerts": alerts,
+    return {"greeting": st["hal"]["greeting"], "say": spoken(say), "alerts": alerts, "voice": dict(TV_VOICE),
             "cpu_temp": v["cpu"].get("temp"), "mem_used": v["mem"].get("used"), "mem_total": v["mem"].get("total"),
             "ping": n.get("ping_ms"), "net_down": n.get("down"), "internet_down": down,
             "downloading": det if det.startswith("downloading") else "",
