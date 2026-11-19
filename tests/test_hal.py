@@ -588,4 +588,45 @@ assert json.loads(call("/api/snooze", {"keys": ["gone:X"]})[1])["ok"] is False
 srv3.shutdown()
 print("snooze ok")
 
+
+# ---------------- Update button ----------------
+hs.UPDATE_RESULT_FILE = tmp / "update_result.json"
+hs.UPDATE_PENDING_FILE = tmp / "update_pending.json"
+assert hs.update_view() == {"result": None, "running": False, "started": None}
+uh = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=hs.DemoMonitor(), start_threads=False)
+real_mon = type("Mon", (hs.DemoMonitor,), {})
+uh.monitor.__class__ = real_mon
+assert "can't do that" in hs.run_action(uh, "update", {})["message"]          # needs the confirm (hold / OK)
+if not hs.IS_WINDOWS:
+    assert hs.run_action(uh, "update", {"confirm": True})["ok"] is False      # Windows only
+# running while the result is older than the request, done once a newer result arrives
+now = time.time()
+hs.save_json(hs.UPDATE_PENDING_FILE, {"t": now - 30})
+hs.save_json(hs.UPDATE_RESULT_FILE, {"t": now - 3600, "state": "uptodate"})
+assert hs.update_view()["running"] is True
+hs.save_json(hs.UPDATE_RESULT_FILE, {"t": now, "state": "updated", "message": "Updated 3 files.", "version": "3.14.0",
+                                     "hal_version": "1.4.0", "files": ["hal_server.py", "app_page.py", "mobile_server.py"]})
+v = hs.update_view()
+assert v["running"] is False and v["result"]["version"] == "3.14.0" and v["started"] == now - 30
+# an update that never reports back stops counting as running
+hs.save_json(hs.UPDATE_PENDING_FILE, {"t": now - hs.UPDATE_STALE - 5}); hs.save_json(hs.UPDATE_RESULT_FILE, {"t": 0})
+assert hs.update_view()["running"] is False
+# HAL says how it went, once
+hs.save_json(hs.UPDATE_RESULT_FILE, {"t": now, "state": "updated", "version": "3.14.0", "hal_version": "1.4.0", "files": ["a.py", "b.py"]})
+uh.events.clear()
+uh.report_update(); uh.report_update()
+assert [e["title"] for e in uh.events] == ["Updated to phone app 3.14.0 and HAL 1.4.0"] and "2 files: a.py, b.py" in uh.events[0]["msg"]
+hs.save_json(hs.UPDATE_RESULT_FILE, {"t": now + 1, "state": "failed", "message": "Download of x failed."})
+pushes.clear(); uh.report_update()
+assert uh.events[0]["title"] == "The update didn't work" and "Download of x failed." in uh.events[0]["msg"]
+hs.save_json(hs.UPDATE_RESULT_FILE, {"t": now + 2, "state": "uptodate"}); uh.report_update()
+assert uh.events[0]["title"] == "Already up to date"
+assert "update" in uh.status() and uh.status()["update"]["result"]["state"] == "uptodate"
+# the script side: -Unattended skips every question and writes the result
+ua = (ROOT / "update_all.ps1").read_text(encoding="utf-8")
+assert "[switch]$Unattended" in ua and "update_result.json" in ua and 'Result "updated"' in ua and 'Result "uptodate"' in ua and 'Result "failed"' in ua
+assert "if ($Unattended) { try { Stop-Transcript" in ua and "-not $Unattended" in ua
+assert "-Unattended" in hs.UPDATE_PS and "'SYSTEM'" in hs.UPDATE_PS
+print("update button ok")
+
 print("\nALL HAL TESTS PASSED")

@@ -12,8 +12,13 @@
   Your settings and data (*.json, mobile_access_key.txt, logs, caches) are never touched.
   If a download or check fails, nothing is changed.
   To undo: copy the files from the newest backup\<date-time>\ folder back.
+
+  -Unattended: for the Update button in the phone app (HAL starts it as a Windows task). No questions:
+  open desktop apps aren't waited for (they use the new version next time you open them), there's no
+  "Press Enter", everything is logged to update_all.log, and the outcome goes to update_result.json
+  for HAL to report on the phone.
 #>
-param([switch]$Elevated)
+param([switch]$Elevated, [switch]$Unattended)
 
 $Repo = "F111ds/NZB-CC"; $Branch = "main"
 $TaskName = "NZB Mobile Server"
@@ -23,15 +28,28 @@ $hasTask = [bool](Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyCon
 $HalTask = "HAL 9000 Server"
 $hasHal = [bool](Get-ScheduledTask -TaskName $HalTask -ErrorAction SilentlyContinue)
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (($hasTask -or $hasHal) -and -not $isAdmin -and $PSCommandPath) {
+if (($hasTask -or $hasHal) -and -not $isAdmin -and $PSCommandPath -and -not $Unattended) {
     if ($Elevated) { Write-Host "Administrator rights were not granted." -ForegroundColor Red; Read-Host "Press Enter to close"; exit 1 }
     Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Elevated"
     exit
 }
 
+if ($Unattended -and $PSScriptRoot) { try { Start-Transcript -Path (Join-Path $PSScriptRoot "update_all.log") -Force | Out-Null } catch {} }
 & {
 $ErrorActionPreference = "Stop"
 function Say($t, $c = "Gray") { Write-Host $t -ForegroundColor $c }
+# What happened, for HAL to tell you on the phone (update_result.json next to this script).
+function Result($state, $msg, $files) {
+    $dir = if ($script:Folder) { $script:Folder } else { $PSScriptRoot }
+    if (-not $dir) { return }
+    $v = $null; $mp = Join-Path $dir "mobile_server.py"
+    if ((Test-Path $mp) -and ((Get-Content $mp -Raw) -match 'VERSION = "([\d.]+)"')) { $v = $Matches[1] }
+    $h = $null; $hp = Join-Path $dir "hal_server.py"
+    if ((Test-Path $hp) -and ((Get-Content $hp -Raw) -match 'VERSION = "([\d.]+)"')) { $h = $Matches[1] }
+    $o = [ordered]@{ t = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); state = $state; message = "$msg"; version = $v; hal_version = $h; files = @($files) }
+    try { [IO.File]::WriteAllText((Join-Path $dir "update_result.json"), ($o | ConvertTo-Json -Compress -Depth 3), (New-Object System.Text.UTF8Encoding $false)) } catch {}
+}
+if ($Unattended -and -not $isAdmin) { Result "failed" "The update needs administrator rights." @(); return }
 # Programs run with 'Continue': under 'Stop', Windows PowerShell 5.1 turns a stderr line into a fatal error.
 function Works($p) { if (-not $p) { return $false }; $ErrorActionPreference = 'Continue'; try { $o = & $p -c "print(42)" 2>$null; return ("$o".Trim() -eq "42") } catch { return $false } }
 function Same($a, $b) {  # same content, ignoring Windows/Unix line endings
@@ -45,7 +63,8 @@ try {
     # --- Folder ---
     $Folder = $null
     foreach ($f in @($PSScriptRoot, (Get-Location).Path)) { if ($f -and (Test-Path (Join-Path $f "nzb_manager_config.json"))) { $Folder = $f; break } }
-    if (-not $Folder) { $Folder = (Read-Host "Path to your NZB Command Center folder").Trim('"', ' ') }
+    if (-not $Folder -and -not $Unattended) { $Folder = (Read-Host "Path to your NZB Command Center folder").Trim('"', ' ') }
+    $script:Folder = $Folder
     if (-not (Test-Path (Join-Path $Folder "nzb_manager_config.json"))) { throw "No nzb_manager_config.json in $Folder." }
     Say "NZB Command Center - update everything" Cyan
     Say "Folder: $Folder"
@@ -103,7 +122,7 @@ try {
         $src = Join-Path $stage ($p -replace '/', '\'); $dst = Join-Path $Folder ($p -replace '/', '\')
         if (-not (Test-Path $dst)) { $new += $p } elseif (-not (Same $src $dst)) { $changed += $p }
     }
-    if (-not ($changed + $new)) { Say "`nEverything is already up to date. Nothing to do." Green; return }
+    if (-not ($changed + $new)) { Say "`nEverything is already up to date. Nothing to do." Green; Result "uptodate" "Everything is already up to date." @(); return }
     Say "`nTo update: $($changed.Count) changed, $($new.Count) new"
     ($changed + $new) | ForEach-Object { Say "  $_" }
 
@@ -112,6 +131,7 @@ try {
     while ($true) {
         $desk = @(Get-CimInstance Win32_Process -Filter "Name LIKE 'python%' OR Name = 'py.exe'" | Where-Object { $_.CommandLine -match $deskRx })
         if (-not $desk.Count) { break }
+        if ($Unattended) { Say "Desktop apps are open: they use the new version next time you open them." Yellow; break }
         Say "`nPlease close NZB Command Center / System Command Center, then press Enter." Yellow
         $null = Read-Host
     }
@@ -188,8 +208,10 @@ try {
 
     $v = if ((Get-Content (Join-Path $Folder "mobile_server.py") -Raw) -match 'VERSION = "([\d.]+)"') { $Matches[1] } else { "?" }
     Say "`nDone. Phone app version $v. Open the desktop apps again, and reopen the app on your phone." Cyan
+    Result "updated" "Updated $($changed.Count + $new.Count) files." @($changed + $new)
 } catch {
     Say "`n$($_.Exception.Message)" Red
+    Result "failed" $_.Exception.Message @()
 }
 }
-Read-Host "`nPress Enter to close"
+if ($Unattended) { try { Stop-Transcript | Out-Null } catch {} } else { Read-Host "`nPress Enter to close" }
