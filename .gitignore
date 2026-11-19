@@ -16,6 +16,7 @@ nzb_daily_stats.json
 media_inspector_cache.json
 drive_history.json
 tv_host.txt
+tv_app_installed.txt
 
 # --- Python ---
 __pycache__/
