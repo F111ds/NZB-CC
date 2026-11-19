@@ -61,9 +61,14 @@ function TvSync {
     # Run from the phone, this is Windows' SYSTEM account: use the profile whose ADB key the TV already trusts.
     $oldProfile = $env:USERPROFILE
     $pf = Join-Path $Folder "tv_user_profile.txt"
-    if ($env:USERPROFILE -match 'systemprofile' -and (Test-Path $pf)) {
-        $p = (Get-Content $pf -Raw).Trim()
-        if ($p -and (Test-Path (Join-Path $p ".android\adbkey"))) { $env:USERPROFILE = $p; $env:HOME = $p }
+    if ($env:USERPROFILE -match 'systemprofile') {
+        $cands = @()
+        if (Test-Path $pf) { $cands += (Get-Content $pf -Raw).Trim() }
+        # The NZB folder usually lives in your own user folder (C:\Users\you\...): that profile's key is the one the TV trusts.
+        if ($Folder -match '^([A-Za-z]:\\Users\\[^\\]+)') { $cands += $Matches[1] }
+        foreach ($p in $cands) {
+            if ($p -and (Test-Path (Join-Path $p ".android\adbkey"))) { $env:USERPROFILE = $p; $env:HOME = $p; break }
+        }
     }
     $ErrorActionPreference = 'Continue'
     $tvOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -TvHost $tvHost -UpdateOnly 2>&1 | Out-String
