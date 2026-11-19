@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1087,6 +1087,7 @@ class Hal:
         # Alerts you hid ("Hide 24 h"): key -> {"until", "level", "title"}. They come back when the time is up,
         # when they get worse, or when the problem goes away and later returns.
         self.snoozed: dict[str, dict] = {k: v for k, v in (st.get("snoozed") or {}).items() if isinstance(v, dict)}
+        self.update_seen = to_float(st.get("update_seen"), 0) or 0
         self._snooze_gone: dict[str, float] = {}
         self.services: dict[str, dict] = {}
         self.devices: list[dict] = []
@@ -1112,7 +1113,29 @@ class Hal:
             self.start()
 
     # ---- lifecycle ----
+    def report_update(self) -> None:
+        """After an update from the phone: says once (in the log) how it went."""
+        r = load_json(UPDATE_RESULT_FILE, {})
+        t = to_float(r.get("t"), 0) or 0
+        if not t or t <= self.update_seen:
+            return
+        self.update_seen = t
+        files = [str(f) for f in r.get("files") or [] if f]
+        state, msg = r.get("state"), str(r.get("message") or "")
+        if state == "updated":
+            self.add_event("ok", f"Updated to phone app {r.get('version') or '?'}" + (f" and HAL {r['hal_version']}" if r.get("hal_version") else ""),
+                           f"{len(files)} file{'s' if len(files) != 1 else ''}: " + ", ".join(files[:8]) + ("…" if len(files) > 8 else ""))
+        elif state == "uptodate":
+            self.add_event("info", "Already up to date", "The update found nothing new.")
+        else:
+            self.add_event("warning", "The update didn't work", msg or "See update_all.log in the NZB Command Center folder.", push=True)
+        self.save()
+
     def start(self) -> None:
+        try:
+            self.report_update()
+        except Exception:  # noqa: BLE001
+            log.exception("Reading update_result.json")
         if self.monitor is None:
             ms = dict(sm.DEFAULT_SETTINGS)
             ms.update({k: self.settings[k] for k in ("cpu_alert", "ram_alert", "cpu_temp_alert", "gpu_temp_alert",
@@ -1148,7 +1171,8 @@ class Hal:
             data = {"minutes": {k: list(v) for k, v in self.minutes.items()},
                     "hours": {k: list(v) for k, v in self.hours.items()},
                     "free": self.free_samples, "events": list(self.events), "seen": sorted(self.seen),
-                    "launch": self.launch, "power_log": self.power_log[-50:], "snoozed": self.snoozed}
+                    "launch": self.launch, "power_log": self.power_log[-50:], "snoozed": self.snoozed,
+                    "update_seen": self.update_seen}
         save_json(STATE_FILE, data)
 
     def update_settings(self, s: dict) -> None:
@@ -1462,6 +1486,10 @@ class Hal:
             if now - last_free >= 1800:
                 last_free = now
                 self.sample_free_space(now)
+            try:
+                self.report_update()       # the update writes its result after restarting this server
+            except Exception:  # noqa: BLE001
+                pass
             if IS_WINDOWS and now - last_sec >= 900:
                 last_sec = now
                 res = sm.run_powershell_json(SECURITY_PS, timeout=120)
@@ -1900,6 +1928,7 @@ class Hal:
             },
             "net": net, "services": services, "devices": self.devices, "drives": drives, "security": security, "power": power,
             "unread": self.unread,
+            "update": update_view(),
         }
 
 
@@ -2042,6 +2071,58 @@ def make_demo_hal(ups_mode: str = "online") -> Hal:
 # 12. ACTIONS (pod bay controls)
 # ==============================================================================
 
+# ---- Update button: runs update_all.ps1 -Unattended as its own Windows task ----
+# Its own task (as SYSTEM), not a child of this server: the update stops and restarts the phone server, and
+# Task Scheduler ends everything a task started when that task stops.
+UPDATE_TASK = "NZB-CC Update (from phone)"
+UPDATE_RESULT_FILE = BASE_DIR / "update_result.json"
+UPDATE_PENDING_FILE = BASE_DIR / "update_pending.json"
+UPDATE_PS = r"""
+try {
+  $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "__SCRIPT__" -Unattended' -WorkingDirectory '__DIR__'
+  $p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+  $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+  Register-ScheduledTask -TaskName '__NAME__' -Action $a -Principal $p -Settings $s -Description 'Started by the Update button in the HAL 9000 app: runs update_all.ps1 -Unattended.' -Force -ErrorAction Stop | Out-Null
+  Start-ScheduledTask -TaskName '__NAME__' -ErrorAction Stop
+  @{ ok = $true } | ConvertTo-Json -Compress
+} catch { @{ ok = $false; err = '' + $_.Exception.Message } | ConvertTo-Json -Compress }
+"""
+UPDATE_STALE = 15 * 60   # an update that hasn't reported back after this long is treated as finished
+
+
+def update_view() -> dict:
+    """The last result of update_all.ps1 -Unattended, and whether one is running now."""
+    result = load_json(UPDATE_RESULT_FILE, {})
+    pending = load_json(UPDATE_PENDING_FILE, {})
+    started = to_float(pending.get("t"), 0) or 0
+    running = bool(started) and time.time() - started < UPDATE_STALE and to_float(result.get("t"), 0) < started
+    return {"result": result or None, "running": running, "started": started or None}
+
+
+def start_update(hal: "Hal") -> dict:
+    name = hal.settings["name"]
+    if not IS_WINDOWS:
+        return {"ok": False, "message": "Updating from the phone only works on the Windows PC."}
+    script = BASE_DIR / "update_all.ps1"
+    if not script.is_file():
+        return {"ok": False, "message": "update_all.ps1 isn't in the NZB Command Center folder, so I can't update."}
+    if update_view()["running"]:
+        return {"ok": True, "message": f"I'm already updating, {name}. Give me a moment.", "updating": True}
+    save_json(UPDATE_PENDING_FILE, {"t": time.time()})
+    q = lambda v: str(v).replace("'", "''")
+    res = sm.run_powershell_json(UPDATE_PS.replace("__SCRIPT__", str(script).replace('"', "")).replace("__DIR__", q(BASE_DIR))
+                                 .replace("__NAME__", q(UPDATE_TASK)), timeout=60)
+    if not (isinstance(res, dict) and res.get("ok")):
+        try:
+            UPDATE_PENDING_FILE.unlink()
+        except OSError:
+            pass
+        err = res.get("err") if isinstance(res, dict) else "Windows didn't answer"
+        return {"ok": False, "message": f"I couldn't start the update: {err}"}
+    hal.add_event("info", "Updating", "Started from the phone. The phone server restarts on its own.")
+    return {"ok": True, "updating": True, "message": f"Updating now. I'll be back in about a minute, {name}."}
+
+
 def run_action(hal: Hal, action: str, body: dict) -> dict:
     name = hal.settings["name"]
     if hal.monitor.__class__.__name__ == "DemoMonitor":
@@ -2096,6 +2177,12 @@ def run_action(hal: Hal, action: str, body: dict) -> dict:
     elif action == "test_push":
         ok = send_push(hal.settings, "HAL 9000", f"Hello, {name}. Phone alerts are working. I'm watching everything.", "info")
         msg = "Sent. Check your phone." if ok else "Couldn't send. Set an ntfy topic in Settings (or in the NZB phone app)."
+    elif action == "update":
+        if body.get("confirm") is not True:
+            return {"ok": False, "message": f"I'm afraid I can't do that, {name}."}
+        res = start_update(hal)
+        log.info("Action update: %s %s", res.get("ok"), res.get("message"))
+        return res
     elif action == "clear_log":
         with hal.lock:
             hal.events.clear()
@@ -2730,6 +2817,7 @@ function rStatus(){
   const sysBad=S.systems.filter(x=>LV[x.level]>=2).length;
   const spk=CAN_SPEAK?'<button class="iconbtn" data-talk aria-label="'+(talkative()?'Voice on':'Voice off')+'">'+svg(talkative()?'spk':'mute',talkative()?'#FF6A4D':'#71717A')+'</button>':'';
   let head='<div class="top"><span class="brand"><b>HAL</b> 9000</span><span style="display:flex;gap:8px">'+spk+'<button class="iconbtn" data-go="log" aria-label="Log and controls">'+svg('bell','#D4D4D8')+(S.unread?'<i></i>':'')+'</button></span></div>';
+  head+=updBanner();
   if(S.power.shutdown_at&&S.power.shutdown_at>S.now)head+='<div class="banner"><b>Shutting down in '+Math.max(0,Math.round(S.power.shutdown_at-S.now))+' s</b><button class="btn red" data-act="cancel_shutdown">Cancel</button></div>';
   let x='';
   x+=alerts.map(i=>'<div class="alert '+i.level+'" data-go="'+esc(i.tab)+'"><span class="s '+i.level+'"></span><span class="grow"><b>'+esc(i.title)+'</b>'+(i.detail?'<p>'+esc(i.detail)+'</p>':'')+'</span><button class="snz" data-snooze="'+esc(i.key)+'" aria-label="Hide for 24 hours">Hide 24 h</button></div>').join('');
@@ -2944,12 +3032,12 @@ function rShield(){
 /* ---------- Log & controls ---------- */
 let events=null;
 function rLog(){
-  let x='<div class="top"><button class="back" data-go="status">‹ Status</button><button class="iconbtn" data-settings aria-label="Settings">'+svg('gear','#D4D4D8')+'</button></div><h1>Log &amp; controls</h1>';
+  let x='<div class="top"><button class="back" data-go="status">‹ Status</button><button class="iconbtn" data-settings aria-label="Settings">'+svg('gear','#D4D4D8')+'</button></div><h1>Log &amp; controls</h1>'+updBanner();
   if(S.power.shutdown_at&&S.power.shutdown_at>S.now)x+='<div class="banner"><b>Shutting down in '+Math.max(0,Math.round(S.power.shutdown_at-S.now))+' s</b><button class="btn red" data-act="cancel_shutdown">Cancel</button></div>';
   x+='<div class="sec" style="margin-top:0"><span>WHAT I NOTICED</span>'+(events&&events.length?'<button class="btn" style="padding:4px 9px;font-size:11px" data-act="clear_log" data-confirm="Clear the log?">Clear</button>':'')+'</div><div class="list">';
   x+=events==null?'<div class="empty">I\'m thinking…</div>':events.length?events.slice(0,40).map(e=>'<div class="row"><span class="s '+e.level+'"></span><span class="t"><b>'+esc(e.title)+'</b><span>'+esc(ago(e.t)+(e.msg?' · '+e.msg:''))+'</span></span></div>').join(''):'<div class="empty">Nothing yet. I\'ve been watching quietly.</div>';
   x+='</div><div class="sec"><span>POD BAY CONTROLS</span></div><div class="grid2">'+
-   [['lock','lock','Lock','Lock the PC screen'],['sleep','moon','Sleep','Wake it with the keyboard'],['flush_dns','net','Fix network','Flush DNS, renew address'],['test_push','bell','Test alert','Send one to your phone']]
+   [['lock','lock','Lock','Lock the PC screen'],['sleep','moon','Sleep','Wake it with the keyboard'],['flush_dns','net','Fix network','Flush DNS, renew address'],['test_push','bell','Test alert','Send one to your phone'],['update','upd','Update','Get the newest version of everything']]
    .map(a=>'<button class="pod" data-act="'+a[0]+'"'+(a[0]==='sleep'?' data-confirm="Put the PC to sleep? Downloads and streams stop until it wakes."':'')+'><span class="ic">'+svg(a[1],'#FF6A4D')+'</span><b>'+a[2]+'</b><span>'+a[3]+'</span></button>').join('')+'</div>';
   x+='<div class="hold" data-hold="restart"><div class="fill"></div><span>Hold to restart HAL 9000</span></div>'+
      '<div class="hold amber" data-hold="shutdown" style="margin-top:10px"><div class="fill"></div><span>Hold to shut down</span></div>'+
@@ -2997,7 +3085,7 @@ function closeSheet(){$('sheet').classList.add('hidden')}
 $('sheet').onclick=e=>{if(e.target===$('sheet'))closeSheet()};
 
 /* ---------- actions ---------- */
-async function act(action,extra){try{const r=await api('/api/action',Object.assign({action},extra||{}));toast(r.message,!r.ok);setTimeout(refresh,800);if(action==='clean_temp'||action==='empty_recycle')setTimeout(loadCleanup,1500)}catch(e){toast(e.message,true)}}
+async function act(action,extra){try{const r=await api('/api/action',Object.assign({action},extra||{}));toast(r.message,!r.ok);if(r.updating){updWatch=true;render()}setTimeout(refresh,800);if(action==='clean_temp'||action==='empty_recycle')setTimeout(loadCleanup,1500)}catch(e){toast(e.message,true)}}
 function bindHold(el){let t0=0,raf=0;const fill=el.querySelector('.fill');
   const reset=()=>{cancelAnimationFrame(raf);t0=0;fill.style.width='0'};
   const step=()=>{const p=Math.min(1,(performance.now()-t0)/2000);fill.style.width=(p*100)+'%';if(p>=1){reset();if(navigator.vibrate)navigator.vibrate(60);act(el.dataset.hold,{confirm:true})}else raf=requestAnimationFrame(step)};
@@ -3009,7 +3097,8 @@ document.addEventListener('click',async e=>{
   if(e.target.closest('[data-showhidden]')){showHidden=!showHidden;render();return}
   const go=e.target.closest('[data-go]');if(go){show(go.dataset.go);return}
   const r=e.target.closest('[data-range]');if(r){range=r.dataset.range;hist=null;render();loadHist(true);return}
-  const a=e.target.closest('[data-act]');if(a){if(a.dataset.confirm&&!confirm(a.dataset.confirm))return;act(a.dataset.act);return}
+  const a=e.target.closest('[data-act]');if(a){if(a.dataset.act==='update'){if(confirm('Update everything now? The app goes quiet for about a minute while the PC restarts the phone server.'))act('update',{confirm:true});return}
+    if(a.dataset.confirm&&!confirm(a.dataset.confirm))return;act(a.dataset.act);return}
   const eg=e.target.closest('[data-evgo]');if(eg){evCat=eg.dataset.evgo;show('events');return}
   const ec=e.target.closest('[data-evcat]');if(ec){evCat=ec.dataset.evcat;render();return}
   const ed=e.target.closest('[data-evdays]');if(ed){evDays=Number(ed.dataset.evdays);render();return}
@@ -3061,7 +3150,13 @@ function render(){if(!S)return;if(pressing){renderLater=true;return}if(tab==='st
 async function loadEvents(){try{events=(await api('/api/events')).events;if(S)S.unread=0;if(tab==='log')render()}catch(e){}}
 async function loadHist(force){if(!force&&range!=='live'&&Date.now()-histAt<60000)return;try{hist=(await api('/api/history?range='+range)).series;histAt=Date.now();if(tab==='vitals')render()}catch(e){}}
 async function loadCleanup(){try{cleanup=await api('/api/cleanup');if(tab==='drives')render();if(cleanup.busy||!cleanup.t)setTimeout(loadCleanup,4000)}catch(e){}}
-async function refresh(){if(busy)return;busy=true;try{S=await api('/api/status');lastOk=Date.now();if(tab!=='events')render();if(tab==='vitals')loadHist(range==='live')}catch(e){if(!token)return;lastOk=0}finally{busy=false}}
+// Update button: wait for the PC to report back (the server restarts in between), then reload with the new version.
+let updWatch=false;
+function updateDone(){const u=S&&S.update;if(!updWatch||!u||u.running||!u.result||!u.started||u.result.t<u.started)return;
+  updWatch=false;const r=u.result;toast(r.state==='updated'?'Updated to version '+r.version+'. I feel much better now, '+S.hal.name+'.':r.message,r.state==='failed');
+  if(r.state==='updated')setTimeout(()=>location.reload(),3000)}
+function updBanner(){return (updWatch||(S&&S.update&&S.update.running))?'<div class="banner" style="background:#1a1407;border-color:#4a3609"><b>Updating… I\'ll be back in about a minute'+(S?', '+esc(S.hal.name):'')+'.</b></div>':''}
+async function refresh(){if(busy)return;busy=true;try{S=await api('/api/status');lastOk=Date.now();updateDone();if(tab!=='events')render();if(tab==='vitals')loadHist(range==='live')}catch(e){if(!token)return;lastOk=0}finally{busy=false}}
 // Opened from the all-in-one app (/app): ?tab=drives opens that page, ?settings=1 opens Settings, and an
 // "App" button at the left of the tab bar goes back.
 const QP=new URLSearchParams(location.search);

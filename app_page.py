@@ -129,6 +129,7 @@ aside.side{display:none}
 @media (min-width:1000px){.sheet{align-items:center}.sheet .panel{border-radius:20px}}
 .sw{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
 .sw small{display:block;color:var(--muted);font-size:12px}.sw input{width:22px;height:22px;accent-color:#FF3B1F;flex:none}
+#updbar{position:fixed;left:0;right:0;top:0;z-index:15;background:#1a1407;border-bottom:1px solid #4a3609;color:#fde68a;text-align:center;font-weight:600;font-size:13px;padding:calc(env(safe-area-inset-top) + 8px) 12px 8px}
 #toast{position:fixed;left:16px;right:16px;bottom:calc(96px + env(safe-area-inset-bottom));max-width:600px;margin:0 auto;background:#1c1c21;border:1px solid #2c2c31;border-radius:12px;padding:12px 14px;font-size:14px;z-index:20;opacity:0;transform:translateY(10px);transition:all .25s;pointer-events:none}
 #toast.on{opacity:1;transform:none}#toast.bad{border-color:#5a1410}
 #pair{max-width:420px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 50px) 22px 40px;text-align:center}
@@ -169,6 +170,7 @@ aside.side{display:none}
   <button data-tab="system"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>System</button>
 </nav>
 <div id="sheet" class="sheet hidden"><div class="panel" id="panel"></div></div>
+<div id="updbar" class="hidden">Updating… I'll be back in about a minute.</div>
 <div id="toast"></div>
 
 <script>
@@ -328,7 +330,7 @@ function rWatch(){let x='<div class="narrow">'+topbar('Watch')+tvCard(true);
 function rSystem(){let x='<div class="narrow">'+topbar('');
   x+='<div class="hero" style="margin-top:0"><div class="eye '+(S?S.hal.level:'')+'" style="width:64px;height:64px"></div><div><div class="g">SYSTEMS</div><div class="q">“'+esc(S?S.hal.quote:'I\'m thinking…')+'”</div></div></div>';
   x+=vitals()+attention(4)+systemsList();
-  x+='<div class="sec"><span>POD BAY CONTROLS</span></div><div class="list"><button class="row" data-hal="log"><span class="t"><b>Log, Lock, Sleep, Fix network, Restart</b><span>Hold to restart: “I\'m afraid I can\'t do that, '+esc(NAME())+'.”</span></span><span class="m">›</span></button></div>';
+  x+='<div class="sec"><span>POD BAY CONTROLS</span></div><div class="list"><button class="row" data-update><span class="t"><b>'+(updating()?'Updating…':'Update everything')+'</b><span>'+(updating()?'I\'ll be back in about a minute':'Get the newest version of the apps, from GitHub')+'</span></span><span class="m">›</span></button><button class="row" data-hal="log"><span class="t"><b>Log, Lock, Sleep, Fix network, Restart</b><span>Hold to restart: “I\'m afraid I can\'t do that, '+esc(NAME())+'.”</span></span><span class="m">›</span></button></div>';
   return x+'</div>'}
 // Don't redraw under a finger: a refresh that swaps a button between touch-down and touch-up loses the tap.
 let pressing=false,renderLater=false;
@@ -338,14 +340,24 @@ function render(){if(!$('app')||$('app').classList.contains('hidden'))return;if(
   if(tab==='home')renderHome();
   else{const el=$('t-'+tab),f={get:rGet,watch:rWatch,system:rSystem}[tab];const focused=document.activeElement&&document.activeElement.id==='sq';
     const sqv=$('sq')?$('sq').value:'';el.innerHTML=f();if($('sq')){$('sq').value=sqv;if(focused)$('sq').focus()}}
+  $('updbar').classList.toggle('hidden',!updating());
   if($('seye'))$('seye').className='eye sm '+(S?S.hal.level:'');$('sidefoot').textContent=S?S.host+' · up '+Math.floor((S.uptime||0)/86400)+' d':'';}
 function show(t){tab=t;['home','get','watch','system'].forEach(k=>$('t-'+k).classList.toggle('hidden',k!==t));document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));
   window.scrollTo(0,0);if(t==='get'){loadQueue();loadUpcoming()}if(t==='watch')loadKodi();render()}
 
 /* ---------- loading ---------- */
 async function refresh(){if(busy)return;busy=true;try{const [h,s]=await Promise.allSettled([api('/api/home'),api('/hal/api/status')]);
-    if(h.status==='fulfilled')H=h.value;if(s.status==='fulfilled'){S=s.value;window.HAL_OFF=''}else window.HAL_OFF=s.reason&&s.reason.message;
+    if(h.status==='fulfilled')H=h.value;if(s.status==='fulfilled'){S=s.value;window.HAL_OFF='';updateDone()}else window.HAL_OFF=s.reason&&s.reason.message;
     render()}finally{busy=false}}
+// Update button: the PC restarts the phone server in between; wait for its report, then reload with the new version.
+let updWatch=false;
+function updating(){return updWatch||!!(S&&S.update&&S.update.running)}
+function updateDone(){const u=S&&S.update;if(!updWatch||!u||u.running||!u.result||!u.started||u.result.t<u.started)return;
+  updWatch=false;const r=u.result;toast(r.state==='updated'?'Updated to version '+r.version+'. I feel much better now, '+NAME()+'.':r.message,r.state==='failed');
+  if(r.state==='updated')setTimeout(()=>location.reload(),3000)}
+function startUpdate(){if(updating()){toast('I\'m already updating, '+NAME()+'.');return}
+  if(!confirm('Update everything now? The app goes quiet for about a minute while the PC restarts the phone server.'))return;
+  api('/hal/api/action',{action:'update',confirm:true}).then(r=>{toast(r.message,!r.ok);if(r.updating){updWatch=true;render()}}).catch(e=>toast(e.message,true))}
 async function loadQueue(){try{Q=await api('/api/queue');if(tab==='get')render()}catch(e){}}
 async function loadUpcoming(){if(UP&&Date.now()-loadUpcoming.t<600000)return;try{UP=(await api('/api/arr/upcoming')).items||[];loadUpcoming.t=Date.now();if(tab==='get'||tab==='home')render()}catch(e){UP=UP||[]}}
 async function loadKodi(){try{K=await api('/api/kodi');if(tab==='watch')render()}catch(e){K={continue:[]};if(tab==='watch')render()}}
@@ -356,6 +368,7 @@ function openSettings(){const sw=(id,t,sub,on)=>'<label class="sw"><span>'+t+(su
   $('panel').innerHTML='<h2 style="margin:0 0 4px">Settings</h2><p class="hint" style="text-align:left;margin:0 0 10px">“I can give you my complete assurance that everything is connected, '+esc(NAME())+'.”</p>'+
    (CAN_SPEAK?sw('stalk','Talk to me','HAL speaks on this phone after your first tap',talkative()):'')+
    '<div class="list" style="margin-top:12px"><a class="row" href="/hal/?tab=log&settings=1&from=app" style="color:inherit;text-decoration:none"><span class="t"><b>HAL: name, alerts, UPS, voice</b><span>HAL\'s own settings</span></span><span class="m">›</span></a>'+
+   '<button class="row" data-update><span class="t"><b>Update everything</b><span>Newest version of the apps, from GitHub'+(S&&S.update&&S.update.result?' · last: '+esc(S.update.result.state==='updated'?'v'+S.update.result.version:S.update.result.state==='uptodate'?'up to date':'failed')+' '+esc(ago(S.update.result.t)):'')+'</span></span><span class="m">›</span></button>'+
    '<a class="row" href="/" style="color:inherit;text-decoration:none"><span class="t"><b>Classic NZB app</b><span>Indexers, saved searches, phone alerts, drives</span></span><span class="m">›</span></a>'+
    '<div class="row"><span class="t"><b>Connections</b><span>SABnzbd, indexers, Kodi, Jellyfin: still in the desktop app for now</span></span></div></div>'+
    '<button class="btn wide" id="sclose" style="margin-top:12px">Close</button><button class="btn wide" id="sforget" style="margin-top:8px;background:none;color:var(--muted)">Forget the access code on this device</button>';
@@ -373,6 +386,7 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if(d.snooze!==undefined||d.unsnooze!==undefined){const off=d.unsnooze!==undefined;api('/hal/api/snooze',{keys:(off?d.unsnooze:d.snooze).split('|'),hours:24,off})
     .then(r=>{toast(r.message,!r.ok);refresh()}).catch(err=>toast(err.message,true));return}
   if('showhidden' in d){showHidden=!showHidden;render();return}
+  if('update' in d){$('sheet').classList.add('hidden');startUpdate();return}
   if(d.tab){show(d.tab);return}
   if('settings' in d){openSettings();return}
   if('alerts' in d){location.href='/hal/?tab=log&from=app';return}

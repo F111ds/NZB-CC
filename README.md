@@ -108,6 +108,14 @@ choose, and cancels it if the power comes back in time.
 `python hal_server.py --demo` shows the app with made-up data (`--demo-ups battery` for a power cut), on any PC.
 HAL's own files: `hal_settings.json`, `hal_state.json` (history and log), `hal_server.log`.
 
+## Update from the phone
+
+The app's **System › Update everything** (and HAL's **Log & controls › Update**) runs `update_all.ps1 -Unattended` on
+the PC as its own Windows task: it downloads the newest files, restarts the phone server, and the app reloads with
+the new version once HAL reports back ("Updated to version 3.14.0", "Already up to date", or what went wrong; also in
+HAL's log). Open desktop apps aren't closed: they use the new version next time you open them. The run is logged in
+`update_all.log`, the outcome in `update_result.json`.
+
 ## Start everything when the PC turns on (no login needed)
 
 Right-click **setup_autologon.ps1** > Run with PowerShell. It downloads Microsoft's free Sysinternals **Autologon**
