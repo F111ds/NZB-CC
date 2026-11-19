@@ -90,6 +90,10 @@ h1{font-size:26px;margin:2px 0 10px}
 .search input{flex:1;min-width:0;background:var(--card);border:1px solid #26262b;border-radius:12px;padding:12px 14px;font-size:15px}
 .seg{display:flex;background:var(--card);border-radius:12px;padding:4px;margin:0 0 12px}
 .seg button{flex:1;min-height:38px;border:0;border-radius:9px;background:transparent;color:var(--muted);font-weight:600;font-size:13px}.seg button.on{background:#26262b;color:var(--white)}
+.chiprow{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin:-2px 0 10px;scrollbar-width:none;align-items:center}
+.chiprow span{font:700 10px var(--mono);letter-spacing:.14em;color:var(--muted);flex:none;margin-right:2px}
+.chiprow button{flex:none;border:0;border-radius:999px;padding:7px 12px;background:var(--card);color:var(--soft);font-weight:600;font-size:13px}
+.chiprow button.on{background:#3a0d0a;color:#ffd9d2}
 .vt{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
 .vt div{background:var(--card);border-radius:12px;padding:10px}.vt .v{font:600 17px var(--mono);margin-top:3px}.vt .v small{font-size:11px;color:var(--soft)}
 .hint{font-size:12px;color:var(--muted);text-align:center;font-style:italic;margin:8px 0 0}
@@ -171,6 +175,10 @@ const LV={ok:0,info:1,warning:2,critical:3};
 // Same address as the NZB app and HAL: use whichever code this phone already saved.
 let token=LS.get('app_token','')||LS.get('nzb_mobile_token','')||LS.get('hal_token','');
 let tab='home',H=null,S=null,Q=null,UP=null,K=null,results=null,getSeg='queue',lastQuote='',busy=false;
+// Search: what to look for (Newznab categories: 2000 movies, 5000 TV) and how to sort; remembered on this device.
+let getCat=LS.get('app_cat',''),sortBy=LS.get('app_sort','best'),lastQuery='',searching=false;
+const CATS=[['','All'],['2000','Movies'],['5000','TV']];
+const SORTS=[['best','Best'],['size','Size'],['new','Newest'],['grabs','Grabs']];
 const DESK=matchMedia('(min-width:1000px)').matches&&!('ontouchstart' in window);
 const NAME=()=>(S&&S.hal&&S.hal.name)||'Dave';
 const fb=(n,d=1)=>{if(n==null||isNaN(n))return'—';const u=['B','KB','MB','GB','TB'];let i=0;n=Number(n);while(Math.abs(n)>=1024&&i<u.length-1){n/=1024;i++}return(i?n.toFixed(n>=100?0:d):n.toFixed(0))+' '+u[i]};
@@ -273,8 +281,18 @@ function renderHome(){const el=$('t-home');
   $('hhead').innerHTML=topbar('',true);$('hbody').innerHTML=homeBody();$('hgreet').textContent=greeting();
   const eye=$('heye');eye.className='eye'+(DESK?' big':'')+' '+(S?S.hal.level:'')+(eye.classList.contains('talking')?' talking':'');
   const line=homeLine();if(line!==lastQuote){const first=!lastQuote;lastQuote=line;talk(eye,$('hquote'),line,!first&&talkative()&&unlocked)}}
-function rGet(){let x='<div class="narrow">'+topbar('Get')+'<form class="search" id="sform"><input id="sq" placeholder="What would you like, '+esc(NAME())+'?" enterkeyhint="search" autocomplete="off"><button class="btn r">Search</button></form>';
-  if(results){x+='<div class="sec"><span>'+results.length+' RESULT'+(results.length===1?'':'S')+'</span><button data-clear>CLEAR</button></div><div class="list">'+(results.length?results.slice(0,60).map(r=>'<div class="row"><span class="t"><b>'+esc(r.title)+'</b><span>'+esc([r.size,r.res,r.indexer,r.grabs?r.grabs+' grabs':'',r.pub_ts?ago(r.pub_ts):''].filter(Boolean).join(' · '))+'</span></span>'+(r.in_library?'<span class="pill o">HAVE IT</span>':'')+(r.added?'<span class="pill">ADDED</span>':'<button class="btn g" data-add="'+esc(r.id)+'">+ Add</button>')+'</div>').join(''):'<div class="empty">Nothing found, '+esc(NAME())+'. Try fewer words.</div>')+'</div>'}
+function shownResults(){let r=(results||[]).slice();
+  if(getCat==='2000')r=r.filter(x=>x.kind!=='tv');            // an indexer's mis-filed episode stays out of Movies
+  const by={'size_desc':(a,b)=>(b.size_bytes||0)-(a.size_bytes||0),'size_asc':(a,b)=>(a.size_bytes||0)-(b.size_bytes||0),
+    'new':(a,b)=>(b.pub_ts||0)-(a.pub_ts||0),'grabs':(a,b)=>(b.grabs||0)-(a.grabs||0)}[sortBy];
+  return by?r.sort(by):r}
+function rGet(){let x='<div class="narrow">'+topbar('Get')+'<form class="search" id="sform"><input id="sq" placeholder="'+(getCat==='2000'?'Which movie would you like, ':getCat==='5000'?'Which show would you like, ':'What would you like, ')+esc(NAME())+'?" enterkeyhint="search" autocomplete="off"><button class="btn r">Search</button></form>';
+  x+='<div class="chiprow">'+CATS.map(c=>'<button data-cat="'+c[0]+'" class="'+(getCat===c[0]?'on':'')+'">'+c[1]+'</button>').join('')+'</div>';
+  if(searching)x+='<div class="list"><div class="empty">I\'m searching your indexers, '+esc(NAME())+'…</div></div>';
+  if(results&&!searching){const list=shownResults(),sz=sortBy==='size_desc'?'Size ↓':sortBy==='size_asc'?'Size ↑':'Size';
+    x+='<div class="chiprow"><span>SORT</span>'+SORTS.map(o=>{const on=o[0]==='size'?sortBy.startsWith('size'):sortBy===o[0];return'<button data-sort="'+o[0]+'" class="'+(on?'on':'')+'">'+(o[0]==='size'?sz:o[1])+'</button>'}).join('')+'</div>';
+    results.shown=list;
+    x+='<div class="sec"><span>'+list.length+' RESULT'+(list.length===1?'':'S')+(getCat?' · '+(getCat==='2000'?'MOVIES':'TV'):'')+'</span><button data-clear>CLEAR</button></div><div class="list">'+(list.length?list.slice(0,80).map(r=>'<div class="row"><span class="t"><b>'+esc(r.title)+'</b><span>'+esc([r.size,r.res,r.indexer,r.grabs?r.grabs+' grabs':'',r.pub_ts?ago(r.pub_ts):''].filter(Boolean).join(' · '))+'</span></span>'+(r.in_library?'<span class="pill o">HAVE IT</span>':'')+(r.added?'<span class="pill">ADDED</span>':'<button class="btn g" data-add="'+esc(r.id)+'">+ Add</button>')+'</div>').join(''):'<div class="empty">Nothing found, '+esc(NAME())+'. Try fewer words.</div>')+'</div>'}
   x+='<div class="seg">'+[['queue','Queue'],['upcoming','Coming up']].map(s=>'<button data-seg="'+s[0]+'" class="'+(getSeg===s[0]?'on':'')+'">'+s[1]+'</button>').join('')+'</div>';
   if(getSeg==='queue'){if(!Q)x+='<div class="list"><div class="empty">I\'m checking SABnzbd…</div></div>';
     else{x+='<div class="sec"><span>'+esc(Q.state.toUpperCase())+(Q.speed?' · '+esc(Q.speed):'')+'</span><button data-q="'+(Q.state==='Paused'?'resume':'pause')+'">'+(Q.state==='Paused'?'RESUME ALL':'PAUSE ALL')+'</button></div><div class="list">'+
@@ -323,8 +341,10 @@ function openSettings(){const sw=(id,t,sub,on)=>'<label class="sw"><span>'+t+(su
 $('sheet').onclick=e=>{if(e.target===$('sheet'))$('sheet').classList.add('hidden')};
 
 /* ---------- clicks ---------- */
-document.addEventListener('submit',e=>{if(e.target.id!=='sform')return;e.preventDefault();const q=$('sq').value.trim();if(!q)return;results=[];render();
-  api('/api/search',{query:q,indexer:'*',category:''}).then(d=>{results=d.results||[];if(d.errors&&d.errors.length)toast(d.errors[0],true);render()}).catch(err=>{results=null;toast(err.message,true);render()})});
+function doSearch(q){if(!q)return;lastQuery=q;searching=true;render();
+  api('/api/search',{query:q,indexer:'*',category:getCat}).then(d=>{results=d.results||[];searching=false;if(d.errors&&d.errors.length)toast(d.errors[0],true);render()})
+    .catch(err=>{searching=false;toast(err.message,true);render()})}
+document.addEventListener('submit',e=>{if(e.target.id!=='sform')return;e.preventDefault();doSearch($('sq').value.trim())});
 document.addEventListener('click',e=>{const c=e.target.closest('button,a');if(!c)return;const d=c.dataset;
   if(d.tab){show(d.tab);return}
   if('settings' in d){openSettings();return}
@@ -335,7 +355,9 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a');if(!c
   if(d.q){act(()=>api('/api/queue/'+d.q,{}),d.q==='pause'?'Downloads paused.':'Downloads resumed.');return}
   if(d.qi){if(d.qi==='delete'&&!confirm('Remove '+(d.name||'this download')+' from the queue?'))return;act(()=>api('/api/queue/item',{id:d.id,action:d.qi}),d.qi==='delete'?'Removed.':null);return}
   if(d.add){c.disabled=true;c.textContent='Adding…';api('/api/add',{id:d.add,category:'',priority:''}).then(r=>{const it=(results||[]).find(x=>x.id===d.add);if(it)it.added=true;toast('Added'+(r.category?' to '+r.category:'')+'. I\'ll let you know when it\'s ready, '+NAME()+'.');render();loadQueue()}).catch(err=>{c.disabled=false;c.textContent='+ Add';toast(err.message,true)});return}
-  if('clear' in d){results=null;render();return}
+  if('clear' in d){results=null;lastQuery='';render();return}
+  if(d.cat!==undefined){getCat=d.cat;LS.set('app_cat',getCat);const q=($('sq')&&$('sq').value.trim())||lastQuery;if(q&&(results||searching))doSearch(q);else render();return}
+  if(d.sort){sortBy=d.sort==='size'?(sortBy==='size_desc'?'size_asc':'size_desc'):d.sort;LS.set('app_sort',sortBy);render();return}
   if(d.seg){getSeg=d.seg;render();if(d.seg==='upcoming')loadUpcoming();return}
   if(d.play){c.disabled=true;act(()=>api('/api/home/play',{id:d.play}),r=>r&&r.started_tv?'Turning the TV on. It\'ll start in a moment.':'Starting it on the TV.');return}
   if(d.ep){act(()=>api('/api/kodi/play',{episodeid:Number(d.ep)}),'Starting it on the TV.');return}
