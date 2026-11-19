@@ -58,8 +58,16 @@ function TvSync {
     }
     if (-not $tvHost) { Say "A new TV app is ready: run tv-launcher\install-on-tv.ps1 once." Yellow; return " A new TV app is ready: run tv-launcher\install-on-tv.ps1 once." }
     Say "`nUpdating the app on the TV ($tvHost)..."
+    # Run from the phone, this is Windows' SYSTEM account: use the profile whose ADB key the TV already trusts.
+    $oldProfile = $env:USERPROFILE
+    $pf = Join-Path $Folder "tv_user_profile.txt"
+    if ($env:USERPROFILE -match 'systemprofile' -and (Test-Path $pf)) {
+        $p = (Get-Content $pf -Raw).Trim()
+        if ($p -and (Test-Path (Join-Path $p ".android\adbkey"))) { $env:USERPROFILE = $p; $env:HOME = $p }
+    }
     $ErrorActionPreference = 'Continue'
     $tvOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -TvHost $tvHost -UpdateOnly 2>&1 | Out-String
+    $env:USERPROFILE = $oldProfile
     $tvOk = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = 'Stop'
     Say $tvOut.Trim()
