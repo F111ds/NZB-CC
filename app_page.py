@@ -315,16 +315,61 @@ function rGet(){let x='<div class="narrow">'+topbar('Get')+'<form class="search"
     x+='<div class="chiprow"><span>SORT</span>'+SORTS.map(o=>{const on=o[0]==='size'?sortBy.startsWith('size'):sortBy===o[0];return'<button data-sort="'+o[0]+'" class="'+(on?'on':'')+'">'+(o[0]==='size'?sz:o[1])+'</button>'}).join('')+'</div>';
     results.shown=list;
     x+='<div class="sec"><span>'+list.length+' RESULT'+(list.length===1?'':'S')+(getCat?' · '+(getCat==='2000'?'MOVIES':'TV'):'')+'</span><button data-clear>CLEAR</button></div><div class="list">'+(list.length?list.slice(0,80).map(r=>'<div class="row"><span class="t"><b>'+esc(r.title)+'</b><span>'+esc([r.size,r.res,r.indexer,r.grabs?r.grabs+' grabs':'',r.pub_ts?ago(r.pub_ts):''].filter(Boolean).join(' · '))+'</span></span>'+(r.in_library?'<span class="pill o">HAVE IT</span>':'')+(r.added?'<span class="pill">ADDED</span>':'<button class="btn g" data-add="'+esc(r.id)+'">+ Add</button>')+'</div>').join(''):'<div class="empty">Nothing found, '+esc(NAME())+'. Try fewer words.</div>')+'</div>'}
-  x+='<div class="seg">'+[['queue','Queue'],['upcoming','Coming up']].map(s=>'<button data-seg="'+s[0]+'" class="'+(getSeg===s[0]?'on':'')+'">'+s[1]+'</button>').join('')+'</div>';
+  if(results&&!searching&&lastQuery)x+='<button class="btn wide" data-savesearch style="margin:-2px 0 12px">☆ Save this search: tell me when something new turns up</button>';
+  x+='<div class="seg">'+[['queue','Queue'],['upcoming','Coming up'],['history','History'],['saved','Saved']].map(s=>'<button data-seg="'+s[0]+'" class="'+(getSeg===s[0]?'on':'')+'">'+s[1]+'</button>').join('')+'</div>';
   if(getSeg==='queue'){if(!Q)x+='<div class="list"><div class="empty">I\'m checking SABnzbd…</div></div>';
     else{x+='<div class="sec"><span>'+esc(Q.state.toUpperCase())+(Q.speed?' · '+esc(Q.speed):'')+'</span><button data-q="'+(Q.state==='Paused'?'resume':'pause')+'">'+(Q.state==='Paused'?'RESUME ALL':'PAUSE ALL')+'</button></div><div class="list">'+
       (Q.slots.length?Q.slots.map(s=>{const p=String(s.status).toLowerCase()==='paused';return'<div class="row"><span class="t"><b>'+esc(s.name)+'</b><span>'+esc([f0(s.percentage,'%'),s.status,s.sizeleft?s.sizeleft+' left':'',s.eta&&s.eta!=='0:00:00'?s.eta:'',s.cat].filter(Boolean).join(' · '))+'</span></span><button class="btn" data-qi="'+(p?'resume':'pause')+'" data-id="'+esc(s.id)+'">'+(p?'▶':'❚❚')+'</button><button class="btn" data-qi="delete" data-id="'+esc(s.id)+'" data-name="'+esc(s.name)+'">✕</button></div>'}).join(''):'<div class="empty">The queue is empty, '+esc(NAME())+'.</div>')+'</div>'}}
+  else if(getSeg==='history')x+=historyList();
+  else if(getSeg==='saved')x+=savedList();
   else x+=UP?(upcomingList(40,'NEXT 14 DAYS')||'<div class="list"><div class="empty">Nothing coming up in the next two weeks.</div></div>'):'<div class="list"><div class="empty">I\'m asking Sonarr and Radarr…</div></div>';
   return x+totals()+'</div>'}
+// ---- History (SABnzbd) and saved searches ----
+let HIST=null,SAVED=null;
+async function loadHistory(){try{HIST=(await api('/api/history')).slots||[];if(tab==='get')render()}catch(e){HIST=HIST||[];toast(e.message,true)}}
+async function loadSaved(){try{SAVED=await api('/api/saved');if(tab==='get')render()}catch(e){SAVED=SAVED||{searches:[]};toast(e.message,true)}}
+function historyList(){if(!HIST)return'<div class="list"><div class="empty">I\'m asking SABnzbd…</div></div>';
+  if(!HIST.length)return'<div class="list"><div class="empty">Nothing in the history yet.</div></div>';
+  return'<div class="list">'+HIST.map(h=>{const bad=String(h.status).toLowerCase()==='failed';
+    return'<div class="row"><span class="s'+(bad?' critical':String(h.status).toLowerCase()==='completed'?'':' warning')+'"></span><span class="t"><b>'+esc(h.name)+'</b><span>'+esc(bad?(h.fail_message||'Failed'):[h.status,h.size,h.cat,h.completed?ago(h.completed):''].filter(Boolean).join(' · '))+'</span></span>'+
+      (bad?'<button class="btn g" data-hretry="'+esc(h.id)+'">Retry</button>':'')+'<button class="btn" data-hdel="'+esc(h.id)+'" data-name="'+esc(h.name)+'">✕</button></div>'}).join('')+'</div>'}
+function savedList(){if(!SAVED)return'<div class="list"><div class="empty">I\'m reading your saved searches…</div></div>';
+  const ss=SAVED.searches||[];let x='<p class="hint" style="text-align:left;margin:0 0 10px">I run these every '+(SAVED.interval_hours||6)+' hours and '+(SAVED.alerts?'tell your phone':'list here')+' when something new turns up. Search for something, then tap ☆ Save this search.</p>';
+  if(!ss.length)return x+'<div class="list"><div class="empty">No saved searches yet.</div></div>';
+  return x+ss.map(v=>{const n=(v.new||[]).length;
+    return'<div class="cbox"><h3><span>'+esc(v.query)+'</span><span style="display:flex;gap:6px"><button class="btn" data-srun="'+esc(v.id)+'">Run now</button><button class="btn" data-sdel="'+esc(v.id)+'" data-name="'+esc(v.query)+'">✕</button></span></h3>'+
+      '<div class="sub">'+esc([v.indexer_name,v.category==='2000'?'Movies':v.category==='5000'?'TV':'',v.last_run?'checked '+ago(v.last_run):'not run yet',v.last_error?'problem: '+v.last_error:''].filter(Boolean).join(' · '))+'</div>'+
+      (n?'<div class="list" style="margin:10px 0 0;background:var(--card2)">'+(v.new||[]).slice(0,8).map(it=>'<div class="row"><span class="s"></span><span class="t"><b>'+esc(it.title)+'</b><span>'+esc([it.size,it.indexer,it.found?'found '+ago(it.found):''].filter(Boolean).join(' · '))+'</span></span></div>').join('')+'</div>'+
+         '<div class="crow"><button class="btn g" data-sopen="'+esc(v.query)+'" data-scat="'+esc(v.category||'')+'">Search it now</button><button class="btn" data-sclear="'+esc(v.id)+'">Mark '+n+' seen</button></div>':'<div class="sub" style="margin-top:6px">Nothing new.</div>')+'</div>'}).join('')}
+
+// ---- Kodi library (Watch › Library) ----
+let LIB=null,libView=null,libFilter='',SHOW=null,MISSING=null;
+async function loadLib(kind){try{if(kind==='movies'&&!(LIB&&LIB.movies))LIB=Object.assign(LIB||{},{movies:(await api('/api/kodi/movies')).movies||[]});
+  if(kind==='shows'&&!(LIB&&LIB.shows))LIB=Object.assign(LIB||{},{shows:(await api('/api/kodi/shows')).shows||[]});
+  if(kind==='missing')MISSING=(await api('/api/kodi/missing')).missing||[];render()}catch(e){toast(e.message,true)}}
+async function openShow(id){libView='show';SHOW=null;render();window.scrollTo(0,0);try{SHOW=await api('/api/kodi/show?id='+encodeURIComponent(id));render()}catch(e){toast(e.message,true);libView='shows';render()}}
+function rLibrary(){let x='<div class="narrow">'+topbar('')+'<div class="top" style="min-height:0"><button class="btn" data-libback>‹ '+(libView==='show'?'Shows':'Watch')+'</button></div>';
+  if(libView!=='show')x+='<h1>Library</h1><div class="seg">'+[['movies','Movies'],['shows','Shows'],['missing','Missing']].map(v=>'<button data-lib="'+v[0]+'" class="'+(libView===v[0]?'on':'')+'">'+v[1]+'</button>').join('')+'</div>';
+  if(libView==='movies'){const all=(LIB&&LIB.movies)||null;if(!all)return x+'<div class="list"><div class="empty">I\'m asking Kodi…</div></div></div>';
+    const f=libFilter.toLowerCase(),list=all.filter(m=>!f||m.title.toLowerCase().includes(f)).sort((a,b)=>String(b.added).localeCompare(String(a.added)));
+    x+='<div class="search"><input id="libq" placeholder="Find one of your '+all.length.toLocaleString()+' movies" value="'+esc(libFilter)+'" autocomplete="off" enterkeyhint="search"></div>';
+    x+='<div class="sec"><span>'+(f?list.length+' FOUND':'NEWEST FIRST')+'</span></div><div class="list">'+(list.length?list.slice(0,150).map(m=>movieRow(m,false)).join(''):'<div class="empty">Not in your library, '+esc(NAME())+'. Want me to look for it? Try Get.</div>')+'</div>'}
+  else if(libView==='shows'){const all=(LIB&&LIB.shows)||null;if(!all)return x+'<div class="list"><div class="empty">I\'m asking Kodi…</div></div></div>';
+    const f=libFilter.toLowerCase(),list=all.filter(v=>!f||v.title.toLowerCase().includes(f)).sort((a,b)=>String(b.lastplayed||b.added).localeCompare(String(a.lastplayed||a.added)));
+    x+='<div class="search"><input id="libq" placeholder="Find one of your '+all.length+' shows" value="'+esc(libFilter)+'" autocomplete="off" enterkeyhint="search"></div>';
+    x+='<div class="list">'+list.slice(0,200).map(v=>'<button class="row" data-show="'+v.id+'"><span class="s'+(v.watched>=v.episodes?' off':'')+'"></span><span class="t"><b>'+esc(v.title+(v.year?' ('+v.year+')':''))+'</b><span>'+esc(v.watched+' of '+v.episodes+' watched')+'</span></span><span class="m">›</span></button>').join('')+'</div>'}
+  else if(libView==='missing'){if(!MISSING)return x+'<div class="list"><div class="empty">I\'m checking every season for gaps…</div></div></div>';
+    x+=MISSING.length?'<div class="list">'+MISSING.map(g=>'<div class="row"><span class="s warning"></span><span class="t"><b>'+esc(g.show+' · Season '+g.season)+'</b><span>Missing episode'+(g.missing.length>1?'s ':' ')+esc(g.missing.join(', '))+'</span></span><button class="btn g" data-sopen="'+esc(g.show+' S'+String(g.season).padStart(2,'0')+'E'+String(g.missing[0]).padStart(2,'0'))+'" data-scat="5000">Find</button></div>').join('')+'</div>':'<div class="list"><div class="empty">No gaps in any season, '+esc(NAME())+'.</div></div>'}
+  else if(libView==='show'){if(!SHOW)return x+'<div class="list"><div class="empty">I\'m asking Kodi…</div></div></div>';
+    x+='<h1 style="margin-top:6px">'+esc(SHOW.title||'')+'</h1>'+(SHOW.next?'<div class="card"><h3><span class="k">NEXT EPISODE</span><button class="btn r" data-ep="'+SHOW.next.id+'">▶ TV</button></h3><div class="tt">S'+SHOW.next.season+' E'+SHOW.next.episode+' · '+esc(SHOW.next.title)+'</div></div>':'');
+    (SHOW.seasons||[]).slice().reverse().forEach(se=>{x+='<div class="sec"><span>'+(se.season?'SEASON '+se.season:'SPECIALS')+'</span><span>'+se.episodes.filter(e=>e.watched).length+' / '+se.episodes.length+'</span></div><div class="list">'+
+      se.episodes.map(e=>'<div class="row"><span class="s'+(e.watched?' off':'')+'"></span><span class="t"><b>'+esc('E'+e.episode+' · '+e.title)+'</b><span>'+esc(e.watched?'watched':e.resume?'started':'')+'</span></span><button class="btn r" data-ep="'+e.id+'">▶ TV</button></div>').join('')+
+      (se.missing&&se.missing.length?'<div class="row"><span class="s warning"></span><span class="t"><b>Missing: '+esc(se.missing.map(n=>'E'+n).join(', '))+'</b></span><button class="btn g" data-sopen="'+esc((SHOW.title||'')+' S'+String(se.season).padStart(2,'0')+'E'+String(se.missing[0]).padStart(2,'0'))+'" data-scat="5000">Find</button></div>':'')+'</div>'})}
+  return x+'</div>'}
 const mins=s=>s>=3600?Math.floor(s/3600)+' h '+String(Math.round(s%3600/60)).padStart(2,'0'):Math.round(s/60)+' min';
 function movieRow(m,finish){const meta=[m.year,m.runtime?mins(m.runtime):'',m.imdb?'IMDb '+Number(m.imdb).toFixed(1):'',finish&&m.runtime?mins(Math.max(0,m.runtime-m.resume))+' left':'',!finish&&m.watched?'watched':''].filter(Boolean).join(' · ');
   return'<div class="row"><span class="s'+(m.watched?' off':'')+'"></span><span class="t"><b>'+esc(m.title)+'</b><span>'+esc(meta)+'</span></span><button class="btn r" data-movie="'+m.id+'">▶ TV</button></div>'}
-function rWatch(){let x='<div class="narrow">'+topbar('Watch')+tvCard(true);
+function rWatch(){if(libView)return rLibrary();let x='<div class="narrow">'+topbar('Watch')+tvCard(true);
   if(K===null)x+='<div class="list"><div class="empty">I\'m asking Kodi…</div></div>';
   else if(K.online===false&&K.configured!==false)x+='<div class="list"><div class="empty">Kodi isn\'t answering, '+esc(NAME())+'. '+(H&&H.tv_ready?'Turn the TV on above.':'Turn the TV on and open Kodi.')+'</div></div>';
   const c=K&&K.continue||[];if(c.length)x+='<div class="sec"><span>CONTINUE WATCHING</span></div><div class="list">'+c.map(it=>'<div class="row"><span class="s"></span><span class="t"><b>'+esc(it.show.title+' · S'+it.episode.season+' E'+it.episode.episode)+'</b><span>'+esc(it.episode.title+' · '+it.show.watched+' of '+it.show.episodes+' watched')+'</span></span><button class="btn r" data-ep="'+it.episode.id+'">▶ TV</button></div>').join('')+'</div>';
@@ -334,7 +379,10 @@ function rWatch(){let x='<div class="narrow">'+topbar('Watch')+tvCard(true);
   if(fresh.length)x+='<div class="sec"><span>NEW IN YOUR LIBRARY</span></div><div class="list">'+fresh.slice(0,8).map(m=>movieRow(m,false)).join('')+'</div>';
   if(K&&K.counts)x+='<p class="hint">Your library: '+[K.counts.movies?K.counts.movies.toLocaleString()+' movies':'',K.counts.shows?K.counts.shows.toLocaleString()+' shows':'',K.counts.episodes?K.counts.episodes.toLocaleString()+' episodes':''].filter(Boolean).join(' · ')+'</p>';
   x+=jfList();
-  x+='<div class="sec"><span>MORE</span></div><div class="list"><a class="row" href="/kodi" style="color:inherit;text-decoration:none"><span class="t"><b>Library, remote and search</b><span>The full Kodi and Jellyfin pages (classic app)</span></span><span class="m">›</span></a></div>';
+  x+='<div class="sec"><span>YOUR LIBRARY</span></div><div class="list"><button class="row" data-lib="movies"><span class="t"><b>Movies</b><span>'+(K&&K.counts&&K.counts.movies?K.counts.movies.toLocaleString()+' movies · search them':'Search your movies')+'</span></span><span class="m">›</span></button>'+
+     '<button class="row" data-lib="shows"><span class="t"><b>Shows</b><span>'+(K&&K.counts&&K.counts.shows?K.counts.shows+' shows · seasons and episodes':'Seasons and episodes')+'</span></span><span class="m">›</span></button>'+
+     '<button class="row" data-lib="missing"><span class="t"><b>Missing episodes</b><span>Gaps in your seasons, with Find</span></span><span class="m">›</span></button>'+
+     '<a class="row" href="/kodi" style="color:inherit;text-decoration:none"><span class="t"><b>Classic Kodi page</b><span>Full remote, type on TV, Jellyfin details</span></span><span class="m">›</span></a></div>';
   return x+'</div>'}
 function rSystem(){let x='<div class="narrow">'+topbar('');
   x+='<div class="hero" style="margin-top:0"><div class="eye '+(S?S.hal.level:'')+'" style="width:64px;height:64px"></div><div><div class="g">SYSTEMS</div><div class="q">“'+esc(S?S.hal.quote:'I\'m thinking…')+'”</div></div></div>';
@@ -347,12 +395,15 @@ document.addEventListener('pointerdown',()=>{pressing=true},true);
 for(const ev of ['pointerup','pointercancel'])document.addEventListener(ev,()=>{setTimeout(()=>{pressing=false;if(renderLater){renderLater=false;render()}},0)},true);
 function render(){if(!$('app')||$('app').classList.contains('hidden'))return;if(pressing){renderLater=true;return}
   if(tab==='home')renderHome();
-  else{const el=$('t-'+tab),f={get:rGet,watch:rWatch,system:rSystem}[tab];const focused=document.activeElement&&document.activeElement.id==='sq';
-    const sqv=$('sq')?$('sq').value:'';el.innerHTML=f();if($('sq')){$('sq').value=sqv;if(focused)$('sq').focus()}}
+  else{const el=$('t-'+tab),f={get:rGet,watch:rWatch,system:rSystem}[tab];
+    // keep what's being typed (and where the cursor is) across the redraw
+    const a=document.activeElement,fid=a&&a.id&&a.tagName==='INPUT'?a.id:null,pos=fid?a.selectionStart:null;
+    const sqv=$('sq')?$('sq').value:'';el.innerHTML=f();if($('sq'))$('sq').value=sqv;
+    if(fid&&$(fid)){$(fid).focus();try{$(fid).setSelectionRange(pos,pos)}catch(e){}}}
   $('updbar').classList.toggle('hidden',!updating());
   if($('seye'))$('seye').className='eye sm '+(S?S.hal.level:'');$('sidefoot').textContent=S?S.host+' · up '+Math.floor((S.uptime||0)/86400)+' d':'';}
 function show(t){tab=t;['home','get','watch','system'].forEach(k=>$('t-'+k).classList.toggle('hidden',k!==t));document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));
-  window.scrollTo(0,0);if(t==='get'){loadQueue();loadUpcoming()}if(t==='watch')loadKodi();render()}
+  window.scrollTo(0,0);if(t==='get'){loadQueue();loadUpcoming();if(getSeg==='history')loadHistory();if(getSeg==='saved')loadSaved()}if(t==='watch')loadKodi();render()}
 
 /* ---------- loading ---------- */
 async function refresh(){if(busy)return;busy=true;try{const [h,s]=await Promise.allSettled([api('/api/home'),api('/hal/api/status')]);
@@ -431,6 +482,7 @@ $('sheet').onclick=e=>{if(e.target===$('sheet'))$('sheet').classList.add('hidden
 function doSearch(q){if(!q)return;lastQuery=q;searching=true;render();
   api('/api/search',{query:q,indexer:'*',category:getCat}).then(d=>{results=d.results||[];searching=false;if(d.errors&&d.errors.length)toast(d.errors[0],true);render()})
     .catch(err=>{searching=false;toast(err.message,true);render()})}
+document.addEventListener('input',e=>{if(e.target.id!=='libq')return;libFilter=e.target.value;clearTimeout(window._lq);window._lq=setTimeout(render,250)});
 document.addEventListener('submit',e=>{if(e.target.id!=='sform')return;e.preventDefault();doSearch($('sq').value.trim())});
 document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-hal]');if(!c)return;const d=c.dataset;
   if(d.snooze!==undefined||d.unsnooze!==undefined){const off=d.unsnooze!==undefined;api('/hal/api/snooze',{keys:(off?d.unsnooze:d.snooze).split('|'),hours:24,off})
@@ -449,7 +501,17 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if('clear' in d){results=null;lastQuery='';render();return}
   if(d.cat!==undefined){getCat=d.cat;LS.set('app_cat',getCat);const q=($('sq')&&$('sq').value.trim())||lastQuery;if(q&&(results||searching))doSearch(q);else render();return}
   if(d.sort){sortBy=d.sort==='size'?(sortBy==='size_desc'?'size_asc':'size_desc'):d.sort;LS.set('app_sort',sortBy);render();return}
-  if(d.seg){getSeg=d.seg;render();if(d.seg==='upcoming')loadUpcoming();return}
+  if(d.seg){getSeg=d.seg;render();if(d.seg==='upcoming')loadUpcoming();if(d.seg==='history')loadHistory();if(d.seg==='saved')loadSaved();return}
+  if(d.lib){libView=d.lib;libFilter='';render();window.scrollTo(0,0);loadLib(d.lib);return}
+  if('libback' in d){libView=libView==='show'?'shows':null;render();window.scrollTo(0,0);return}
+  if(d.show){openShow(d.show);return}
+  if(d.hretry){act(()=>api('/api/history/retry',{id:d.hretry}).then(()=>loadHistory()),'Trying it again.');return}
+  if(d.hdel){if(!confirm('Remove '+(d.name||'this')+' from the history? Downloaded files stay.'))return;act(()=>api('/api/history/delete',{id:d.hdel}).then(()=>loadHistory()),'Removed from the history.');return}
+  if('savesearch' in d){api('/api/saved',{action:'add',query:lastQuery,indexer:'*',category:getCat}).then(v=>{SAVED=v;toast('Saved. I\'ll keep looking for “'+lastQuery+'”, '+NAME()+'.')}).catch(e=>toast(e.message,true));return}
+  if(d.srun){c.disabled=true;toast('Running it now…');api('/api/saved',{action:'run',id:d.srun}).then(v=>{SAVED=v;render();toast('Done.')}).catch(e=>{c.disabled=false;toast(e.message,true)});return}
+  if(d.sdel){if(!confirm('Stop looking for “'+(d.name||'')+'”?'))return;api('/api/saved',{action:'delete',id:d.sdel}).then(v=>{SAVED=v;render()}).catch(e=>toast(e.message,true));return}
+  if(d.sclear){api('/api/saved',{action:'clear',id:d.sclear}).then(v=>{SAVED=v;render()}).catch(e=>toast(e.message,true));return}
+  if(d.sopen!==undefined){getCat=d.scat||'';LS.set('app_cat',getCat);libView=null;show('get');setTimeout(()=>{if($('sq'))$('sq').value=d.sopen;doSearch(d.sopen)},50);return}
   if(d.play){c.disabled=true;act(()=>api('/api/home/play',{id:d.play}),r=>r&&r.started_tv?'Turning the TV on. It\'ll start in a moment.':'Starting it on the TV.');return}
   if(d.ep){act(()=>api('/api/kodi/play',{episodeid:Number(d.ep)}),'Starting it on the TV.');return}
   if(d.movie){act(()=>api('/api/kodi/play',{movieid:Number(d.movie)}),'Starting it on the TV.');return}
