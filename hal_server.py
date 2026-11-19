@@ -2227,9 +2227,11 @@ async function api(path,body){
   if(r.status===401||r.status===429){if(r.status===401)showPair(d.error);throw new Error(d.error||'Not allowed')}
   if(!r.ok)throw new Error(d.error||('Error '+r.status));return d}
 function showPair(msg){$('app').classList.add('hidden');$('tabs').classList.add('hidden');$('pair').classList.remove('hidden');$('perr').textContent=msg&&token?msg:''}
-async function connect(){const v=$('code').value.trim();if(!v)return;token=v;$('perr').textContent='';
+async function connect(){const v=cleanCode($('code').value);$('code').value=v;if(!v)return;token=v;$('perr').textContent='';
   try{await api('/api/status');try{localStorage.setItem('hal_token',v)}catch(e){}$('pair').classList.add('hidden');start()}
   catch(e){$('perr').textContent='';talk($('peye'),$('pquote'),e.message,false)}}
+// Access codes are letters, digits, - and _ only: drop spaces, quotes and a pasted "\n" or line break.
+function cleanCode(v){return String(v||'').replace(/\\[nrt]/g,'').replace(/[^A-Za-z0-9_\-]/g,'')}
 $('connect').onclick=connect;$('code').onkeydown=e=>{if(e.key==='Enter')connect()};
 
 /* ---------- drawing helpers ---------- */
