@@ -82,7 +82,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.14.0"
+VERSION = "3.15.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -2448,6 +2448,341 @@ def jf_url_allowed(url: str) -> bool:
 
 
 # ==============================================================================
+# WATCH ON THE PHONE (home Wi-Fi only): Kodi's library, played through Jellyfin
+# ==============================================================================
+# The phone never talks to Jellyfin and never sees its key. It asks for a stream; the server
+# makes an unguessable session and relays Jellyfin's HLS stream under /watch/<session>/...
+# (an iPhone plays HLS natively). Where the phone stopped is kept in watch_positions.json and
+# handed to Kodi too, so the TV can carry on from the same spot.
+
+WATCH_FILE = BASE_DIR / "watch_positions.json"
+WATCH_DEVICE = "nzbcc-phone"
+WATCH_IDLE_SECONDS = 4 * 3600          # a session nobody has asked for in this long is dropped
+WATCH_MATCH_SECONDS = 1800
+WATCH_MAX_PLAYLIST = 5_000_000
+WATCH_CHUNK = 256 * 1024
+# Quality: Best plays the file as it is (H.264/HEVC copied, only the sound converted if the
+# phone can't play it); the others convert the picture to H.264 at that size.
+WATCH_QUALITIES = {"best": None, "1080": (1920, 20_000_000), "720": (1280, 6_000_000)}
+WATCH_SID_RE = re.compile(r"[A-Za-z0-9_-]{24,48}")
+WATCH_PATH_RE = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+){0,6}")
+TAILSCALE_NET6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
+_watch_lock = threading.Lock()
+_watch_sessions: dict[str, dict] = {}
+_watch_matches: dict[str, tuple[float, dict]] = {}
+
+
+def client_at_home(ip_text: str) -> bool:
+    """True for an address on the home network (Wi-Fi/LAN or this PC); False for Tailscale or the internet."""
+    try:
+        ip = ipaddress.ip_address(str(ip_text).split("%")[0])
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    if ip in TAILSCALE_NET or ip in TAILSCALE_NET6:
+        return False
+    return ip.is_loopback or ip.is_private or ip.is_link_local
+
+
+def _watch_key(kind: str, item_id: int) -> str:
+    return f"{kind}:{item_id}"
+
+
+def _watch_parse(body: dict) -> tuple[str, int]:
+    kind, item_id = str(body.get("kind") or ""), to_int(body.get("id"))
+    if kind not in ("movie", "episode") or item_id <= 0:
+        raise ValueError("Invalid movie or episode.")
+    return kind, item_id
+
+
+def _watch_title(text: str) -> str:
+    t = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+    return re.sub(r"^(the|a|an) ", "", t).replace(" ", "")
+
+
+def _file_name(path: str) -> str:
+    return re.split(r"[\\/]", str(path or ""))[-1].lower()
+
+
+def watch_positions() -> dict:
+    try:
+        data = json.loads(WATCH_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _watch_write(data: dict) -> None:
+    tmp = WATCH_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    os.replace(tmp, WATCH_FILE)
+
+
+def watch_save_position(key: str, pos: float, dur: float) -> bool:
+    """Remembers where the phone stopped. Returns True when the film counts as finished (95 %)."""
+    pos, dur = max(0.0, float(pos)), max(0.0, float(dur))
+    finished = dur > 0 and pos >= dur * 0.95
+    with _watch_lock:
+        data = watch_positions()
+        if finished or pos < 30:
+            data.pop(key, None)
+        else:
+            data[key] = {"pos": int(pos), "dur": int(dur), "t": int(time.time())}
+            if len(data) > 500:   # keep the newest 500
+                data = dict(sorted(data.items(), key=lambda kv: -to_int(_kdict(kv[1]).get("t")))[:500])
+        _watch_write(data)
+    return finished
+
+
+def _kodi_item(kind: str, item_id: int) -> dict:
+    if kind == "movie":
+        res = kodi_call("VideoLibrary.GetMovieDetails", {"movieid": item_id, "properties": [
+            "title", "year", "file", "runtime", "resume", "plot", "mpaa", "playcount"]}, timeout=8)
+        d = _kdict(_kdict(res).get("moviedetails"))
+    else:
+        res = kodi_call("VideoLibrary.GetEpisodeDetails", {"episodeid": item_id, "properties": [
+            "title", "showtitle", "season", "episode", "file", "runtime", "resume", "plot", "playcount"]}, timeout=8)
+        d = _kdict(_kdict(res).get("episodedetails"))
+    if not d:
+        raise UpstreamError("Kodi doesn't know that one any more.")
+    return d
+
+
+JF_WATCH_FIELDS = "ProductionYear,MediaSources,Path,RunTimeTicks,Overview,OfficialRating"
+
+
+def _jf_match(kind: str, kd: dict) -> dict | None:
+    """The Jellyfin item for a Kodi movie/episode: same file name first, else title + year / season + episode."""
+    uid = jf_user_id()
+    fname = _file_name(kd.get("file"))
+    if kind == "movie":
+        title = str(kd.get("title") or "")
+        items = (jf_request(f"/Users/{uid}/Items", {"searchTerm": title[:80], "IncludeItemTypes": "Movie", "Recursive": "true",
+                                                    "Fields": JF_WATCH_FIELDS, "Limit": 30}, timeout=10) or {}).get("Items") or []
+    else:
+        show = str(kd.get("showtitle") or "")
+        series = (jf_request(f"/Users/{uid}/Items", {"searchTerm": show[:80], "IncludeItemTypes": "Series", "Recursive": "true",
+                                                     "Limit": 10}, timeout=10) or {}).get("Items") or []
+        series.sort(key=lambda s: _watch_title(s.get("Name")) != _watch_title(show))
+        items = []
+        for s in series[:2]:
+            eps = jf_request(f"/Shows/{s.get('Id')}/Episodes", {"UserId": uid, "Season": to_int(kd.get("season")),
+                                                                "Fields": JF_WATCH_FIELDS}, timeout=10) or {}
+            items += eps.get("Items") or []
+    best, best_score = None, 0
+    for it in items:
+        score = 0
+        paths = [it.get("Path")] + [src.get("Path") for src in (it.get("MediaSources") or [])]
+        if fname and any(_file_name(p) == fname for p in paths if p):
+            score += 100
+        if kind == "movie":
+            if _watch_title(it.get("Name")) == _watch_title(kd.get("title")):
+                score += 50
+                y1, y2 = to_int(it.get("ProductionYear")), to_int(kd.get("year"))
+                score += 20 if y1 and y1 == y2 else 10 if y1 and y2 and abs(y1 - y2) == 1 else 0
+        elif (to_int(it.get("IndexNumber")) == to_int(kd.get("episode"))
+              and to_int(it.get("ParentIndexNumber")) == to_int(kd.get("season"))):
+            score += 60
+        if score > best_score:
+            best, best_score = it, score
+    return best if best_score >= 50 else None
+
+
+def _jf_stream_label(st: dict) -> str:
+    return str(st.get("DisplayTitle") or st.get("Language") or st.get("Codec") or "Track")[:60]
+
+
+def watch_item(kind: str, item_id: int, ip: str = "", host: str = "") -> dict:
+    """What the phone's movie page needs: Kodi's details, the Jellyfin match, tracks and where you stopped."""
+    key = _watch_key(kind, item_id)
+    kd = _kodi_item(kind, item_id)
+    with _watch_lock:
+        hit = _watch_matches.get(key)
+    if hit and time.time() - hit[0] < WATCH_MATCH_SECONDS:
+        jf = hit[1]
+    else:
+        jf = _jf_match(kind, kd) if jellyfin_configured() else None
+        with _watch_lock:
+            if len(_watch_matches) > 300:
+                _watch_matches.clear()
+            _watch_matches[key] = (time.time(), jf or {})
+    runtime = to_int(kd.get("runtime")) or _ticks_s((jf or {}).get("RunTimeTicks"))
+    saved = _kdict(watch_positions().get(key))
+    kodi_resume = int(to_float(_kdict(kd.get("resume")).get("position")))
+    start = to_int(saved.get("pos")) or kodi_resume
+    out = {
+        "kind": kind, "id": item_id, "title": str(kd.get("title") or "Untitled"), "year": to_int(kd.get("year")) or None,
+        "show": str(kd.get("showtitle") or ""), "season": to_int(kd.get("season")), "episode": to_int(kd.get("episode")),
+        "runtime": runtime, "plot": str(kd.get("plot") or (jf or {}).get("Overview") or "")[:1200],
+        "mpaa": re.sub(r"^Rated\s+", "", str(kd.get("mpaa") or (jf or {}).get("OfficialRating") or "")).strip()[:12],
+        "watched": to_int(kd.get("playcount")) > 0, "start": start, "on_phone": bool(saved),
+        "home": client_at_home(ip), "jellyfin": jellyfin_configured(), "matched": bool(jf),
+        "chips": [], "audio": [], "subs": [], "direct": False, "web": "", "poster": "",
+    }
+    if not jf:
+        return out
+    src = (jf.get("MediaSources") or [{}])[0]
+    streams = src.get("MediaStreams") or []
+    video = next((s for s in streams if s.get("Type") == "Video"), {})
+    height, width = to_int(video.get("Height")), to_int(video.get("Width"))
+    res = "4K" if height >= 1600 or width >= 3200 else "1080p" if height >= 900 or width >= 1800 else "720p" if height >= 650 else "SD" if height else ""
+    hdr = str(video.get("VideoRange") or "").upper() == "HDR"
+    audio = [s for s in streams if s.get("Type") == "Audio"]
+    subs = [s for s in streams if s.get("Type") == "Subtitle"]
+    out["chips"] = [c for c in [(res + " HDR") if hdr and res else res,
+                                "Atmos" if any("atmos" in _jf_stream_label(a).lower() for a in audio) else "",
+                                "Subs" if subs else ""] if c]
+    out["audio"] = [{"index": to_int(a.get("Index")), "label": _jf_stream_label(a), "default": bool(a.get("IsDefault"))} for a in audio][:20]
+    out["subs"] = [{"index": to_int(s.get("Index")), "label": _jf_stream_label(s) + ("" if s.get("IsTextSubtitleStream") else " (burned in)"),
+                    "default": bool(s.get("IsDefault") or s.get("IsForced"))} for s in subs][:30]
+    out["direct"] = str(video.get("Codec") or "").lower() in ("h264", "hevc", "h265")
+    out["poster"] = "j:" + str(jf.get("Id") or "")
+    c = jellyfin_conf()
+    web = c["url"]
+    try:   # Jellyfin set up as localhost on the PC: the phone reaches it at the PC's address instead
+        u = urllib.parse.urlsplit(web)
+        if u.hostname and ipaddress.ip_address(u.hostname).is_loopback and host:
+            web = f"{u.scheme}://{host.split(':')[0]}:{u.port or 8096}"
+    except ValueError:
+        pass
+    out["web"] = f"{web}/web/#/details?id={jf.get('Id')}" if web else ""
+    return out
+
+
+def _watch_jf_item(kind: str, item_id: int) -> tuple[dict, dict]:
+    """(Jellyfin item, its first media source) for a Kodi id, from the match cache or found again."""
+    key = _watch_key(kind, item_id)
+    with _watch_lock:
+        hit = _watch_matches.get(key)
+    jf = hit[1] if hit and time.time() - hit[0] < WATCH_MATCH_SECONDS else None
+    if jf is None:
+        jf = _jf_match(kind, _kodi_item(kind, item_id)) or {}
+        with _watch_lock:
+            _watch_matches[key] = (time.time(), jf)
+    if not jf:
+        raise UpstreamError("I can't find this one in Jellyfin. Is Jellyfin looking at the same folders as Kodi?")
+    return jf, (jf.get("MediaSources") or [{}])[0]
+
+
+def _jf_delete(path: str, params: dict) -> None:
+    c = jellyfin_conf()
+    if not (c["url"] and c["key"]):
+        return
+    req = urllib.request.Request(c["url"] + path + "?" + urllib.parse.urlencode(params), method="DELETE",
+                                 headers={"Authorization": jf_auth_header(c["key"]), "X-Emby-Token": c["key"], "User-Agent": USER_AGENT})
+    try:
+        with _OPENER.open(req, timeout=6) as resp:
+            resp.read(1000)
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError):
+        pass
+
+
+def _watch_end(sess: dict) -> None:
+    """Tells Jellyfin to stop converting for a session (frees the PC)."""
+    _jf_delete("/Videos/ActiveEncodings", {"DeviceId": WATCH_DEVICE, "PlaySessionId": sess["psid"]})
+
+
+def watch_start(body: dict, ip: str) -> dict:
+    if not client_at_home(ip):
+        raise ValueError("Watching on the phone only works on your home Wi-Fi, so it never uses mobile data.")
+    kind, item_id = _watch_parse(body)
+    jf, src = _watch_jf_item(kind, item_id)
+    streams = src.get("MediaStreams") or []
+    video = next((s for s in streams if s.get("Type") == "Video"), {})
+    audio = {to_int(s.get("Index")): s for s in streams if s.get("Type") == "Audio"}
+    subs = {to_int(s.get("Index")): s for s in streams if s.get("Type") == "Subtitle"}
+    quality = str(body.get("quality") or "best")
+    if quality not in WATCH_QUALITIES:
+        raise ValueError("Unknown quality.")
+    a = body.get("audio")
+    a = to_int(a, -1) if a is not None and a != "" else next((i for i, s in audio.items() if s.get("IsDefault")), next(iter(audio), -1))
+    if a >= 0 and a not in audio:
+        raise ValueError("Unknown sound track.")
+    sub = to_int(body.get("sub"), -1) if body.get("sub") not in (None, "") else -1
+    if sub >= 0 and sub not in subs:
+        raise ValueError("Unknown subtitles.")
+    psid = secrets.token_hex(16)
+    params = {"MediaSourceId": str(src.get("Id") or jf.get("Id")), "DeviceId": WATCH_DEVICE, "PlaySessionId": psid,
+              "SegmentContainer": "mp4", "MinSegments": "1", "BreakOnNonKeyFrames": "True",
+              "AudioCodec": "aac,ac3,eac3", "TranscodingMaxAudioChannels": "6", "AllowAudioStreamCopy": "true"}
+    if a >= 0:
+        params["AudioStreamIndex"] = str(a)
+    burn = sub >= 0 and not subs[sub].get("IsTextSubtitleStream")
+    can_copy = str(video.get("Codec") or "").lower() in ("h264", "hevc", "h265")
+    if quality == "best" and can_copy and not burn:
+        params.update(VideoCodec="hevc,h264", AllowVideoStreamCopy="true", MaxStreamingBitrate="200000000")
+        direct = True
+    else:
+        width, rate = WATCH_QUALITIES.get(quality) or WATCH_QUALITIES["1080"]
+        params.update(VideoCodec="h264", AllowVideoStreamCopy="false", VideoBitrate=str(rate),
+                      MaxStreamingBitrate=str(rate + 640_000), MaxWidth=str(width))
+        direct = False
+    if sub >= 0:
+        params.update(SubtitleStreamIndex=str(sub), SubtitleMethod="Encode" if burn else "Hls")
+    sid = secrets.token_urlsafe(24)
+    with _watch_lock:
+        old = list(_watch_sessions.values())
+        _watch_sessions.clear()     # one phone stream at a time
+        _watch_sessions[sid] = {"jf_id": str(jf.get("Id")), "params": params, "psid": psid, "at": time.time(),
+                                "key": _watch_key(kind, item_id)}
+    for s in old:
+        threading.Thread(target=_watch_end, args=(s,), daemon=True).start()
+    log.info("watch on phone %s:%s quality=%s direct=%s ip=%s", kind, item_id, quality, direct, ip)
+    return {"url": f"/watch/{sid}/master.m3u8", "sid": sid, "direct": direct, "quality": quality}
+
+
+def watch_stop(sid: str) -> None:
+    with _watch_lock:
+        sess = _watch_sessions.pop(sid, None)
+    if sess:
+        _watch_end(sess)
+
+
+def _kodi_set_resume(kind: str, item_id: int, pos: float, dur: float, finished: bool) -> None:
+    method, idk = ("VideoLibrary.SetMovieDetails", "movieid") if kind == "movie" else ("VideoLibrary.SetEpisodeDetails", "episodeid")
+    params: dict = {idk: item_id, "resume": {"position": 0 if finished else int(pos), "total": int(dur)}}
+    if finished:
+        params["playcount"] = 1
+    kodi_call(method, params, timeout=6)
+
+
+def watch_progress(body: dict) -> dict:
+    kind, item_id = _watch_parse(body)
+    pos, dur = to_float(body.get("pos")), to_float(body.get("dur"))
+    if not (0 <= pos <= 86400 and 0 <= dur <= 86400):
+        raise ValueError("Invalid position.")
+    finished = watch_save_position(_watch_key(kind, item_id), pos, dur)
+    kodi = False
+    if body.get("final") and kodi_configured() and (pos >= 30 or finished):
+        try:
+            _kodi_set_resume(kind, item_id, pos, dur, finished)
+            kodi = True
+        except UpstreamError:
+            pass    # Kodi is off; the phone's own copy is kept
+    return {"ok": True, "finished": finished, "kodi": kodi}
+
+
+def watch_to_tv(body: dict) -> dict:
+    """Carries on on the TV: Kodi gets the phone's position, then plays from there."""
+    kind, item_id = _watch_parse(body)
+    pos, dur = to_float(body.get("pos")), to_float(body.get("dur"))
+    if pos >= 30:
+        watch_save_position(_watch_key(kind, item_id), pos, dur)
+        _kodi_set_resume(kind, item_id, pos, dur, False)
+    watch_stop(str(body.get("sid") or ""))
+    kodi_call("Player.Open", {"item": {"movieid" if kind == "movie" else "episodeid": item_id}, "options": {"resume": pos >= 30}})
+    return {"ok": True}
+
+
+def _strip_jf_keys(text: str, jf_id: str, sid: str) -> str:
+    """A playlist from Jellyfin, made safe for the phone: no API key, and any absolute paths sent through /watch."""
+    text = re.sub(r"(?i)([?&])api_?key=[^&\s\"#]*&?", r"\1", text)
+    text = re.sub(r"[?&](?=\s|$)", "", text, flags=re.M)
+    return text.replace(f"/Videos/{jf_id}/", f"/watch/{sid}/").replace(f"/videos/{jf_id}/", f"/watch/{sid}/")
+
+
+# ==============================================================================
 # 5b3. SONARR & RADARR
 # ==============================================================================
 # Found automatically: each app keeps its port, URL base and API key in config.xml in its data
@@ -4767,7 +5102,7 @@ SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "Content-Security-Policy": (
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' blob:; manifest-src 'self'; "
+        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' blob:; media-src 'self' blob:; manifest-src 'self'; "
         "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     ),
 }
@@ -4936,12 +5271,76 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             png = KODI_ICON_PNG if path == "/kodi-icon.png" else KODI_ICON_MASKABLE_PNG
             self._send(200, png, "image/png", {"Cache-Control": "public, max-age=86400"})
             return
+        if path.startswith("/watch/"):
+            self._watch_relay(path)
+            return
         if not path.startswith("/api/"):
             self.send_json(404, {"error": "Not found."})
             return
         if not self._auth_ok():
             return
         self._guarded(lambda: self._route_get(path))
+
+    def _watch_relay(self, path: str) -> None:
+        """/watch/<session>/<rest>: Jellyfin's /Videos/<item>/<rest>, with the key added here and taken out of playlists."""
+        parts = path.split("/", 3)
+        sid, rest = (parts[2], parts[3]) if len(parts) == 4 else ("", "")
+        with _watch_lock:
+            sess = _watch_sessions.get(sid) if WATCH_SID_RE.fullmatch(sid) else None
+            if sess and time.time() - sess["at"] > WATCH_IDLE_SECONDS:
+                _watch_sessions.pop(sid, None)
+                sess = None
+            if sess:
+                sess["at"] = time.time()
+        if not sess or not WATCH_PATH_RE.fullmatch(rest) or ".." in rest:
+            self.send_json(404, {"error": "That stream has ended. Start it again from the movie page."})
+            return
+        if not client_at_home(self.ip):
+            self.send_json(403, {"error": "Watching on the phone only works on your home Wi-Fi."})
+            return
+        c = jellyfin_conf()
+        if not (c["url"] and c["key"]):
+            self.send_json(503, {"error": "Jellyfin isn't connected."})
+            return
+        if rest == "master.m3u8":
+            query = urllib.parse.urlencode(sess["params"])
+        else:
+            query = urllib.parse.urlsplit(self.path).query
+            query = "&".join(x for x in query.split("&") if x and not x.lower().startswith(("api_key=", "apikey=")))
+        url = f"{c['url']}/Videos/{sess['jf_id']}/{rest}" + (f"?{query}" if query else "")
+        headers = {"Authorization": jf_auth_header(c["key"]), "X-Emby-Token": c["key"], "User-Agent": USER_AGENT}
+        if self.headers.get("Range"):
+            headers["Range"] = self.headers["Range"][:100]
+        try:
+            resp = _OPENER.open(urllib.request.Request(url, headers=headers), timeout=90)
+        except urllib.error.HTTPError as exc:
+            self.send_json(exc.code if 400 <= exc.code < 600 else 502, {"error": f"Jellyfin answered HTTP {exc.code}."})
+            return
+        except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError):
+            self.send_json(502, {"error": "Can't reach Jellyfin."})
+            return
+        with resp:
+            ctype = resp.headers.get("Content-Type") or "application/octet-stream"
+            if rest.endswith(".m3u8"):
+                text = resp.read(WATCH_MAX_PLAYLIST).decode("utf-8", errors="replace")
+                self._send(200, _strip_jf_keys(text, sess["jf_id"], sid).encode("utf-8"), "application/vnd.apple.mpegurl")
+                return
+            try:
+                self.send_response(resp.status)
+                self.send_header("Content-Type", ctype)
+                for h in ("Content-Length", "Content-Range", "Accept-Ranges"):
+                    if resp.headers.get(h):
+                        self.send_header(h, resp.headers[h])
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                while True:
+                    chunk = resp.read(WATCH_CHUNK)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+                pass   # the phone moved on (seeked, paused, closed)
 
     def _route_get(self, path: str) -> None:
         if path == "/api/status":
@@ -4984,6 +5383,10 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             self._get_arr(path)
         elif path.startswith("/api/jellyfin"):
             self._get_jellyfin(path)
+        elif path == "/api/watch/item":
+            qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            kind, item_id = _watch_parse({"kind": qs.get("kind", [""])[0], "id": qs.get("id", [""])[0]})
+            self.send_json(200, watch_item(kind, item_id, self.ip, str(self.headers.get("Host") or "")[:200]))
         elif path == "/api/saved":
             self.send_json(200, self._saved_view())
         elif path == "/api/settings":
@@ -5124,6 +5527,16 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             sab_request("history", {"name": "delete", "value": nzo_id})  # removes the entry; downloaded files stay
             log.info("history delete %s ip=%s", nzo_id, self.ip)
             self.send_json(200, {"ok": True})
+        elif path == "/api/watch/start":
+            self.send_json(200, watch_start(body, self.ip))
+        elif path == "/api/watch/stop":
+            watch_stop(str(body.get("sid") or ""))
+            self.send_json(200, {"ok": True})
+        elif path == "/api/watch/progress":
+            self.send_json(200, watch_progress(body))
+        elif path == "/api/watch/tv":
+            self.send_json(200, watch_to_tv(body))
+            log.info("watch moved to TV ip=%s", self.ip)
         elif path == "/api/kodi/play":
             movieid, episodeid = to_int(body.get("movieid")), to_int(body.get("episodeid"))
             if (movieid > 0) == (episodeid > 0):
