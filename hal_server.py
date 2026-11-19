@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -452,6 +452,8 @@ DEFAULT_SETTINGS = {
     "pihole_url": "",               # blank: look for it among the PC's DNS servers
     "pihole_password": "",          # dpapi:... (Pi-hole 6 password / app password, or Pi-hole 5 API token)
     "pihole_off": False,            # don't watch a Pi-hole at all
+    "kuma_url": "",                 # Uptime Kuma, e.g. http://192.168.68.63:3001 (blank: not used)
+    "kuma_key": "",                 # dpapi:... Uptime Kuma API key (Settings > API Keys)
 }
 
 
@@ -485,7 +487,7 @@ SETTING_RANGES = {"down_after_s": (15, 900), "cpu_alert": (50, 100), "ram_alert"
 def validate_settings(body: dict, current: dict) -> dict:
     s = dict(current)
     for k, v in body.items():
-        if k not in DEFAULT_SETTINGS or k.startswith("pihole_"):   # Pi-hole has its own page (/api/pihole)
+        if k not in DEFAULT_SETTINGS or k.startswith(("pihole_", "kuma_")):   # Pi-hole has its own page (/api/pihole)
             continue
         d = DEFAULT_SETTINGS[k]
         if isinstance(d, bool):
@@ -685,9 +687,10 @@ class PiHole:
                        "blocking": str(b.get("blocking")) == "enabled", "timer": to_float(b.get("timer")) or None}
                 try:
                     td = self._v6("GET", "/api/stats/top_domains?blocked=true&count=5")
-                    tc = self._v6("GET", "/api/stats/top_clients?count=5")
+                    tc = self._v6("GET", "/api/stats/top_clients?count=200")
                     out["top_blocked"] = [[str(x.get("domain")), to_int(x.get("count"))] for x in td.get("domains") or []][:5]
                     out["top_clients"] = [[str(x.get("name") or x.get("ip")), to_int(x.get("count"))] for x in tc.get("clients") or []][:5]
+                    out["all_clients"] = [[str(x.get("name") or ""), str(x.get("ip") or "")] for x in tc.get("clients") or []][:200]
                 except OSError:
                     out["top_blocked"], out["top_clients"] = [], []
                 return out
@@ -700,8 +703,10 @@ class PiHole:
             try:
                 ti = self._v5("topItems=5")
                 out["top_blocked"] = [[k, to_int(v)] for k, v in (ti.get("top_ads") or {}).items()][:5]
-                tc = self._v5("topClients=5")
-                out["top_clients"] = [[k.split("|")[0] or k, to_int(v)] for k, v in (tc.get("top_sources") or {}).items()][:5]
+                tc = self._v5("topClients=200")
+                src = (tc.get("top_sources") or {}).items()
+                out["top_clients"] = [[k.split("|")[0] or k, to_int(v)] for k, v in src][:5]
+                out["all_clients"] = [[k.split("|")[0] if "|" in k else "", k.split("|")[-1]] for k, _v in src][:200]
             except (OSError, PiHoleAuthError):
                 pass
             return out
@@ -720,6 +725,75 @@ class PiHole:
             except OSError:
                 pass
             self.sid = ""
+
+
+# ==============================================================================
+# UPTIME KUMA (watches websites and devices; HAL reads its /metrics)
+# ==============================================================================
+# /metrics needs an API key (Uptime Kuma: Settings > API Keys), sent as the password of basic auth.
+
+KUMA_STATUS = {0: "down", 1: "up", 2: "pending", 3: "maintenance"}
+_KUMA_LINE = re.compile(r'^(monitor_status|monitor_response_time|monitor_cert_days_remaining)\{(.*)\}\s+(-?[\d.eE+]+)\s*$')
+_KUMA_LABEL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
+
+
+class KumaAuthError(Exception):
+    pass
+
+
+def kuma_base(text: str) -> str:
+    """'192.168.68.63:3001' -> 'http://192.168.68.63:3001' ('' if blank)."""
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = "http://" + text
+    p = urllib.parse.urlsplit(text)
+    if p.scheme not in ("http", "https") or not p.hostname or p.username or p.password \
+            or not re.fullmatch(r"[A-Za-z0-9.\-]{1,253}", p.hostname):
+        raise ValueError("Use Uptime Kuma's address, like 192.168.68.63:3001.")
+    return f"{p.scheme}://{p.hostname}" + (f":{p.port}" if p.port else "")
+
+
+def parse_kuma_metrics(text: str) -> list[dict]:
+    mons: dict[str, dict] = {}
+    for line in text.splitlines():
+        m = _KUMA_LINE.match(line.strip())
+        if not m:
+            continue
+        labels = {k: v.replace('\\"', '"').replace("\\\\", "\\") for k, v in _KUMA_LABEL.findall(m.group(2))}
+        name = labels.get("monitor_name") or ""
+        if not name:
+            continue
+        mon = mons.setdefault(name, {"name": name[:80], "type": labels.get("monitor_type", "")[:20], "status": "pending",
+                                     "ms": None, "cert_days": None})
+        val = float(m.group(3))
+        if m.group(1) == "monitor_status":
+            mon["status"] = KUMA_STATUS.get(int(val), "pending")
+        elif m.group(1) == "monitor_response_time":
+            mon["ms"] = round(val) if val >= 0 else None
+        else:
+            mon["cert_days"] = round(val)
+    order = {"down": 0, "pending": 1, "maintenance": 2, "up": 3}
+    return sorted(mons.values(), key=lambda x: (order.get(x["status"], 4), x["name"].lower()))[:200]
+
+
+def kuma_fetch(base: str, key: str, timeout: float = 6.0) -> list[dict]:
+    h = {"User-Agent": f"HAL9000/{VERSION}", "Accept": "text/plain"}
+    if key:
+        h["Authorization"] = "Basic " + base64.b64encode(f":{key}".encode()).decode("ascii")
+    try:
+        with _OPENER.open(urllib.request.Request(base + "/metrics", headers=h), timeout=timeout) as resp:
+            text = resp.read(5_000_000).decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise KumaAuthError("Uptime Kuma needs an API key." if not key else "Uptime Kuma didn't accept the API key.") from None
+        raise OSError(f"Uptime Kuma answered HTTP {exc.code}.") from None
+    except urllib.error.URLError as exc:
+        raise OSError(str(exc.reason)) from None
+    if "monitor_status" not in text and "# HELP" not in text:
+        raise OSError("That doesn't look like Uptime Kuma.")
+    return parse_kuma_metrics(text)
 
 
 # ==============================================================================
@@ -1304,6 +1378,12 @@ class Hal:
         # when they get worse, or when the problem goes away and later returns.
         self.snoozed: dict[str, dict] = {k: v for k, v in (st.get("snoozed") or {}).items() if isinstance(v, dict)}
         self.update_seen = to_float(st.get("update_seen"), 0) or 0
+        # Devices Pi-hole has seen: id -> {"name", "ip", "first"}; new ones are flagged for a day.
+        self.known_devices: dict[str, dict] = {k: v for k, v in (st.get("known_devices") or {}).items() if isinstance(v, dict)}
+        self.new_devices: dict[str, dict] = {k: v for k, v in (st.get("new_devices") or {}).items() if isinstance(v, dict)}
+        self.devices_seeded = bool(st.get("devices_seeded"))
+        self.pihole_found = str(st.get("pihole_found") or "")     # where the Pi-hole was last found (no address set)
+        self.kuma: dict = {}
         self._snooze_gone: dict[str, float] = {}
         self.services: dict[str, dict] = {}
         self.devices: list[dict] = []
@@ -1364,7 +1444,8 @@ class Hal:
             self.monitor = sm.SystemMonitor(ms)
             self.monitor.start()
         for fn, name in ((self._service_loop, "services"), (self._network_loop, "network"), (self._power_loop, "power"),
-                         (self._slow_loop, "slow"), (self._history_loop, "history"), (self._pihole_loop, "pihole")):
+                         (self._slow_loop, "slow"), (self._history_loop, "history"), (self._pihole_loop, "pihole"),
+                         (self._kuma_loop, "kuma")):
             threading.Thread(target=self._guard(fn), name=f"hal-{name}", daemon=True).start()
 
     def stop(self) -> None:
@@ -1393,7 +1474,8 @@ class Hal:
                     "hours": {k: list(v) for k, v in self.hours.items()},
                     "free": self.free_samples, "events": list(self.events), "seen": sorted(self.seen),
                     "launch": self.launch, "power_log": self.power_log[-50:], "snoozed": self.snoozed,
-                    "update_seen": self.update_seen}
+                    "update_seen": self.update_seen, "known_devices": dict(list(self.known_devices.items())[-1000:]),
+                    "new_devices": self.new_devices, "devices_seeded": self.devices_seeded, "pihole_found": self.pihole_found}
         save_json(STATE_FILE, data)
 
     def update_settings(self, s: dict) -> None:
@@ -1661,7 +1743,12 @@ class Hal:
         if cur and (not base or cur.base == base):
             cur.password = pw
             return cur
-        if not base:      # look for it, but not every 30 s
+        if not base:      # where it was last time, else look for it (not every 30 s)
+            if self.pihole_found:
+                v = pihole_detect(self.pihole_found)
+                if v:
+                    self.pihole = PiHole(self.pihole_found, pw, v)
+                    return self.pihole
             if time.time() - self._ph_search < self.PH_SEARCH_EVERY:
                 return None
             self._ph_search = time.time()
@@ -1670,6 +1757,9 @@ class Hal:
                 if v:
                     self.pihole = PiHole(f"http://{ip}", pw, v)
                     log.info("Found Pi-hole %s at %s", v, ip)
+                    if self.pihole_found != self.pihole.base:
+                        self.pihole_found = self.pihole.base
+                        self.save()
                     return self.pihole
             return None
         v = pihole_detect(base)
@@ -1687,18 +1777,28 @@ class Hal:
             ph = self._pihole_client()
             if ph is None:
                 with self.lock:
-                    self.ph = {} if self.settings.get("pihole_off") or not prev.get("found") else {**prev, "t": now}
+                    if self.settings.get("pihole_off"):
+                        self.ph = {}
+                    elif prev.get("found"):
+                        self.ph = {**prev, "t": now}
+                    elif self.settings.get("pihole_password") or self.pihole_found:
+                        # You told me there's one (or I found it before): say so instead of quietly showing nothing.
+                        self.ph = {"found": True, "ok": False, "need_password": False, "missing": True, "fails": 0, "t": now, "base": self.pihole_found,
+                                   "error": "I can't find the Pi-hole. Type its address in Settings › Connections."}
+                    else:
+                        self.ph = {}
                 return
             summ = ph.summary()
+            self.track_devices(summ.pop("all_clients", []), now)
             state = {"found": True, "ok": True, "base": ph.base, "version": ph.version, "fails": 0, "error": "",
                      "need_password": False, "t": now, **summ}
         except PiHoleAuthError as exc:
-            state = {**prev, "found": True, "ok": False, "need_password": True, "error": str(exc), "fails": 0, "t": now,
+            state = {**prev, "found": True, "ok": False, "need_password": True, "missing": False, "error": str(exc), "fails": 0, "t": now,
                      "base": self.pihole.base if self.pihole else prev.get("base", ""), "version": self.pihole.version if self.pihole else 0}
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             if not prev.get("found") and not self.settings.get("pihole_url"):
                 return
-            state = {**prev, "found": True, "ok": False, "need_password": False, "error": str(exc)[:160] or "No answer.",
+            state = {**prev, "found": True, "ok": False, "need_password": False, "missing": False, "error": str(exc)[:160] or "No answer.",
                      "fails": to_int(prev.get("fails")) + 1, "t": now}
         with self.lock:
             self.ph = state
@@ -1716,9 +1816,93 @@ class Hal:
         if timer and ph.get("t"):
             timer = max(0, timer - (time.time() - ph["t"]))
         return {"found": True, "ok": ph.get("ok", False), "version": ph.get("version"), "host": urllib.parse.urlsplit(ph.get("base", "")).hostname or "",
-                "error": ph.get("error", ""), "need_password": ph.get("need_password", False), "fails": ph.get("fails", 0),
+                "error": ph.get("error", ""), "need_password": ph.get("need_password", False), "missing": bool(ph.get("missing")),
+                "fails": ph.get("fails", 0),
                 "blocking": ph.get("blocking"), "timer": round(timer) if timer else None,
                 **{k: ph.get(k) for k in ("queries", "blocked", "percent", "clients", "domains", "gravity_t", "top_blocked", "top_clients", "t")}}
+
+    NEW_DEVICE_HOURS = 24
+
+    def track_devices(self, clients: list, now: float | None = None) -> list[dict]:
+        """Devices Pi-hole saw that HAL hasn't before. The first time, they're all just remembered."""
+        now = time.time() if now is None else now
+        fresh = []
+        with self.lock:
+            for name, ip in clients or []:
+                name, ip = str(name or "").strip()[:80], str(ip or "").strip()[:60]
+                if not ip and not name:
+                    continue
+                did = (name if name and name != ip else ip).lower()
+                if did in self.known_devices:
+                    self.known_devices[did]["ip"] = ip or self.known_devices[did].get("ip", "")
+                    continue
+                self.known_devices[did] = {"name": name if name != ip else "", "ip": ip, "first": now}
+                if self.devices_seeded:
+                    dev = {"id": did, "name": name if name != ip else "", "ip": ip, "t": now}
+                    self.new_devices[did] = dev
+                    fresh.append(dev)
+            self.devices_seeded = self.devices_seeded or bool(clients)
+            for k, v in list(self.new_devices.items()):
+                if now - to_float(v.get("t"), now) > self.NEW_DEVICE_HOURS * 3600:
+                    del self.new_devices[k]
+        for dev in fresh:
+            self.add_event("warning", "A new device joined your network",
+                           f"{dev['name'] or 'A device with no name'} ({dev['ip']}). If you don't recognise it, "
+                           f"change the Wi-Fi password, {self.settings['name']}.", push=True)
+        if fresh:
+            self.save()
+        return fresh
+
+    def device_ok(self, did: str) -> bool:
+        with self.lock:
+            gone = self.new_devices.pop(str(did).lower(), None)
+        if gone:
+            self.save()
+        return bool(gone)
+
+    def _kuma_loop(self) -> None:
+        while not self.stop_evt.is_set():
+            self.check_kuma()
+            self.stop_evt.wait(30)
+
+    def check_kuma(self) -> None:
+        s = self.settings
+        try:
+            base = kuma_base(s.get("kuma_url") or "")
+        except ValueError:
+            base = ""
+        if not base:
+            with self.lock:
+                self.kuma = {}
+            return
+        prev, now = self.kuma, time.time()
+        try:
+            mons = kuma_fetch(base, dpapi_unprotect(s.get("kuma_key") or ""))
+            state = {"found": True, "ok": True, "base": base, "monitors": mons, "fails": 0, "error": "", "need_key": False, "t": now}
+        except KumaAuthError as exc:
+            state = {**prev, "found": True, "ok": False, "base": base, "need_key": True, "error": str(exc), "fails": 0, "t": now}
+        except (OSError, ValueError) as exc:
+            state = {**prev, "found": True, "ok": False, "base": base, "need_key": False, "error": str(exc)[:160] or "No answer.",
+                     "fails": to_int(prev.get("fails")) + 1, "t": now}
+        with self.lock:
+            self.kuma = state
+        if state.get("ok"):
+            was = {m["name"]: m["status"] for m in prev.get("monitors") or []} if prev.get("ok") else {}
+            for m in state["monitors"]:
+                if was.get(m["name"]) == "up" and m["status"] == "down":
+                    self.add_event("warning", f"{m['name']} is down", "Uptime Kuma says it stopped answering.", push=True)
+                elif was.get(m["name"]) == "down" and m["status"] == "up":
+                    self.add_event("ok", f"{m['name']} is back up", "Uptime Kuma says it's answering again.",
+                                   push=bool(self.settings.get("push_recoveries")))
+
+    def kuma_view(self) -> dict:
+        k = dict(self.kuma)
+        if not k.get("found"):
+            return {"found": False}
+        mons = k.get("monitors") or []
+        return {"found": True, "ok": k.get("ok", False), "host": urllib.parse.urlsplit(k.get("base", "")).netloc,
+                "error": k.get("error", ""), "need_key": k.get("need_key", False), "fails": k.get("fails", 0), "t": k.get("t"),
+                "monitors": mons, "up": sum(1 for m in mons if m["status"] == "up"), "down": sum(1 for m in mons if m["status"] == "down")}
 
     def _power_loop(self) -> None:
         while not self.stop_evt.is_set():
@@ -2055,6 +2239,8 @@ class Hal:
             if ph.get("fails", 0) >= 2:
                 add("pihole", "critical", "Pi-hole isn't answering",
                     "Websites may stop loading on every device in the house. Check the Raspberry Pi has power.", "shield")
+            elif ph.get("missing"):
+                add("pihole_pw", "warning", "I can't find the Pi-hole", "Type its address (the Raspberry Pi's IP) in Settings › Connections.", "shield")
             elif ph.get("need_password"):
                 add("pihole_pw", "info", "I can't sign in to Pi-hole", (ph.get("error") or "") + " Add it in Settings › Connections.", "shield")
             elif ph.get("ok") and ph.get("blocking") is False and not ph.get("timer"):
@@ -2062,6 +2248,22 @@ class Hal:
             elif ph.get("ok") and ph.get("gravity_t") and now - ph["gravity_t"] > 14 * 86400:
                 add("pihole_lists", "info", f"Pi-hole's block lists are {(now - ph['gravity_t']) / 86400:.0f} days old",
                     "They normally update every week. On the Pi: pihole -g", "shield")
+        for dev in list(self.new_devices.values()):
+            add(f"newdev:{dev['id']}", "warning", "A new device joined your network",
+                f"{dev['name'] or 'No name'} · {dev['ip']} · first seen {datetime.fromtimestamp(dev['t']).strftime('%a %I:%M %p').replace(' 0', ' ')}. "
+                "If you don't recognise it, change the Wi-Fi password.", "shield")
+        km = self.kuma
+        if km.get("found"):
+            if km.get("fails", 0) >= 2:
+                add("kuma", "warning", "I can't reach Uptime Kuma", km.get("error") or "", "services", 60)
+            elif km.get("need_key"):
+                add("kuma_key", "info", "Uptime Kuma needs an API key", "Uptime Kuma › Settings › API Keys, then Settings › Connections here.", "services")
+            elif km.get("ok"):
+                for m in km.get("monitors") or []:
+                    if m["status"] == "down":
+                        add(f"kuma:{m['name']}", "warning", f"{m['name']} is down", "Uptime Kuma says it isn't answering.", "services", 60)
+                    elif m.get("cert_days") is not None and 0 <= m["cert_days"] <= 7:
+                        add(f"kcert:{m['name']}", "info", f"{m['name']}'s certificate runs out in {m['cert_days']} days", "", "services")
         return issues
 
     # ---- hiding alerts for a while ----
@@ -2227,9 +2429,15 @@ class Hal:
                 detail = (f"{ph['blocked']:,} blocked today · {ph['percent']:.0f}%" if ph.get("blocking") or ph.get("blocking") is None
                           else f"Paused · back in {fmt_dur(ph['timer'])}" if ph.get("timer") else "Ad blocking is OFF")
             else:
-                detail = "Needs its password" if ph["need_password"] else "Not answering"
+                detail = "Needs its password" if ph["need_password"] else "Can't find it · set its address" if ph.get("missing") else "Not answering"
             systems.append({"id": "pihole", "name": "Pi-hole", "level": lvl({"pihole", "pihole_pw", "pihole_off", "pihole_lists"}),
                             "tab": "shield", "detail": detail})
+        kv = self.kuma_view()
+        if kv["found"]:
+            systems.append({"id": "kuma", "name": "Uptime Kuma", "level": lvl({"kuma", "kuma_key", "kcert"}), "tab": "services",
+                            "detail": (f"{kv['up']} up" + (f" · {kv['down']} down" if kv["down"] else "") if kv["ok"] else
+                                       "Needs an API key" if kv["need_key"] else "Not answering"),
+                            "count": f"{kv['up']} / {len(kv['monitors'])}" if kv["ok"] and kv["monitors"] else ""})
         name = s["name"]
         return {
             "version": VERSION, "host": socket.gethostname(), "now": now, "uptime": snap.get("uptime"), "boot": snap.get("boot"),
@@ -2254,6 +2462,7 @@ class Hal:
             "unread": self.unread,
             "update": update_view(),
             "pihole": ph,
+            "kuma": kv,
         }
 
 
@@ -2344,6 +2553,13 @@ def make_demo_hal(ups_mode: str = "online") -> Hal:
               "top_blocked": [["ads.example-tracker.com", 2104], ["telemetry.tv-maker.net", 1630], ["metrics.app-stats.io", 911],
                               ["pixel.adnetwork.com", 640], ["beacon.streaming-ads.tv", 402]],
               "top_clients": [["living-room-tv", 22140], ["hal9000", 18032], ["iphone", 9311], ["kodi", 4210], ["ipad", 2004]]}
+    hal.kuma = {"found": True, "ok": True, "base": "http://192.168.68.63:3001", "fails": 0, "error": "", "need_key": False, "t": now,
+                "monitors": [{"name": "Front door camera", "type": "ping", "status": "down", "ms": None, "cert_days": None}] +
+                            [{"name": n, "type": ty, "status": "up", "ms": ms, "cert_days": None} for n, ty, ms in
+                             (("Pi-hole", "http", 12), ("Router", "ping", 2), ("Jellyfin", "http", 31), ("Home Assistant", "http", 44),
+                              ("Kodi", "port", 9), ("Google", "http", 38), ("NAS", "ping", 1), ("Printer", "ping", 6),
+                              ("SABnzbd", "http", 18), ("Sonarr", "http", 21), ("Radarr", "http", 20))]}
+    hal.new_devices = {"android-3f2a": {"id": "android-3f2a", "name": "android-3f2a", "ip": "192.168.68.77", "t": now - 1800}}
     hal.updates = {"ok": True, "updates": [{"title": "2026-11 Cumulative Update for Windows 11", "reboot": True}], "t": now - 3600}
     def iso(sec_ago):
         return datetime.utcfromtimestamp(now - sec_ago).isoformat() + "Z"
@@ -2529,6 +2745,38 @@ def pihole_settings(hal: Hal, body: dict) -> dict:
     return {"ok": True, "message": f"Saved. I'll keep an eye on the Pi-hole, {name}."}
 
 
+def kuma_settings(hal: Hal, body: dict) -> dict:
+    """Settings › Connections › Uptime Kuma: test or save its address and API key (blank key keeps the saved one)."""
+    s = dict(hal.settings)
+    url = kuma_base(body.get("url", s.get("kuma_url", "")))
+    key = str(body.get("key") or "").strip()
+    if len(key) > 300 or not re.fullmatch(r"[\x21-\x7e]*", key):
+        raise ValueError("That API key doesn't look right.")
+    if not key and not body.get("clear_key"):
+        key = dpapi_unprotect(s.get("kuma_key") or "")
+    name = s["name"]
+    if body.get("action") == "test":
+        if not url:
+            return {"ok": False, "message": "Type Uptime Kuma's address, like 192.168.68.63:3001."}
+        try:
+            mons = kuma_fetch(url, key)
+        except KumaAuthError as exc:
+            return {"ok": False, "message": f"Found Uptime Kuma at {url}, but: {exc} Make one in Uptime Kuma › Settings › API Keys."}
+        except OSError as exc:
+            return {"ok": False, "message": f"Uptime Kuma at {url} didn't answer: {exc}"}
+        down = sum(1 for m in mons if m["status"] == "down")
+        return {"ok": True, "message": f"Uptime Kuma is answering, {name}: {len(mons)} monitors" + (f", {down} down." if down else ", all fine.")}
+    s["kuma_url"] = url
+    if body.get("clear_key"):
+        s["kuma_key"] = ""
+    elif body.get("key"):
+        s["kuma_key"] = dpapi_protect(key)
+    hal.update_settings(s)
+    threading.Thread(target=hal.check_kuma, daemon=True).start()
+    log.info("Uptime Kuma settings saved (address %s, key %s)", url or "none", "set" if s["kuma_key"] else "none")
+    return {"ok": True, "message": f"Saved. I'll read Uptime Kuma from now on, {name}." if url else "Uptime Kuma is switched off."}
+
+
 def run_action(hal: Hal, action: str, body: dict) -> dict:
     name = hal.settings["name"]
     if hal.monitor.__class__.__name__ == "DemoMonitor":
@@ -2605,6 +2853,9 @@ def run_action(hal: Hal, action: str, body: dict) -> dict:
         except OSError as exc:
             ok, msg = False, f"Pi-hole didn't answer: {exc}"
         threading.Thread(target=hal.check_pihole, daemon=True).start()
+    elif action == "device_ok":
+        ok = hal.device_ok(str(body.get("id") or ""))
+        msg = f"Thank you, {name}. I'll remember it." if ok else "That one's already off the list."
     elif action == "clear_log":
         with hal.lock:
             hal.events.clear()
@@ -2911,7 +3162,7 @@ class HalRoutes:
                 self._h_json(200, {"events": ev[:200]})
             elif path == "/api/settings":
                 url, _tok = ntfy_target(hal.settings)
-                self._h_json(200, {"settings": {k: v for k, v in hal.settings.items() if k != "pihole_password"}, "push_ready": bool(url),
+                self._h_json(200, {"settings": {k: v for k, v in hal.settings.items() if k not in ("pihole_password", "kuma_key")}, "push_ready": bool(url),
                                    "push_from_phone_app": bool(url) and not hal.settings.get("ntfy_url"),
                                    "services": [{"id": s["id"], "name": s["name"]} for s in SERVICES],
                                    "restart_methods": {sid: hal.restart_method(sid) for sid in SERVICE_IDS} if q.get("methods") else {}})
@@ -2921,6 +3172,9 @@ class HalRoutes:
                 self._h_json(200, hal.winevents_view())
             elif path == "/api/cleanup":
                 self._h_json(200, hal.cleanup_info(refresh=bool(q.get("refresh"))))
+            elif path == "/api/kuma":
+                self._h_json(200, {"url": hal.settings.get("kuma_url", ""), "key_set": bool(hal.settings.get("kuma_key")),
+                                   "found": hal.kuma_view()})
             elif path == "/api/pihole":
                 s = hal.settings
                 self._h_json(200, {"url": s.get("pihole_url", ""), "password_set": bool(s.get("pihole_password")),
@@ -2973,6 +3227,8 @@ class HalRoutes:
                                    ", unless it gets worse." if n else "That alert has already gone away."})
             elif path == "/api/pihole":
                 self._h_json(200, pihole_settings(hal, body))
+            elif path == "/api/kuma":
+                self._h_json(200, kuma_settings(hal, body))
             elif path == "/api/settings":
                 new = validate_settings(body, hal.settings)
                 hal.update_settings(new)

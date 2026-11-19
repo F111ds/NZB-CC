@@ -153,6 +153,8 @@ body.noscroll{overflow:hidden}
 .dline{display:flex;gap:12px;align-items:center;margin:18px 0 6px;font-style:italic;color:var(--soft);font-size:14px}
 .plot{color:var(--soft);font-size:14px;line-height:1.5}
 .wgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}.wgrid b{display:block;font:600 15px var(--mono);margin-top:2px}
+.qrow{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+.qb{border:0;border-radius:14px;background:var(--card);color:var(--text);padding:10px 4px;font-size:12px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:4px}.qb span{font-size:20px}.qb.warn{color:var(--amber)}
 .cardbtn{display:block;width:100%;text-align:left;border:0;color:inherit;font:inherit}
 .drow{display:flex;align-items:center;gap:10px;margin-top:10px}.drow b{font:700 13px var(--mono);width:26px}.dbar{flex:1;height:6px;border-radius:3px;background:#222227;overflow:hidden}.dbar i{display:block;height:100%;border-radius:3px}
 .dfree{font:12px var(--mono);color:var(--soft);min-width:96px;text-align:right}
@@ -291,7 +293,7 @@ let showHidden=false;
 // Small things (notes like 'Windows wants a restart'): one card, as in HAL, so what HAL mentions can be seen.
 function notesCard(){const n=S?S.issues.filter(i=>i.level==='info'):[];if(!n.length)return'';
   return'<div class="alert info" data-hal="'+esc(n[0].tab)+'" style="background:var(--card);border-color:#1f2a3a"><span class="s" style="background:var(--sky);box-shadow:0 0 8px var(--sky)"></span><span class="grow"><b>'+(n.length>1?n.length+' small things':'One small thing')+'</b><p>'+esc(n.map(i=>i.title).join(' · '))+'</p></span><button class="snz" data-snooze="'+esc(n.map(i=>i.key).join('|'))+'" aria-label="Hide for 24 hours">Hide 24 h</button></div>'}
-function attention(max){const list=issues().slice(0,max).map(i=>'<div class="alert '+i.level+'" data-hal="'+esc(i.tab)+'"><span class="s '+i.level+'"></span><span class="grow"><b>'+esc(i.title)+'</b>'+(i.detail?'<p>'+esc(i.detail)+'</p>':'')+'</span><button class="snz" data-snooze="'+esc(i.key)+'" aria-label="Hide for 24 hours">Hide 24 h</button></div>').join('')+notesCard();
+function attention(max){const list=issues().slice(0,max).map(i=>'<div class="alert '+i.level+'" data-hal="'+esc(i.tab)+'"><span class="s '+i.level+'"></span><span class="grow"><b>'+esc(i.title)+'</b>'+(i.detail?'<p>'+esc(i.detail)+'</p>':'')+'</span>'+(i.key.startsWith('newdev:')?'<button class="snz" data-devok="'+esc(i.key.slice(7))+'">It\'s mine</button>':'<button class="snz" data-snooze="'+esc(i.key)+'" aria-label="Hide for 24 hours">Hide 24 h</button>')+'</div>').join('')+notesCard();
   const h=(S&&S.snoozed)||[];if(!h.length)return list;
   const until=Math.min(...h.map(i=>i.until));
   let x=list+'<div class="hidline"><span>'+h.length+' alert'+(h.length>1?'s':'')+' hidden until '+esc((new Date(until*1000).toDateString()===new Date().toDateString()?'':new Date(until*1000).toDateString()===new Date(Date.now()+864e5).toDateString()?'tomorrow ':new Date(until*1000).toLocaleDateString([],{weekday:'short'})+' ')+clock(until*1000))+'</span><button data-showhidden>'+(showHidden?'CLOSE':'SHOW')+'</button></div>';
@@ -318,24 +320,59 @@ function jfList(){const j=(H&&H.jellyfin)||[];if(!j.length)return'';return'<div 
 function vitals(){if(!S)return'';const v=S.vitals,g=(v.gpus||[])[0],n=S.net;return'<div class="vt"><div><div class="k">CPU</div><div class="v">'+f0(v.cpu.pct)+'<small>%</small></div></div><div><div class="k">RAM</div><div class="v">'+f0(v.mem.pct)+'<small>%</small></div></div><div><div class="k">GPU</div><div class="v">'+(g?f0(g.util)+'<small>%</small>':'—')+'</div></div><div><div class="k">PING</div><div class="v">'+f0(n.ping_ms)+'<small>ms</small></div></div></div>'}
 function systemsList(){if(!S)return'<div class="list"><div class="empty">'+(window.HAL_OFF?esc(window.HAL_OFF):'I\'m thinking…')+'</div></div>';
   const tabOf={services:'services',network:'shield',storage:'drives',hardware:'vitals',security:'shield',power:'shield'};
-  return'<div class="list">'+S.systems.map(x=>'<button class="row" '+(x.id==='pihole'?'data-pihole':'data-hal="'+tabOf[x.id]+'"')+'><span class="s '+x.level+'"></span><span class="t"><b>'+esc(x.name)+'</b><span>'+esc(x.detail)+'</span></span><span class="m"'+(x.level!=='ok'?' style="color:var(--'+(x.level==='critical'?'red2':'amber')+')"':'')+'>'+esc(x.count||(x.level==='ok'?'':'LOOK'))+' ›</span></button>').join('')+
+  return'<div class="list">'+S.systems.map(x=>'<button class="row" '+(x.id==='pihole'?'data-pihole':x.id==='kuma'?'data-kuma':'data-hal="'+tabOf[x.id]+'"')+'><span class="s '+x.level+'"></span><span class="t"><b>'+esc(x.name)+'</b><span>'+esc(x.detail)+'</span></span><span class="m"'+(x.level!=='ok'?' style="color:var(--'+(x.level==='critical'?'red2':'amber')+')"':'')+'>'+esc(x.count||(x.level==='ok'?'':'LOOK'))+' ›</span></button>').join('')+
     '<button class="row" data-hal="events"><span class="s '+(S.security.events&&S.security.events.critical?'critical':S.security.events&&S.security.events.total?'warning':'')+'"></span><span class="t"><b>Windows events</b><span>'+esc(S.security.events?(S.security.events.total?S.security.events.total+' worth knowing about this week':'Nothing to worry about this week'):'Drive errors, crashes, failed updates')+'</span></span><span class="m">›</span></button></div>'}
 
 /* ---------- tabs ---------- */
 // Home keeps HAL's eye and line in place (so he isn't cut off mid-sentence) and redraws the rest.
 function homeBody(){if(DESK)return'<div class="cols"><div>'+attention(3)+downloadsCard()+arrivedList(5)+totals()+'</div><div>'+tvCard(true)+jfList()+upcomingList(5,'COMING UP')+'</div><div>'+vitals()+systemsList()+'<p class="hint" style="text-align:left">“'+esc(S?S.hal.quote:'')+'”</p></div></div>';
   // Phone: the PC and the house at a glance. Downloads live on Get.
-  return attention(3)+vitals()+drivesCard()+piholeCard()+tvCard(false)+jfList()+'<div class="sec"><span>EVERYTHING ELSE</span></div>'+systemsList()}
+  return attention(3)+quickRow()+upsCard()+vitals()+netCard()+drivesCard()+piholeCard()+kumaCard()+restartCard()+tvCard(false)+jfList()+'<div class="sec"><span>EVERYTHING ELSE</span></div>'+systemsList()}
+function quickRow(){const p=S&&S.pihole,ph=p&&p.found&&p.ok,paused=ph&&p.blocking===false;
+  const b=(attr,ic,label,cls)=>'<button class="qb'+(cls?' '+cls:'')+'" '+attr+'><span>'+ic+'</span>'+label+'</button>';
+  return'<div class="qrow">'+b('data-qa="lock"','🔒','Lock PC')+b('data-qa="sleep"','🌙','Sleep')+b('data-tvon','📺','TV on')+
+    (ph?(paused?b('data-phresume','🛡️','Ads on','warn'):b('data-phpause="5"','⏸️','Ads 5 min')):b('data-hal="log"','⚙️','More'))+'</div>'}
+function upsCard(){const u=S&&S.power&&S.power.ups;if(!u||!u.on_battery)return'';
+  return'<div class="card" style="border:1px solid var(--red2)"><h3><span class="k" style="color:var(--red2)">⚡ POWER CUT · ON THE UPS</span><span class="mono">'+(u.since?ago(u.since):'')+'</span></h3>'+
+    '<div class="wgrid" style="margin-top:10px"><div><span class="k">BATTERY</span><b>'+f0(u.charge,'%')+'</b></div><div><span class="k">TIME LEFT</span><b>'+(u.runtime_s?mins(u.runtime_s):'—')+'</b></div><div><span class="k">LOAD</span><b>'+f0(u.load,'%')+'</b></div></div>'+
+    '<div class="bar"><i style="width:'+(u.charge||0)+'%;background:'+((u.charge||0)<30?'var(--red2)':'var(--amber)')+'"></i></div>'+
+    '<div class="sub" style="margin-top:8px;color:var(--soft);font-size:13px">'+(S.power.auto_shutdown?'I\'ll shut the PC down safely at '+S.power.shutdown_pct+'% or '+S.power.shutdown_min+' min left.':'Automatic shutdown is off.')+'</div></div>'}
+function netCard(){if(!S)return'';const n=S.net,keys=(S.issues||[]).map(i=>i.key),down=keys.includes('internet')||keys.includes('router'),shaky=keys.includes('loss')||keys.includes('dns');
+  const st=down?['red2','DOWN']:shaky?['amber','SHAKY']:n.ping_ms==null?['soft','CHECKING']:['green','ONLINE'];
+  return'<button class="card cardbtn" data-hal="shield"><h3><span class="k">INTERNET</span><span class="mono" style="color:var(--'+st[0]+')">● '+st[1]+'</span></h3>'+
+    '<div class="wgrid" style="margin-top:10px"><div><span class="k">DOWN NOW</span><b>'+(n.down==null?'—':fb(n.down,1)+'/s')+'</b></div><div><span class="k">UP NOW</span><b>'+(n.up==null?'—':fb(n.up,1)+'/s')+'</b></div><div><span class="k">PING</span><b>'+f0(n.ping_ms,' ms')+'</b></div></div>'+
+    '<div class="sub" style="margin-top:8px;color:var(--soft);font-size:13px">'+esc([n.loss?Math.round(n.loss)+'% packets lost':'No packet loss',n.gateway?'router '+n.gateway:'',n.tailscale?'Tailscale on':''].filter(Boolean).join(' · '))+'</div></button>'}
+function restartCard(){if(!S||!S.boot)return'';const pend=S.security&&S.security.pending_reboot,days=Math.floor((Date.now()/1000-S.boot)/86400);
+  return'<div class="card" style="display:flex;align-items:center;gap:12px"><div style="flex:1"><span class="k">LAST RESTART</span><div style="font-weight:600;margin-top:4px">'+(days<1?'Today':days===1?'Yesterday':days+' days ago')+'</div>'+
+    (pend?'<div class="sub" style="color:var(--amber);font-size:13px">Windows is waiting for a restart to finish updates.</div>':'')+'</div>'+
+    (pend?'<button class="btn r" data-qa="restart">Restart</button>':'')+'</div>'}
+function kumaCard(){const k=S&&S.kuma;if(!k||!k.found)return'';
+  if(!k.ok)return'<button class="card cardbtn" data-kuma><h3><span class="k">UPTIME KUMA</span><span class="mono" style="color:var(--amber)">● '+(k.need_key?'NEEDS A KEY':'NOT ANSWERING')+'</span></h3><div class="sub" style="margin-top:6px;color:var(--soft);font-size:13px">'+esc(k.need_key?'Add its API key in Settings › Connections.':k.error)+'</div></button>';
+  const dn=k.monitors.filter(m=>m.status==='down');
+  return'<button class="card cardbtn" data-kuma><h3><span class="k">UPTIME KUMA ›</span><span class="mono" style="color:var(--'+(dn.length?'red2':'green')+')">● '+(dn.length?dn.length+' DOWN':'ALL UP')+'</span></h3>'+
+    (dn.length?dn.slice(0,4).map(m=>'<div class="drow"><span class="s critical"></span><b style="width:auto;flex:1;font:600 14px inherit">'+esc(m.name)+'</b><span class="dfree">down</span></div>').join(''):
+      '<div style="margin-top:8px;font-weight:600">'+k.up+' of '+k.monitors.length+' monitors answering</div>')+'</button>'}
+function openKuma(){const k=S&&S.kuma;if(!k||!k.found){openConnections();return}
+  const col={up:'green',down:'red2',pending:'amber',maintenance:'sky'};
+  let x='<h2 style="margin:0 0 4px">Uptime Kuma</h2><p class="hint" style="text-align:left;margin:0 0 12px">'+esc(k.host)+(k.t?' · checked '+ago(k.t):'')+'</p>';
+  if(!k.ok)x+='<div class="warnbox">'+esc(k.error)+'</div>';
+  else x+='<div class="list">'+k.monitors.map(m=>'<div class="row"><span class="s" style="background:var(--'+(col[m.status]||'soft')+')"></span><span class="t"><b>'+esc(m.name)+'</b><span>'+esc([m.status,m.type,m.cert_days!=null?'certificate '+m.cert_days+' days':''].filter(Boolean).join(' · '))+'</span></span><span class="m">'+(m.ms!=null?m.ms+' ms':'')+'</span></div>').join('')+'</div>';
+  x+='<button class="btn wide" data-conn style="margin-top:12px">Address and API key</button><button class="btn wide" id="kclose" style="margin-top:8px">Close</button>';
+  $('panel').innerHTML=x;$('sheet').classList.remove('hidden');$('kclose').onclick=()=>$('sheet').classList.add('hidden')}
+async function quickAction(a){
+  if(a==='sleep'&&!confirm('Put the PC to sleep? The phone app stops answering until it wakes.'))return;
+  if(a==='restart'&&!confirm('Restart the PC in 60 seconds? You can cancel it from Log & controls.'))return;
+  try{const r=await api('/hal/api/action',{action:a,confirm:a==='restart'});toast(r.message,!r.ok);setTimeout(refresh,1500)}catch(e){toast(e.message,true)}}
 function drivesCard(){if(!S||!S.drives||!S.drives.length)return'';const lim=100-((S.settings&&S.settings.drive_free_alert)||10);
   return'<button class="card cardbtn" data-hal="drives"><h3><span class="k">DRIVES</span><span class="k">›</span></h3>'+S.drives.map(d=>{const hot=d.disk&&d.disk.temp&&d.disk.temp_limit&&d.disk.temp>=d.disk.temp_limit,bad=d.disk&&/Warning|Unhealthy/.test(d.disk.health||'');
     const col=bad||d.pct>=97?'var(--red2)':d.pct>=lim||hot?'var(--amber)':'var(--green)';
     return'<div class="drow"><b>'+esc(d.mount)+'</b><span class="dbar"><i style="width:'+Math.min(100,d.pct)+'%;background:'+col+'"></i></span><span class="dfree">'+fb(d.free,0)+' free'+(d.disk&&d.disk.temp?' · '+Math.round(d.disk.temp)+'°':'')+'</span></div>'}).join('')+'</button>'}
 function piholeCard(){const p=S&&S.pihole;if(!p||!p.found)return'';
-  if(!p.ok)return'<button class="card cardbtn" data-pihole><h3><span class="k">PI-HOLE</span><span class="mono" style="color:var(--'+(p.need_password?'amber':'red2')+')">● '+(p.need_password?'NEEDS PASSWORD':'NOT ANSWERING')+'</span></h3><div class="sub" style="margin-top:6px">'+esc(p.need_password?'Add it in Settings › Connections.':'Websites may stop loading. Check the Raspberry Pi has power.')+'</div></button>';
+  if(!p.ok)return'<button class="card cardbtn" data-pihole><h3><span class="k">PI-HOLE</span><span class="mono" style="color:var(--'+(p.need_password?'amber':'red2')+')">● '+(p.need_password?'NEEDS PASSWORD':p.missing?'CAN\'T FIND IT':'NOT ANSWERING')+'</span></h3><div class="sub" style="margin-top:6px">'+esc(p.need_password?'Add it in Settings › Connections.':p.missing?'Type its address (the Raspberry Pi\'s IP) in Settings › Connections.':'Websites may stop loading. Check the Raspberry Pi has power.')+'</div></button>';
   const on=p.blocking!==false;
   return'<div class="card"><h3><button class="k linkish" data-pihole>PI-HOLE ›</button><span class="mono" style="color:var(--'+(on?'green':p.timer?'amber':'red2')+')">● '+(on?'BLOCKING':p.timer?'PAUSED · '+mmss(p.timer):'OFF')+'</span></h3>'+
     '<div class="wgrid" style="margin-top:10px"><div><span class="k">BLOCKED TODAY</span><b>'+big(p.blocked)+'</b></div><div><span class="k">OF LOOKUPS</span><b>'+(p.percent==null?'—':Math.round(p.percent)+'%')+'</b></div><div><span class="k">DEVICES</span><b>'+big(p.clients)+'</b></div></div>'+
-    (on?'<button class="btn wide" style="margin-top:12px" data-phpause="5">Pause blocking 5 min</button>':'<button class="btn r wide" style="margin-top:12px" data-phresume>Turn ad blocking back on</button>')+'</div>'}
+    (on?'':'<button class="btn r wide" style="margin-top:12px" data-phresume>Turn ad blocking back on</button>')+'</div>'}
 function renderHome(){const el=$('t-home');
   if(!$('heye'))el.innerHTML='<div id="hhead"></div><div class="hero'+(DESK?'':' center')+'"><button class="eye'+(DESK?' big':'')+'" id="heye" aria-label="Hear HAL"></button><div><div class="g" id="hgreet"></div><div class="q" id="hquote"></div></div></div><div id="hbody"></div>';
   $('hhead').innerHTML=topbar('',true);$('hbody').innerHTML=homeBody();$('hgreet').textContent=greeting();
@@ -561,7 +598,7 @@ function openPihole(){const p=S&&S.pihole;if(!p||!p.found){openConnections();ret
   $('panel').innerHTML=x;$('sheet').classList.remove('hidden');$('phclose').onclick=()=>$('sheet').classList.add('hidden')}
 async function phAction(action,extra){try{const r=await api('/hal/api/action',Object.assign({action},extra||{}));toast(r.message,!r.ok);setTimeout(async()=>{await refresh();if(!$('sheet').classList.contains('hidden')&&$('phclose'))openPihole()},1500)}catch(e){toast(e.message,true)}}
 async function openConnections(){$('panel').innerHTML='<h2 style="margin:0">Connections</h2><p class="hint" style="text-align:left">I\'m reading the settings…</p>';$('sheet').classList.remove('hidden');
-  try{CONN=await api('/api/connections');CONN.indexers.forEach(x=>x.orig=x.index);try{CONN.ph=await api('/hal/api/pihole')}catch(e){CONN.ph=null}}catch(e){toast(e.message,true);$('sheet').classList.add('hidden');return}renderConn()}
+  try{CONN=await api('/api/connections');CONN.indexers.forEach(x=>x.orig=x.index);try{CONN.ph=await api('/hal/api/pihole')}catch(e){CONN.ph=null}try{CONN.km=await api('/hal/api/kuma')}catch(e){CONN.km=null}}catch(e){toast(e.message,true);$('sheet').classList.add('hidden');return}renderConn()}
 function keyPh(set,what){return set?'Saved · type to replace':'Not set yet'}
 function renderConn(){const c=CONN;
   let x='<h2 style="margin:0 0 4px">Connections</h2><p class="hint" style="text-align:left;margin:0 0 10px">“I can give you my complete assurance that everything is connected, '+esc(NAME())+'.” Keys are encrypted on the PC and never shown here.</p>';
@@ -581,19 +618,24 @@ function renderConn(){const c=CONN;
   if(c.ph){const f=c.ph.found||{};x+='<div class="cbox" style="margin-top:14px"><h3>Pi-hole <button class="btn" data-ctest="pihole">Test</button></h3>'+
      '<label class="fld">Address'+(f.found&&!c.ph.url?' (found it at '+esc(f.host)+')':'')+'</label><input class="inp" id="c_ph_url" value="'+esc(c.ph.url)+'" placeholder="'+(f.found?'Blank is fine':'Blank: I look for it')+'" autocapitalize="off" autocorrect="off" inputmode="url">'+
      '<label class="fld">Password (the one you sign in to Pi-hole with)</label><input class="inp" id="c_ph_pw" type="password" placeholder="'+keyPh(c.ph.password_set,'password')+'" autocomplete="off"></div>'}
+  if(c.km)x+='<div class="cbox" style="margin-top:14px"><h3>Uptime Kuma <button class="btn" data-ctest="kuma">Test</button></h3>'+
+     '<label class="fld">Address</label><input class="inp" id="c_km_url" value="'+esc(c.km.url)+'" placeholder="192.168.68.63:3001" autocapitalize="off" autocorrect="off" inputmode="url">'+
+     '<label class="fld">API key (Uptime Kuma › Settings › API Keys)</label><input class="inp" id="c_km_key" type="password" placeholder="'+keyPh(c.km.key_set,'key')+'" autocomplete="off"></div>';
   x+='<p class="hint" style="text-align:left">Jellyfin and the TV\'s power settings are in the classic app (Jellyfin and Kodi tabs).</p>';
   x+='<button class="btn r wide" id="csave" style="margin-top:6px">Save</button><button class="btn wide" id="cclose" style="margin-top:8px">Close</button>';
   $('panel').innerHTML=x;$('cclose').onclick=()=>$('sheet').classList.add('hidden');$('csave').onclick=saveConn}
-function readConn(){const c=CONN;if(c.ph&&$('c_ph_url')){c.ph.newurl=$('c_ph_url').value.trim();c.ph.pw=$('c_ph_pw').value}c.sab.url=$('c_sab_url').value;c.sab.key=$('c_sab_key').value;c.kodi.url=$('c_kodi_url').value;c.kodi.username=$('c_kodi_user').value;c.kodi.pw=$('c_kodi_pw').value;
+function readConn(){const c=CONN;if(c.km&&$('c_km_url')){c.km.newurl=$('c_km_url').value.trim();c.km.key=$('c_km_key').value.trim()}if(c.ph&&$('c_ph_url')){c.ph.newurl=$('c_ph_url').value.trim();c.ph.pw=$('c_ph_pw').value}c.sab.url=$('c_sab_url').value;c.sab.key=$('c_sab_key').value;c.kodi.url=$('c_kodi_url').value;c.kodi.username=$('c_kodi_user').value;c.kodi.pw=$('c_kodi_pw').value;
   document.querySelectorAll('[data-ix]').forEach(el=>{const ix=c.indexers[Number(el.dataset.ix)];ix[el.dataset.f]=el.type==='checkbox'?el.checked:el.value})}
 async function saveConn(){readConn();const c=CONN;const body={sab_url:c.sab.url,sab_api_key:(c.sab.key||'').trim(),kodi_url:c.kodi.url,kodi_username:c.kodi.username,kodi_password:c.kodi.pw||'',
     indexers:c.indexers.map(ix=>({index:ix.orig,name:ix.name,url:ix.url,enabled:!!ix.enabled,api_key:(ix.api_key||'').trim()}))};
+  if(c.km&&(c.km.key||c.km.newurl!==(c.km.url||''))){try{await api('/hal/api/kuma',{url:c.km.newurl,key:c.km.key||''})}catch(e){toast('Uptime Kuma: '+e.message,true);return}}
   if(c.ph&&(c.ph.pw||c.ph.newurl!==(c.ph.url||''))){try{await api('/hal/api/pihole',{url:c.ph.newurl,password:c.ph.pw||''})}catch(e){toast('Pi-hole: '+e.message,true);return}}
   try{const r=await api('/api/connections',body);toast(r.warning?'Saved, but: '+r.warning:'Saved. I\'ll use the new settings from now on, '+NAME()+'.',!!r.warning);$('sheet').classList.add('hidden');CONN=null;refresh()}catch(e){toast(e.message,true)}}
 async function testConn(what,i){readConn();const c=CONN;let body={what};
   if(what==='sab')body={what,url:c.sab.url,key:(c.sab.key||'').trim()};
   if(what==='kodi')body={what,url:c.kodi.url,username:c.kodi.username,password:c.kodi.pw||''};
   if(what==='indexer'){const ix=c.indexers[i];body={what,index:ix.orig,url:ix.url,key:(ix.api_key||'').trim()}}
+  if(what==='kuma'){toast('Asking Uptime Kuma…');try{const r=await api('/hal/api/kuma',{action:'test',url:c.km.newurl,key:c.km.key||''});toast(r.message,!r.ok)}catch(e){toast(e.message,true)}return}
   if(what==='pihole'){toast('Looking for the Pi-hole…');try{const r=await api('/hal/api/pihole',{action:'test',url:c.ph.newurl,password:c.ph.pw||''});toast(r.message,!r.ok)}catch(e){toast(e.message,true)}return}
   toast('Testing…');try{const r=await api('/api/connections/test',body);toast(r.message,!r.ok)}catch(e){toast(e.message,true)}}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-ctest],[data-cadd],[data-cdel],[data-conn]');if(!b)return;const d=b.dataset;
@@ -610,7 +652,7 @@ function openSettings(){const sw=(id,t,sub,on)=>'<label class="sw"><span>'+t+(su
    '<div class="list" style="margin-top:12px"><a class="row" href="/hal/?tab=log&settings=1&from=app" style="color:inherit;text-decoration:none"><span class="t"><b>HAL: name, alerts, UPS, voice</b><span>HAL\'s own settings</span></span><span class="m">›</span></a>'+
    '<button class="row" data-update><span class="t"><b>Update everything</b><span>Newest version of the apps, from GitHub'+(S&&S.update&&S.update.result?' · last: '+esc(S.update.result.state==='updated'?'v'+S.update.result.version:S.update.result.state==='uptodate'?'up to date':'failed')+' '+esc(ago(S.update.result.t)):'')+'</span></span><span class="m">›</span></button>'+
    '<a class="row" href="/" style="color:inherit;text-decoration:none"><span class="t"><b>Classic NZB app</b><span>Indexers, saved searches, phone alerts, drives</span></span><span class="m">›</span></a>'+
-   '<button class="row" data-conn><span class="t"><b>Connections</b><span>SABnzbd, your indexers, Kodi and Pi-hole</span></span><span class="m">›</span></button></div>'+
+   '<button class="row" data-conn><span class="t"><b>Connections</b><span>SABnzbd, indexers, Kodi, Pi-hole, Uptime Kuma</span></span><span class="m">›</span></button></div>'+
    '<button class="btn wide" id="sclose" style="margin-top:12px">Close</button><button class="btn wide" id="sforget" style="margin-top:8px;background:none;color:var(--muted)">Forget the access code on this device</button>';
   $('sheet').classList.remove('hidden');$('sclose').onclick=()=>$('sheet').classList.add('hidden');
   if($('stalk'))$('stalk').onchange=e=>{LS.set('hal_talk',e.target.checked?'on':'off');if(!e.target.checked&&CAN_SPEAK)speechSynthesis.cancel();render()};
@@ -653,6 +695,9 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if(d.sopen!==undefined){getCat=d.scat||'';LS.set('app_cat',getCat);libView=null;show('get');setTimeout(()=>{if($('sq'))$('sq').value=d.sopen;doSearch(d.sopen)},50);return}
   if(d.play){c.disabled=true;act(()=>api('/api/home/play',{id:d.play}),r=>r&&r.started_tv?'Turning the TV on. It\'ll start in a moment.':'Starting it on the TV.');return}
   if('pihole' in d){openPihole();return}
+  if('kuma' in d){openKuma();return}
+  if(d.qa){quickAction(d.qa);return}
+  if(d.devok){api('/hal/api/action',{action:'device_ok',id:d.devok}).then(r=>{toast(r.message,!r.ok);refresh()}).catch(e=>toast(e.message,true));return}
   if(d.phpause){phAction('pihole_pause',{minutes:Number(d.phpause)});return}
   if('phresume' in d){phAction('pihole_resume');return}
   if(d.item){const p=d.item.split(':');openItem(p[0],p[1]);return}

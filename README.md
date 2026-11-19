@@ -36,6 +36,21 @@ run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardware
 **Options > Remote Web Server > Run** (port 8085; the app also reads its WMI feed when that's available).
 Run as administrator to see drive temperatures and wear.
 
+## Uptime Kuma in HAL
+
+HAL reads Uptime Kuma's monitors (its `/metrics` page). In the app: **Settings › Connections › Uptime Kuma**,
+address like `192.168.68.63:3001` and an API key from Uptime Kuma › **Settings › API Keys** (stored encrypted).
+Home shows a card (all up, or which are down); tap it for every monitor with its response time. HAL alerts
+(and pushes) when a monitor goes down and when it's back, and when a certificate has a week or less left.
+
+## Home screen (phone)
+
+Alerts · quick buttons (Lock PC, Sleep, TV on, pause ads 5 min) · UPS card during a power cut · CPU/RAM/GPU/ping ·
+internet (online, down/up now, ping, loss) · drives · Pi-hole · Uptime Kuma · last restart (Restart when Windows
+is waiting) · what's on the TV · every system. Downloads are on **Get**.
+New devices: Pi-hole sees every device on the network; HAL alerts (and pushes) when one it hasn't seen before
+shows up (**It's mine** clears it). The first check just learns what's already there.
+
 ## Pi-hole in HAL
 
 HAL watches the Pi-hole (Pi-hole 6 or 5, worked out on its own). With no address set it looks for it

@@ -188,6 +188,23 @@ except hs.PiHoleAuthError:
 print("v5 ok")
 
 # ---- HAL ----
+# HAL starts some checks in a background thread; run them right away here so the test doesn't race them.
+class _SyncThread:
+    def __init__(self, target=None, args=(), kwargs=None, **_k):
+        self.target, self.args, self.kwargs = target, args, kwargs or {}
+
+    def start(self):
+        self.target(*self.args, **self.kwargs)
+
+
+class _Threading:
+    Thread = _SyncThread
+
+    def __getattr__(self, name):
+        return getattr(threading, name)
+
+
+hs.threading = _Threading()
 events = []
 hal = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=hs.DemoMonitor(), start_threads=False)
 hal.add_event = lambda *a, **k: events.append(a)
@@ -256,3 +273,96 @@ d = hs.make_demo_hal()
 assert any(x["id"] == "pihole" for x in d.status()["systems"]) and d.status()["pihole"]["blocked"] == 18204
 s5.shutdown()
 print("\nALL PI-HOLE TESTS PASSED")
+
+# ---- new devices on the network ----
+h2 = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=hs.DemoMonitor(), start_threads=False)
+ev2 = []
+h2.add_event = lambda *a, **k: ev2.append(a)
+h2.save = lambda: None
+assert h2.track_devices([["tv", "192.168.68.30"], ["", "192.168.68.31"]], 1000) == [] and h2.devices_seeded   # first time: just remembered
+new = h2.track_devices([["tv", "192.168.68.40"], ["phone-x", "192.168.68.50"]], 2000)                      # tv moved IP: not new
+assert [d["id"] for d in new] == ["phone-x"] and ev2 and "phone-x" in ev2[-1][2]
+iss = [i for i in h2.compute_issues({}, []) if i["key"].startswith("newdev:")]
+assert [i["key"] for i in iss] == ["newdev:phone-x"] and iss[0]["level"] == "warning"
+assert h2.device_ok("phone-x") and not [i for i in h2.compute_issues({}, []) if i["key"].startswith("newdev:")]
+assert h2.track_devices([["phone-x", "192.168.68.50"]], 3000) == []                                         # known now
+h2.track_devices([["late", "192.168.68.60"]], 4000)
+h2.track_devices([], 4000 + 25 * 3600)                                                                       # a day later: no longer flagged
+assert "late" not in h2.new_devices
+print("devices ok")
+
+# ---- the Pi-hole can't be found: say so instead of showing nothing ----
+h3 = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=hs.DemoMonitor(), start_threads=False)
+h3.settings["pihole_password"] = "set"
+hs.dns_servers = lambda: []
+h3.check_pihole()
+v = h3.pihole_view()
+assert v["found"] and v["missing"] and [x for x in h3.status()["systems"] if x["id"] == "pihole"][0]["detail"].startswith("Can't find it")
+assert [i["key"] for i in h3.compute_issues({}, []) if i["key"].startswith("pihole")] == ["pihole_pw"]
+print("missing ok")
+
+# ---- Uptime Kuma ----
+METRICS = '''# HELP monitor_status Monitor Status (1 = UP, 0= DOWN, 2= PENDING, 3= MAINTENANCE)
+monitor_status{monitor_name="Router",monitor_type="ping",monitor_url="https://",monitor_hostname="192.168.68.1",monitor_port="null"} 1
+monitor_status{monitor_name="Front \\"door\\" cam",monitor_type="ping",monitor_url="https://",monitor_hostname="x",monitor_port="null"} 0
+monitor_response_time{monitor_name="Router",monitor_type="ping",monitor_url="https://",monitor_hostname="192.168.68.1",monitor_port="null"} 3
+monitor_cert_days_remaining{monitor_name="Site",monitor_type="http",monitor_url="https://a.b",monitor_hostname="null",monitor_port="null"} 5
+monitor_status{monitor_name="Site",monitor_type="http",monitor_url="https://a.b",monitor_hostname="null",monitor_port="null"} 1
+'''
+mons = hs.parse_kuma_metrics(METRICS)
+assert [m["name"] for m in mons] == ['Front "door" cam', "Router", "Site"] and mons[0]["status"] == "down"
+assert mons[1]["ms"] == 3 and mons[2]["cert_days"] == 5
+KEY = "fake-kuma-key"
+
+
+class Kuma(BaseHTTPRequestHandler):
+    body = METRICS
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        import base64 as b64
+        if self.path != "/metrics" or self.headers.get("Authorization") != "Basic " + b64.b64encode(f":{KEY}".encode()).decode():
+            self.send_response(401)
+            self.end_headers()
+            return
+        b = Kuma.body.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b)
+
+
+sk, basek = serve(Kuma)
+assert hs.kuma_base("192.168.68.63:3001") == "http://192.168.68.63:3001"
+try:
+    hs.kuma_fetch(basek, "")
+    raise AssertionError("no key")
+except hs.KumaAuthError:
+    pass
+h4 = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=hs.DemoMonitor(), start_threads=False)
+ev4 = []
+h4.add_event = lambda *a, **k: ev4.append(a)
+assert not hs.kuma_settings(h4, {"action": "test", "url": basek})["ok"]
+assert "3 monitors, 1 down" in hs.kuma_settings(h4, {"action": "test", "url": basek, "key": KEY})["message"]
+assert hs.kuma_settings(h4, {"url": basek, "key": KEY})["ok"] and h4.settings["kuma_key"]
+time.sleep(0.4)
+h4.check_kuma()
+kv = h4.kuma_view()
+assert kv["ok"] and kv["up"] == 2 and kv["down"] == 1
+keys = [i["key"] for i in h4.compute_issues({}, [])]
+assert 'kuma:Front "door" cam' in keys and "kcert:Site" in keys
+row = [x for x in h4.status()["systems"] if x["id"] == "kuma"][0]
+assert row["detail"] == "2 up · 1 down" and row["count"] == "2 / 3"
+Kuma.body = METRICS.replace("} 0", "} 1")                       # the camera comes back
+h4.check_kuma()
+assert any("is back up" in e[1] for e in ev4)
+Kuma.body = METRICS                                              # and goes down again
+h4.check_kuma()
+assert any(e[1] == 'Front "door" cam is down' for e in ev4)
+assert "kuma_key" not in json.dumps(hs.validate_settings({"kuma_url": "x", "kuma_key": "y"}, h4.settings)) or \
+    hs.validate_settings({"kuma_url": "x"}, h4.settings)["kuma_url"] == basek
+sk.shutdown()
+print("kuma ok")
+print("\nALL NEW HOME TESTS PASSED")
