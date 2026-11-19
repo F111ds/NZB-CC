@@ -328,11 +328,11 @@ function systemsList(){if(!S)return'<div class="list"><div class="empty">'+(wind
 // Home keeps HAL's eye and line in place (so he isn't cut off mid-sentence) and redraws the rest.
 function homeBody(){if(DESK)return'<div class="cols"><div>'+attention(3)+downloadsCard()+arrivedList(5)+totals()+'</div><div>'+tvCard(true)+jfList()+upcomingList(5,'COMING UP')+'</div><div>'+vitals()+systemsList()+'<p class="hint" style="text-align:left">“'+esc(S?S.hal.quote:'')+'”</p></div></div>';
   // Phone: the PC and the house at a glance. Downloads live on Get.
-  return attention(3)+quickRow()+upsCard()+vitals()+netCard()+drivesCard()+piholeCard()+kumaCard()+restartCard()+tvCard(false)+jfList()+'<div class="sec"><span>EVERYTHING ELSE</span></div>'+systemsList()}
+  return attention(3)+upsCard()+piholeCard()+kumaCard()+vitals()+netCard()+drivesCard()+restartCard()+tvCard(false)+jfList()+'<div class="sec"><span>EVERYTHING ELSE</span></div>'+systemsList()+'<div class="sec"><span>QUICK BUTTONS</span></div>'+quickRow()}
 function quickRow(){const p=S&&S.pihole,ph=p&&p.found&&p.ok,paused=ph&&p.blocking===false;
   const b=(attr,ic,label,cls)=>'<button class="qb'+(cls?' '+cls:'')+'" '+attr+'><span>'+ic+'</span>'+label+'</button>';
   return'<div class="qrow">'+b('data-qa="lock"','🔒','Lock PC')+b('data-qa="sleep"','🌙','Sleep')+b('data-tvon','📺','TV on')+
-    (ph?(paused?b('data-phresume','🛡️','Ads on','warn'):b('data-phpause="5"','⏸️','Ads 5 min')):b('data-hal="log"','⚙️','More'))+'</div>'}
+    (ph?(paused?b('data-phresume','🛡️','Ads on','warn'):b('data-phpause="5"','⏸️','Pause ads')):b('data-hal="log"','⚙️','More'))+'</div>'}
 function upsCard(){const u=S&&S.power&&S.power.ups;if(!u||!u.on_battery)return'';
   return'<div class="card" style="border:1px solid var(--red2)"><h3><span class="k" style="color:var(--red2)">⚡ POWER CUT · ON THE UPS</span><span class="mono">'+(u.since?ago(u.since):'')+'</span></h3>'+
     '<div class="wgrid" style="margin-top:10px"><div><span class="k">BATTERY</span><b>'+f0(u.charge,'%')+'</b></div><div><span class="k">TIME LEFT</span><b>'+(u.runtime_s?mins(u.runtime_s):'—')+'</b></div><div><span class="k">LOAD</span><b>'+f0(u.load,'%')+'</b></div></div>'+
