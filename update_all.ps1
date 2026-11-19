@@ -102,6 +102,7 @@ function TvSync {
         return " The TV app was updated too."
     }
     if ($why.Length -gt 220) { $why = $why.Substring(0, 220) + "..." }
+    if ($why -like "The TV was busy*") { Say $why Yellow; return " $why" }
     Say "The TV app couldn't be updated: $why It'll try again next time." Yellow
     return " The TV app couldn't be updated: $why Run tv-launcher\install-on-tv.ps1 -TvHost $tvHost -UpdateOnly on the PC to see more; updates try again next time."
 }
