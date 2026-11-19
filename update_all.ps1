@@ -207,9 +207,35 @@ try {
         } else { Start-ScheduledTask -TaskName $HalTask; Say "HAL 9000 started again." Green }
     }
 
+    # --- 6. The TV app: when it changed, put it on the TV too (its settings and screensaver choice stay) ---
+    $tvMsg = ""
+    if (($changed + $new) -contains "tv-launcher/NZB-CC-TV-Launcher.apk") {
+        $tvHost = ""
+        $hostFile = Join-Path $Folder "tv_host.txt"
+        if (Test-Path $hostFile) { $tvHost = (Get-Content $hostFile -Raw).Trim() }
+        if (-not $tvHost) {
+            # The TV is where Kodi is: use Kodi's address from the NZB settings.
+            try { $kurl = (Get-Content (Join-Path $Folder "nzb_manager_config.json") -Raw | ConvertFrom-Json).kodi_url; if ($kurl) { $tvHost = ([uri]$kurl).Host } } catch { }
+        }
+        $script = Join-Path $Folder "tv-launcher\install-on-tv.ps1"
+        if ($tvHost -and (Test-Path $script)) {
+            Say "`nUpdating the app on the TV ($tvHost)..."
+            $ErrorActionPreference = 'Continue'
+            $tvOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -TvHost $tvHost -UpdateOnly 2>&1 | Out-String
+            $tvOk = ($LASTEXITCODE -eq 0)
+            $ErrorActionPreference = 'Stop'
+            Say $tvOut.Trim()
+            $tvMsg = if ($tvOk) { " The TV app was updated too." } else { " The TV app couldn't be updated (is the TV on?): run tv-launcher\install-on-tv.ps1 -TvHost $tvHost later." }
+            Say $tvMsg.Trim() $(if ($tvOk) { "Green" } else { "Yellow" })
+        } else {
+            $tvMsg = " A new TV app is ready: run tv-launcher\install-on-tv.ps1 once."
+            Say $tvMsg.Trim() Yellow
+        }
+    }
+
     $v = if ((Get-Content (Join-Path $Folder "mobile_server.py") -Raw) -match 'VERSION = "([\d.]+)"') { $Matches[1] } else { "?" }
     Say "`nDone. Phone app version $v. Open the desktop apps again, and reopen the app on your phone." Cyan
-    Result "updated" "Updated $($changed.Count + $new.Count) files." @($changed + $new)
+    Result "updated" ("Updated $($changed.Count + $new.Count) files." + $tvMsg) @($changed + $new)
 } catch {
     Say "`n$($_.Exception.Message)" Red
     Result "failed" $_.Exception.Message @()

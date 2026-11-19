@@ -15,6 +15,10 @@ What it does, in order:
   5. restarts Home
 
 Needs: Python 3 (py launcher) and Network debugging (ADB) on the TV - the same as CleanYourTV.
+
+-UpdateOnly: only puts the new app on the TV and restarts Home; every TV setting and your screensaver
+choice stay as they are, and nothing asks a question. "Update everything" (update_all.ps1) runs it
+this way when the TV app has changed. The TV's address is remembered in ..\tv_host.txt.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$TvHost,
@@ -24,7 +28,8 @@ param(
     [string]$Apk = '',
     # An AllRatesToday key for the live dollar-to-peso rate; saved in ..\fx_api_key.txt (not committed) so later
     # installs reuse it. Without one the TV shows the daily reference rate.
-    [string]$FxKey = ''
+    [string]$FxKey = '',
+    [switch]$UpdateOnly
 )
 # Windows PowerShell can leave $PSScriptRoot empty inside param() defaults, so the APK path is set here.
 if (-not $Apk) { $Apk = Join-Path $PSScriptRoot 'NZB-CC-TV-Launcher.apk' }
@@ -63,6 +68,28 @@ $ErrorActionPreference = 'Stop'
 Write-Host $probe.Trim()
 if ($LASTEXITCODE -ne 0) {
     throw 'Could not reach the TV. Check its IP address, that Network debugging is on, and accept the prompt on the TV. Nothing was changed.'
+}
+# Remember the TV's address, so "Update everything" can update the TV app later.
+try { [IO.File]::WriteAllText((Join-Path (Split-Path $PSScriptRoot -Parent) 'tv_host.txt'), $TvHost, (New-Object System.Text.UTF8Encoding $false)) } catch { }
+
+if ($UpdateOnly) {
+    Step 'Updating the app on the TV (settings and screensaver choice stay as they are)'
+    if (-not (Test-Path $Apk)) { throw "Missing $Apk" }
+    $ErrorActionPreference = 'Continue'
+    & $py -I tools\b64push.py $Apk /data/local/tmp/nzbcc-launcher.apk 2>&1 | Out-Null
+    $pushed = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($pushed -ne 0) { throw 'Copying the app to the TV failed. Nothing was changed.' }
+    $out = Tv 'pm install -r /data/local/tmp/nzbcc-launcher.apk; rm -f /data/local/tmp/nzbcc-launcher.apk'
+    Write-Host $out.Trim()
+    if ($out -notmatch 'Success') { throw 'The TV did not take the new app (see above). Run install-on-tv.ps1 without -UpdateOnly from the PC.' }
+    @(
+        "am force-stop $pkg",
+        "am start -W -a android.intent.action.MAIN -c android.intent.category.HOME -n $pkg/.MainActivity"
+    ) | & $py -I tools\tv.py --batch | Out-Null
+    $ver = (Tv "dumpsys package $pkg | grep -m1 versionName").Trim()
+    Write-Host "TV app now: $ver" -ForegroundColor Green
+    exit 0
 }
 
 # ---- the phone server on this PC ------------------------------------------------------------------
@@ -192,7 +219,8 @@ Step 'Restarting Home'
 @(
     "pm grant $pkg android.permission.ACCESS_FINE_LOCATION 2>/dev/null; echo granted",
     "cmd package set-home-activity --user 0 $pkg/.MainActivity",
-    "settings put secure screensaver_components $pkg/.PhotoDream",
+    # Photos the first time; after that whichever of ours you picked in Settings (Photos or HAL 9000) stays.
+    "c=`$(settings get secure screensaver_components); case `"`$c`" in *HalDream*|*PhotoDream*) ;; *) settings put secure screensaver_components $pkg/.PhotoDream ;; esac",
     "settings put secure screensaver_enabled 1",
     "am force-stop $pkg",
     "am start -W -a android.intent.action.MAIN -c android.intent.category.HOME -n $pkg/.MainActivity"

@@ -15,6 +15,17 @@ The CleanYourTV launcher (MIT, see `LICENSE-cleanyourtv`; upstream commit in `UP
   `dock_glass` on by default in this build, and set by the install script).
 - **Smaller app tiles** (`dock_tile_scale`, 0.8 by default).
 
+- **HAL 9000 screensaver** (`HalDream`), beside the photo slideshow: HAL's eye, the clock, what HAL is saying,
+  what's downloading or any alerts, and live readings (CPU, memory, internet, Pi-hole, Uptime Kuma, fullest drive)
+  from the phone server's `/hal/api/brief`, every 30 s. HAL says his line through the TV's text-to-speech when it
+  starts and then at most every 30 minutes, never 10 PM to 8 AM; the eye flares on each word and the line types out.
+  Everything drifts a little every 3 minutes and dims at night (burn-in). Pick it in the TV's **Settings › Device
+  Preferences › Screen saver**: **NZB-CC Photos** or **HAL 9000**. Installs keep whichever you picked.
+
+Updating: **Update everything** (the phone app, or `update_all.ps1`) puts a new `NZB-CC-TV-Launcher.apk` on the TV by
+itself (`install-on-tv.ps1 -UpdateOnly`: the app only; TV settings and the screensaver choice stay). It uses the TV
+address from the last install (`tv_host.txt`), else Kodi's address.
+
 The wallpaper is turned off by the install script (a `config.json` setting), not by the build.
 
 ## Install (on the PC that runs mobile_server.py)

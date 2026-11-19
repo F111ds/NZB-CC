@@ -1757,6 +1757,24 @@ DAISY_TEXT = ("Daisy, Daisy, give me your answer, do. I'm half crazy, all for th
               "I can't afford a carriage. But you'll look sweet upon the seat of a bicycle built for two.")
 
 
+def tv_brief(st: dict) -> dict:
+    """Extra readings for the TV's HAL screensaver, and what HAL says out loud there."""
+    v, n, ph, km = st["vitals"], st["net"], st.get("pihole") or {}, st.get("kuma") or {}
+    sab = next((x for x in st["services"] if x["id"] == "sabnzbd"), None)
+    det = (sab or {}).get("detail") or ""
+    alerts = [{"level": i["level"], "title": i["title"]} for i in st["issues"] if i["level"] != "info"][:3]
+    down = any(i["key"] in ("internet", "router") for i in st["issues"])
+    say = st["hal"]["greeting"] + " " + st["hal"]["quote"]
+    if alerts and alerts[0]["title"] not in say:
+        say += " " + alerts[0]["title"] + "."
+    return {"greeting": st["hal"]["greeting"], "say": spoken(say), "alerts": alerts,
+            "cpu_temp": v["cpu"].get("temp"), "mem_used": v["mem"].get("used"), "mem_total": v["mem"].get("total"),
+            "ping": n.get("ping_ms"), "net_down": n.get("down"), "internet_down": down,
+            "downloading": det if det.startswith("downloading") else "",
+            "kuma_up": km.get("up") if km.get("ok") else None, "kuma_total": len(km.get("monitors") or []) if km.get("ok") else None,
+            "ads_on": ph.get("blocking") is not False if ph.get("ok") else None}
+
+
 def tv_on_via_phone_server(hal) -> str:
     """'Turn the TV on' goes through the NZB phone server (it knows the TV)."""
     port = int(hal.settings.get("phone_port") or 8765)
@@ -3619,7 +3637,8 @@ class HalRoutes:
                 self._h_json(200, {"text": hal.brief_text(kind), "level": st["hal"]["level"], "quote": st["hal"]["quote"],
                                    "issues": len(st["issues"]), "cpu": st["vitals"]["cpu"]["pct"], "ram": st["vitals"]["mem"]["pct"],
                                    "ads": ph.get("blocked") if ph.get("ok") else None, "kuma_down": km.get("down") if km.get("ok") else None,
-                                   "fullest": {"mount": full["mount"], "pct": full["pct"]} if full else None, "record": st["record"]})
+                                   "fullest": {"mount": full["mount"], "pct": full["pct"], "free": full["free"]} if full else None,
+                                   "record": st["record"], **tv_brief(st)})
             elif path == "/api/kuma":
                 self._h_json(200, {"url": hal.settings.get("kuma_url", ""), "key_set": bool(hal.settings.get("kuma_key")),
                                    "found": hal.kuma_view()})
