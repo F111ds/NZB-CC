@@ -372,11 +372,42 @@ assert code == 429 and b"serve no purpose" in body
 assert call("/api/status")[0] == 429   # even the right code waits
 hs.AUTH_FAILURES.clear("127.0.0.1")
 assert call("/api/status")[0] == 200
+# stray characters around the right code are ignored; a wrong code says what's different
+assert call("/api/status", tok=" " + token + "\\n")[0] == 200
+code, body, _ = call("/api/status", tok=token[:-2])
+msg = json.loads(body)["error"]
+assert code == 401 and f"{len(token) - 2} characters" in msg and "starts the same way" in msg, msg
+assert "starts differently" in json.loads(call("/api/status", tok="x" * len(token))[1])["error"]
+hs.AUTH_FAILURES.clear("127.0.0.1")
+# pairing PIN: shown on the PC page, works once, wrong PINs refused
+code, body, _ = call("/pair", tok=None)
+assert code == 200 and token.encode() in body
+pin = hs.PAIRING.pin
+assert pin.encode()[:3] in body and len(pin) == 6
+bad = "000000" if pin != "000000" else "111111"
+assert call("/api/pair", {"pin": bad}, tok=None)[0] == 401
+code, body, _ = call("/api/pair", {"pin": pin[:3] + " " + pin[3:]}, tok=None)
+assert code == 200 and json.loads(body)["token"] == token
+assert call("/api/pair", {"pin": pin}, tok=None)[0] == 401     # used up
+hs.PAIRING.current()
+hs.PAIRING.expires = time.time() - 1
+assert not hs.PAIRING.use(hs.PAIRING.pin)                       # expired
+hs.AUTH_FAILURES.clear("127.0.0.1")
 # network gate
 assert hs.is_client_allowed("192.168.68.20") and hs.is_client_allowed("100.101.1.2") and hs.is_client_allowed("::1")
 assert not hs.is_client_allowed("8.8.8.8") and not hs.is_client_allowed("garbage")
 srv.shutdown()
 print("http ok")
+
+# ---------------- key file in any encoding ----------------
+kf = tmp / "key_bom.txt"
+code43 = "e2WjcBVmh6Nl5T7HCTTIokfP_N9ZohLmQ20Tq1OLt5c"
+kf.write_bytes(b"\xef\xbb\xbf" + code43.encode() + b"\r\n")
+assert hs.load_or_create_access_token(kf) == code43
+kf.write_bytes((code43 + "\r\n").encode("utf-16"))
+assert hs.load_or_create_access_token(kf) == code43
+assert hs.clean_code(" " + code43 + "\\n\r\n") == code43
+print("key file ok")
 
 # ---------------- state is saved and loaded back ----------------
 h4 = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=hs.DemoMonitor(), start_threads=False)

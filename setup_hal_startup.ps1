@@ -90,6 +90,9 @@ try {
     Say "Open on your phone:  $(($ips | ForEach-Object { "http://${_}:$Port/" }) -join '  or  ')"
     if (Test-Path $key) { Say "Access code (the same as the NZB phone app):  $((Get-Content $key -Raw).Trim())" }
     Say "Then Share > Add to Home Screen (iPhone) or Install app (Android)." DarkGray
+    Say "`nOpening the pairing page: type its 6-digit PIN on your phone instead of the long code." Cyan
+    Say "(Open it any time on this PC: http://localhost:$Port/pair)" DarkGray
+    Start-Process "http://localhost:$Port/pair"
 } catch {
     Say "`n$($_.Exception.Message)" Red
 }

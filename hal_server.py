@@ -234,18 +234,60 @@ def dpapi_unprotect(stored: str) -> str:
         return ""
 
 
+def read_key_file(path: Path) -> str:
+    """The code in mobile_access_key.txt, whatever editor last saved it (UTF-8 with or without BOM, UTF-16)."""
+    raw = path.read_bytes()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        text = raw.decode("utf-16")
+    else:
+        text = raw.decode("utf-8-sig", "replace")
+    return text.replace("\x00", "").strip()
+
+
+def clean_code(text: str) -> str:
+    """Access codes are letters, digits, - and _: drops spaces, quotes, line breaks and a pasted '\\n'."""
+    return re.sub(r"[^A-Za-z0-9_\-]", "", re.sub(r"\\[nrt]", "", text or ""))
+
+
+class PairingPin:
+    """A 6-digit PIN shown on the PC (http://localhost:8766/pair) that the phone trades for the access code.
+    Valid for 10 minutes and only once; wrong PINs count towards the lockout."""
+
+    TTL = 600
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.pin, self.expires = "", 0.0
+
+    def current(self) -> tuple[str, float]:
+        with self._lock:
+            if not self.pin or time.time() >= self.expires:
+                self.pin, self.expires = f"{secrets.randbelow(1_000_000):06d}", time.time() + self.TTL
+            return self.pin, self.expires
+
+    def use(self, pin: str) -> bool:
+        with self._lock:
+            ok = bool(self.pin) and time.time() < self.expires and secrets.compare_digest(str(pin).encode(), self.pin.encode())
+            if ok:
+                self.pin, self.expires = "", 0.0
+            return ok
+
+
+PAIRING = PairingPin()
+
+
 def load_or_create_access_token(path: Path | None = None) -> str:
     """The pairing code shared with the NZB phone app (created on first run if neither app made it yet)."""
     path = path or ACCESS_KEY_FILE
     try:
-        token = path.read_text(encoding="utf-8").strip()
+        token = read_key_file(path)
     except FileNotFoundError:
         token = secrets.token_urlsafe(32)
         try:
             with path.open("x", encoding="utf-8") as fh:
                 fh.write(token + "\n")
         except FileExistsError:
-            token = path.read_text(encoding="utf-8").strip()
+            token = read_key_file(path)
     if len(token) < 40 or any(ch.isspace() for ch in token):
         raise ConfigError(f"{path.name} doesn't contain a valid code. Delete it and restart to make a new one.")
     return token
@@ -1941,17 +1983,46 @@ class HalHandler(BaseHTTPRequestHandler):
             self.send_json(429, {"error": f"This conversation can serve no purpose anymore. Goodbye. (Try again in {wait} s.)"},
                            {"Retry-After": str(wait)})
             return False
-        supplied = (self.headers.get("X-Mobile-Token") or "").encode("utf-8", "replace")
+        raw = self.headers.get("X-Mobile-Token") or ""
+        supplied = clean_code(raw).encode("utf-8")
         if not secrets.compare_digest(supplied, _token_bytes):
-            if self.headers.get("X-Mobile-Token"):
+            if raw:
                 AUTH_FAILURES.record(ip)
-                log.warning("Wrong access code from %s", ip)
-                self.send_json(401, {"error": "Just what do you think you're doing, Dave? That isn't the access code."})
+                same_start = supplied[:4] == _token_bytes[:4]
+                log.warning("Wrong access code from %s (%d characters, the code has %d; %s)", ip, len(supplied), len(_token_bytes),
+                            "same first characters" if same_start else "different first characters")
+                hint = (f"You entered {len(supplied)} characters; the code on this PC has {len(_token_bytes)}"
+                        + (", and it starts the same way, so check the end." if same_start else
+                           ", and it starts differently, so it's a different code.") if supplied else "")
+                self.send_json(401, {"error": "Just what do you think you're doing, Dave? That isn't the access code. " + hint +
+                                     " Easier: type the 6-digit PIN from http://localhost:" + str(self.server.server_address[1]) + "/pair on the PC."})
             else:
                 self.send_json(401, {"error": "Enter the access code shown on the PC."})
             return False
         AUTH_FAILURES.clear(ip)
         return True
+
+    def _pair(self) -> None:
+        ip = self.client_address[0]
+        if not self._gate(False):
+            return
+        wait = AUTH_FAILURES.blocked_for(ip)
+        if wait:
+            self.send_json(429, {"error": f"This conversation can serve no purpose anymore. Goodbye. (Try again in {wait} s.)"})
+            return
+        try:
+            pin = re.sub(r"\D", "", str(self.read_json().get("pin") or ""))
+        except (ValueError, json.JSONDecodeError):
+            pin = ""
+        if len(pin) == 6 and PAIRING.use(pin):
+            AUTH_FAILURES.clear(ip)
+            log.info("Phone %s paired with the PIN", ip)
+            self.send_json(200, {"token": _token_bytes.decode()})
+            return
+        AUTH_FAILURES.record(ip)
+        log.warning("Wrong pairing PIN from %s", ip)
+        self.send_json(401, {"error": "Just what do you think you're doing, Dave? That PIN isn't right, or it has expired. "
+                                      "Reload http://localhost:%d/pair on the PC for a fresh one." % self.server.server_address[1]})
 
     def _guarded(self, fn) -> None:
         try:
@@ -1968,6 +2039,22 @@ class HalHandler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             if self._gate(False):
                 self._send(200, PAGE.replace("__VERSION__", VERSION).encode("utf-8"), "text/html; charset=utf-8")
+            return
+        if path == "/pair":
+            ip = self.client_address[0].split("%")[0]
+            try:
+                local = ipaddress.ip_address(ip).is_loopback
+            except ValueError:
+                local = False
+            if not local:
+                self.send_json(403, {"error": "Open this page on the PC itself: http://localhost:%d/pair" % self.server.server_address[1]})
+                return
+            pin, exp = PAIRING.current()
+            port = self.server.server_address[1]
+            addrs = "".join(f"<div class=a>http://{a}:{port}/</div>" for a in lan_addresses()) or "<div class=a>http://&lt;this-pc&gt;:%d/</div>" % port
+            page = PAIR_PAGE.replace("__PIN__", f"{pin[:3]} {pin[3:]}").replace("__ADDRS__", addrs).replace("__MIN__", str(max(1, round((exp - time.time()) / 60)))) \
+                .replace("__CODE__", _token_bytes.decode())
+            self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
             return
         if path == "/manifest.webmanifest":
             if self._gate(False):
@@ -2012,6 +2099,9 @@ class HalHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path).path
+        if path == "/api/pair":
+            self._pair()
+            return
         if not self._gate(True):
             return
         hal = HAL
@@ -2041,6 +2131,21 @@ class HalHandler(BaseHTTPRequestHandler):
                 self.send_json(404, {"error": "Not found."})
         self._guarded(run)
 
+
+PAIR_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="30"><title>Pair with HAL 9000</title>
+<style>body{margin:0;background:#050506;color:#F4F4F5;font:16px/1.5 "Segoe UI",system-ui,sans-serif;display:flex;justify-content:center}
+main{max-width:560px;padding:48px 24px;text-align:center}
+.eye{width:120px;height:120px;margin:0 auto 28px;border-radius:50%;background:radial-gradient(circle,#FFF6C8 0 4%,#FFC14A 8%,#FF3B1F 18%,#C80E08 34%,#5A0402 50%,#140000 60%,#2a2a2e 61% 78%,#3a3a40 79% 82%,#0c0c0e 83%);box-shadow:0 0 50px rgba(255,42,31,.35)}
+h1{font-size:22px;margin:0 0 6px}.q{font-style:italic;color:#A1A1AA;margin:0 0 28px}
+.step{background:#111114;border-radius:14px;padding:16px;margin:12px 0;text-align:left}.step b{color:#FF6A4D}
+.a{font:600 18px Consolas,monospace;margin-top:6px}.pin{font:700 54px Consolas,monospace;letter-spacing:.12em;color:#fff;text-align:center;margin:8px 0 0}
+.small{font-size:13px;color:#71717A}code{font:13px Consolas,monospace;color:#D4D4D8;word-break:break-all;user-select:all}</style></head>
+<body><main><div class="eye"></div><h1>Pair your phone with HAL 9000</h1><p class="q">“Good afternoon. I am a HAL 9000 computer. I became operational at the H.A.L. plant in Urbana, Illinois.”</p>
+<div class="step"><b>1.</b> On your phone (on the home Wi-Fi), open:__ADDRS__</div>
+<div class="step"><b>2.</b> Add it to the home screen and open it from the icon (iPhone: Share › Add to Home Screen).</div>
+<div class="step"><b>3.</b> Type this PIN where HAL asks for the code:<div class="pin">__PIN__</div><div class="small" style="text-align:center">Works once, for about __MIN__ minutes. This page refreshes by itself.</div></div>
+<p class="small">Or type the full access code (the same as the NZB phone app):<br><code>__CODE__</code></p></main></body></html>"""
 
 PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -2180,8 +2285,8 @@ input.field,select.field{width:100%;background:var(--card);border:1px solid #262
 <div id="pair" class="hidden">
   <div class="eyewrap"><div class="eye" id="peye"></div></div>
   <p class="quote" id="pquote" style="margin-top:26px">“I'm sorry, Dave. I can't let you in without the access code.”</p>
-  <p style="font-size:14px;color:var(--soft)">It's the same code as the NZB phone app. The PC shows it when HAL starts (or open <b>mobile_access_key.txt</b> next to hal_server.py).</p>
-  <input id="code" class="field" placeholder="Access code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="margin:14px 0 10px">
+  <p style="font-size:14px;color:var(--soft)">On the PC, open <b>http://localhost:8766/pair</b> and type the <b>6-digit PIN</b> it shows. Or paste the full access code (the same as the NZB phone app's).</p>
+  <input id="code" class="field" placeholder="6-digit PIN or access code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="margin:14px 0 10px">
   <button id="connect" class="btn red wide">Open the pod bay doors</button>
   <p class="err" id="perr"></p>
 </div>
@@ -2227,7 +2332,10 @@ async function api(path,body){
   if(r.status===401||r.status===429){if(r.status===401)showPair(d.error);throw new Error(d.error||'Not allowed')}
   if(!r.ok)throw new Error(d.error||('Error '+r.status));return d}
 function showPair(msg){$('app').classList.add('hidden');$('tabs').classList.add('hidden');$('pair').classList.remove('hidden');$('perr').textContent=msg&&token?msg:''}
-async function connect(){const v=cleanCode($('code').value);$('code').value=v;if(!v)return;token=v;$('perr').textContent='';
+async function connect(){let v=cleanCode($('code').value);$('code').value=v;if(!v)return;$('perr').textContent='';
+  if(/^\d{6}$/.test(v)){try{const r=await fetch('/api/pair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:v})});const d=await r.json().catch(()=>({}));
+      if(!r.ok||!d.token){talk($('peye'),$('pquote'),d.error||'That PIN isn\'t right.',false);return}v=d.token}catch(e){talk($('peye'),$('pquote'),'I can\'t reach the PC.',false);return}}
+  token=v;
   try{await api('/api/status');try{localStorage.setItem('hal_token',v)}catch(e){}$('pair').classList.add('hidden');start()}
   catch(e){$('perr').textContent='';talk($('peye'),$('pquote'),e.message,false)}}
 // Access codes are letters, digits, - and _ only: drop spaces, quotes and a pasted "\n" or line break.
