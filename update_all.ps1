@@ -71,7 +71,8 @@ function TvSync {
         }
     }
     $ErrorActionPreference = 'Continue'
-    $tvOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -TvHost $tvHost -UpdateOnly 2>&1 | Out-String
+    $whyFile = Join-Path $env:TEMP ("nzbcc-tv-" + [guid]::NewGuid().ToString("N").Substring(0, 8) + ".txt")
+    $tvOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -TvHost $tvHost -UpdateOnly -ResultFile $whyFile 2>&1 | Out-String
     $env:USERPROFILE = $oldProfile
     $tvOk = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = 'Stop'
@@ -81,10 +82,11 @@ function TvSync {
         Say "The TV app was updated too." Green
         return " The TV app was updated too."
     }
-    # Say why, in the TV script's own words (its last line), instead of guessing.
-    $why = @($tvOut -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch '^(At |\+ |CategoryInfo|FullyQualifiedErrorId|~)' })
-    $why = if ($why.Count) { $why[-1] -replace '^.*?:\s*(?=[A-Z])', '' } else { "no answer from the TV" }
-    if ($why.Length -gt 160) { $why = $why.Substring(0, 160) + "..." }
+    # Say why, in the TV script's own words (the whole sentence it wrote), instead of guessing.
+    $why = ""
+    if (Test-Path $whyFile) { $why = (Get-Content $whyFile -Raw).Trim(); Remove-Item $whyFile -ErrorAction SilentlyContinue }
+    if (-not $why) { $why = "no answer from the TV" }
+    if ($why.Length -gt 220) { $why = $why.Substring(0, 220) + "..." }
     Say "The TV app couldn't be updated: $why It'll try again next time." Yellow
     return " The TV app couldn't be updated: $why Run tv-launcher\install-on-tv.ps1 -TvHost $tvHost -UpdateOnly on the PC to see more; updates try again next time."
 }

@@ -29,8 +29,17 @@ param(
     # An AllRatesToday key for the live dollar-to-peso rate; saved in ..\fx_api_key.txt (not committed) so later
     # installs reuse it. Without one the TV shows the daily reference rate.
     [string]$FxKey = '',
-    [switch]$UpdateOnly
+    [switch]$UpdateOnly,
+    # Where to write the reason when it fails (update_all.ps1 shows it in the phone app).
+    [string]$ResultFile = ''
 )
+# On any failure: the whole reason (not a console-wrapped piece of it) for update_all.ps1, and exit 1.
+trap {
+    $msg = $_.Exception.Message
+    if ($ResultFile) { try { [IO.File]::WriteAllText($ResultFile, $msg) } catch { } }
+    Write-Host $msg -ForegroundColor Red
+    exit 1
+}
 # Windows PowerShell can leave $PSScriptRoot empty inside param() defaults, so the APK path is set here.
 if (-not $Apk) { $Apk = Join-Path $PSScriptRoot 'NZB-CC-TV-Launcher.apk' }
 $ErrorActionPreference = 'Stop'
