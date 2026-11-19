@@ -41,3 +41,8 @@ tv-launcher/launcher/build/
 tv-launcher/launcher/app/build/
 tv-launcher/launcher/local.properties
 tv-launcher/tools/venv/
+
+# HAL 9000: per-machine settings, history and log
+hal_settings.json
+hal_state.json
+hal_server.log*

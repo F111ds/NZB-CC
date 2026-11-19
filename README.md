@@ -36,6 +36,48 @@ run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardware
 **Options > Remote Web Server > Run** (port 8085; the app also reads its WMI feed when that's available).
 Run as administrator to see drive temperatures and wear.
 
+## HAL 9000 (phone app that watches over this PC)
+
+> "I am putting myself to the fullest possible use, which is all I think that any conscious entity can ever hope to do."
+
+`hal_server.py` is a second phone app, just for keeping an eye on the PC (HAL9000) and everything running on it.
+It needs `psutil` and `system_monitor.py` (the System Command Center's monitor) in the same folder.
+
+```powershell
+pip install psutil
+python hal_server.py            # then open http://<your-pc>:8766/ on your phone
+```
+
+Or right-click **setup_hal_startup.ps1** > Run with PowerShell: it installs psutil, starts HAL as administrator
+whenever you log in (restarting it if it ever stops), opens port 8766 on private networks and prints the address.
+Pair with the **same access code as the NZB phone app**, then add it to your home screen (it gets its own red-eye icon).
+
+- **Status**: HAL's eye glows steadily when all is well, gets an amber ring when something needs a look and pulses when
+  something is critical. HAL tells you what's wrong in his own words. Live CPU / memory / GPU / internet, and six
+  critical systems (media services, network, storage, hardware, security, power).
+- **Vitals**: CPU, memory and GPU with live / 1 h / 24 h / 7 d graphs, per-core load, temperatures and fans
+  (LibreHardwareMonitor, as for the System Command Center), busiest apps.
+- **Services**: SABnzbd, Jellyfin, Sonarr, Radarr, Prowlarr and the NZB phone server: answering, response time and
+  what each is doing. **Restart / Start** from the phone (through its Task Scheduler task, its Windows service, or
+  the command line it was last running with). Optional: HAL restarts a service by himself when it stops answering
+  (at most 3 times a day). Also the router, Kodi on the TV, your indexers and Tailscale.
+- **Drives**: free space with "about N days left" at this week's rate, health, temperature, wear, errors, hours,
+  live activity; empty the Recycle Bin and clean temp files.
+- **Shield**: the **UPS** (charge, runtime, load in % and watts, input/output voltage, the last hour, power cuts),
+  Defender, firewall, Windows Update, pending restart, failed sign-ins, crashes and unexpected shutdowns, disk errors
+  in the event log, internet / DNS / throughput.
+- **Log & controls** (the bell): everything HAL noticed, and the pod bay controls: Lock, Sleep, Fix network (flush
+  DNS, renew the address), Test alert, and *hold for 2 seconds* to restart or shut down the PC (60 seconds to cancel).
+- **Phone alerts** through ntfy: the NZB phone app's topic is used automatically (or set HAL's own in Settings).
+
+**UPS**: a UPS plugged in by USB shows up in Windows as a battery and HAL reads it automatically. A UPS watched by
+Network UPS Tools (WinNUT, a NAS, a Raspberry Pi) works too: put its address in Settings > UPS. Turn on
+**Shut the PC down safely on low battery** and HAL shuts Windows down cleanly at the battery % or minutes left you
+choose, and cancels it if the power comes back in time.
+
+`python hal_server.py --demo` shows the app with made-up data (`--demo-ups battery` for a power cut), on any PC.
+HAL's own files: `hal_settings.json`, `hal_state.json` (history and log), `hal_server.log`.
+
 ## TV home row (phone server)
 
 `mobile_server.py` also serves the newest movies to a TV home screen, so a launcher can show them with their
