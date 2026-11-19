@@ -36,6 +36,19 @@ run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardware
 **Options > Remote Web Server > Run** (port 8085; the app also reads its WMI feed when that's available).
 Run as administrator to see drive temperatures and wear.
 
+## Scripts: one setup, one update, one backup
+
+Right-click > Run with PowerShell, from your NZB Command Center folder:
+
+- **setup.ps1** - everything you set up once. It shows what is already set up on this PC (phone server
+  at startup, HAL inside the phone server, Jellyfin at startup, automatic sign-in then lock,
+  Sonarr/Radarr/Prowlarr) and runs the step you pick; **U** undoes Jellyfin or automatic sign-in.
+  The steps are still the separate `setup_*.ps1` / `install_arr_resume.ps1` scripts, so the
+  instructions below still work.
+- **update_all.ps1** - updates everything (same as **Update everything** in the app).
+  `update_phone_app.ps1` now just runs it.
+- **backup_settings.ps1** - backs up your settings to GitHub.
+
 ## HAL 9000 all-in-one app (/app)
 
 One app for everything, on the phone and the PC: open `http://<your-pc>:8765/app/` and add it to the home screen
