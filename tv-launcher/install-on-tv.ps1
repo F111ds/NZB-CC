@@ -76,7 +76,9 @@ $probe = & $py -I tools\tv.py --probe 2>&1 | Out-String
 $ErrorActionPreference = 'Stop'
 Write-Host $probe.Trim()
 if ($LASTEXITCODE -ne 0) {
-    throw 'Could not reach the TV. Check its IP address, that Network debugging is on, and accept the prompt on the TV. Nothing was changed.'
+    $detail = @($probe -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $detail = if ($detail.Count) { " The TV said: " + $detail[-1] } else { "" }
+    throw ("Could not reach the TV. Check its IP address, that Network debugging is on, and accept the prompt on the TV. Nothing was changed." + $detail + " (Windows account: $env:USERNAME)")
 }
 # Remember the TV's address, so "Update everything" can update the TV app later.
 try { [IO.File]::WriteAllText((Join-Path (Split-Path $PSScriptRoot -Parent) 'tv_host.txt'), $TvHost, (New-Object System.Text.UTF8Encoding $false)) } catch { }
