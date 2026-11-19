@@ -29,8 +29,17 @@ param(
     # An AllRatesToday key for the live dollar-to-peso rate; saved in ..\fx_api_key.txt (not committed) so later
     # installs reuse it. Without one the TV shows the daily reference rate.
     [string]$FxKey = '',
-    [switch]$UpdateOnly
+    [switch]$UpdateOnly,
+    # Where to write the reason when it fails (update_all.ps1 shows it in the phone app).
+    [string]$ResultFile = ''
 )
+# On any failure: the whole reason (not a console-wrapped piece of it) for update_all.ps1, and exit 1.
+trap {
+    $msg = $_.Exception.Message
+    if ($ResultFile) { try { [IO.File]::WriteAllText($ResultFile, $msg) } catch { } }
+    Write-Host $msg -ForegroundColor Red
+    exit 1
+}
 # Windows PowerShell can leave $PSScriptRoot empty inside param() defaults, so the APK path is set here.
 if (-not $Apk) { $Apk = Join-Path $PSScriptRoot 'NZB-CC-TV-Launcher.apk' }
 $ErrorActionPreference = 'Stop'
@@ -67,7 +76,9 @@ $probe = & $py -I tools\tv.py --probe 2>&1 | Out-String
 $ErrorActionPreference = 'Stop'
 Write-Host $probe.Trim()
 if ($LASTEXITCODE -ne 0) {
-    throw 'Could not reach the TV. Check its IP address, that Network debugging is on, and accept the prompt on the TV. Nothing was changed.'
+    $detail = @($probe -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $detail = if ($detail.Count) { " The TV said: " + $detail[-1] } else { "" }
+    throw ("Could not reach the TV. Check its IP address, that Network debugging is on, and accept the prompt on the TV. Nothing was changed." + $detail + " (Windows account: $env:USERNAME)")
 }
 # Remember the TV's address, so "Update everything" can update the TV app later.
 try { [IO.File]::WriteAllText((Join-Path (Split-Path $PSScriptRoot -Parent) 'tv_host.txt'), $TvHost, (New-Object System.Text.UTF8Encoding $false)) } catch { }
