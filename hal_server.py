@@ -1767,6 +1767,87 @@ TV_VOICE = {"pitch": 0.55, "rate": 0.72,
             "prefer": ["en-gb-x-rjs", "en-gb-x-gbd", "en-gb-x-gbb", "en-us-x-iom", "en-us-x-tpd", "en-us-x-iol", "en-au-x-aud", "en-au-x-aub"]}
 
 
+def _dur(s) -> str:
+    s = int(s or 0)
+    d, h, m = s // 86400, s % 86400 // 3600, s % 3600 // 60
+    return f"{d} d {h} h" if d else f"{h} h {m} min" if h else f"{m} min"
+
+
+def tv_screen(st: dict) -> dict:
+    """The four boxes on the TV's HAL screen (PC, network, Uptime Kuma, Raspberry Pi), ready to show: each box
+    has a status ("ok" / "warning" / "critical") and rows of [label, value, level]."""
+    issues = st["issues"]
+    keys = {i["key"].split(":")[0]: i["level"] for i in issues if i["level"] != "info"}
+
+    def lvl(*prefixes):
+        found = [keys[k] for k in keys if k in prefixes]
+        return "critical" if "critical" in found else "warning" if found else "ok"
+
+    v, n, sec, pw = st["vitals"], st["net"], st["security"], st["power"]
+    cpu, mem = v["cpu"], v["mem"]
+    g = (v.get("gpus") or [{}])[0]
+    gb = lambda b: f"{(b or 0) / 1073741824:.1f}"
+    ups = pw.get("ups")
+    upd = sec.get("updates") or 0
+    up_txt = _dur(st.get("uptime")) + (f" · {upd} update{'s' if upd != 1 else ''}" if upd else " · restart due" if sec.get("pending_reboot") else "")
+    full_keys = {i["key"].split(":", 1)[1] for i in issues if i["key"].startswith(("full:", "days:", "health:"))}
+    drives = [{"mount": d["mount"].rstrip(":"), "pct": round(d["pct"]), "warn": d["mount"] in full_keys} for d in st["drives"]][:4]
+    pc = {"level": lvl("cpu", "cpu_temp", "ram", "gpu", "full", "days", "health", "dtemp", "ups_ob", "ups_rb", "ups_load", "ups_err"),
+          "rows": [["CPU", f"{cpu.get('pct') or 0:.0f}%" + (f" · {cpu['temp']:.0f}°C" if cpu.get("temp") is not None else ""), lvl("cpu", "cpu_temp")],
+                   ["GPU", (f"{g.get('util') or 0:.0f}%" + (f" · {g['temp']:.0f}°C" if g.get("temp") is not None else "")) if g else "—", lvl("gpu")],
+                   ["Memory", f"{gb(mem.get('used'))} of {(mem.get('total') or 0) / 1073741824:.0f} GB", lvl("ram")],
+                   ["Drives", "", lvl("full", "days", "health", "dtemp")],
+                   ["Power", ("On battery · " if ups.get("on_battery") else "Mains · ") + f"UPS {ups.get('charge') or 0:.0f}%" if ups else (pw.get("plan") or "Mains"),
+                    lvl("ups_ob", "ups_rb", "ups_load", "ups_err")],
+                   ["Up for", up_txt, "ok"]],
+          "drives": drives}
+    loss = n.get("loss")
+    ph = st.get("pihole") or {}
+    fw_on = bool(sec.get("firewall")) and all(f["on"] for f in sec["firewall"])
+    dfd = sec.get("defender") or {}
+    net = {"level": lvl("internet", "router", "loss", "dns", "pihole", "pihole_off", "defender", "firewall", "newdev"),
+           "rows": [["Internet", "DOWN" if keys.get("internet") else (f"{n['ping_ms']:.0f} ms" if n.get("ping_ms") is not None else "—")
+                     + (f" · ↓ {sm.fmt_bytes(n['down'])}/s" if n.get("down") is not None else ""), lvl("internet", "loss")],
+                    ["Router", ("not answering" if keys.get("router") else (f"{n['gateway_ms']:.0f} ms" if n.get("gateway_ms") is not None else "—")
+                                + (" · no loss" if not loss else f" · {loss:.0f}% loss")), lvl("router")],
+                    ["Ads blocked", (f"{int(ph.get('blocked') or 0):,} · {ph.get('percent') or 0:.0f}%" if ph.get("ok") else
+                                     "paused" if ph.get("found") and ph.get("blocking") is False else "—") if ph.get("found") else "no Pi-hole",
+                     lvl("pihole", "pihole_off")],
+                    ["Tailscale", "on" if n.get("tailscale") else "off", "ok"],
+                    ["Security", "all on" if dfd.get("rtp") and fw_on else ("Defender off" if dfd and not dfd.get("rtp") else "firewall off" if not fw_on else "checking"),
+                     lvl("defender", "firewall")],
+                    ["DNS", "answering" if n.get("dns") is not False else "not answering", lvl("dns")]]}
+    km = st.get("kuma") or {}
+    kmon = [{"name": m["name"], "status": m["status"], "ms": m.get("ms")} for m in (km.get("monitors") or [])]
+    kuma = {"level": lvl("kuma"), "found": bool(km.get("found")), "ok": bool(km.get("ok")),
+            "head": f"{km.get('up', 0)} of {len(kmon)} up" if km.get("ok") else ("needs a key" if km.get("need_key") else "not answering" if km.get("found") else "not set up"),
+            "monitors": kmon[:6]}
+    hw = ph.get("hw") or {}
+    model = re.sub(r"\s+Rev\s+[\d.]+$", "", str(hw.get("model") or "")).replace("Raspberry Pi", "Pi").replace(" Model ", " ")
+    pi = {"level": lvl("pi_temp", "pi_mem", "pihole"), "found": bool(ph.get("found")),
+          "rows": [["Model", (model + (f" · {round((hw.get('mem_total') or 0) / 1e9)} GB" if hw.get("mem_total") else "")) or "—", "ok"],
+                   ["Temperature", f"{hw['temp']:.0f}°C" if hw.get("temp") is not None else "—", lvl("pi_temp")],
+                   ["CPU", (f"{hw['cpu_pct']:.0f}%" if hw.get("cpu_pct") is not None else "—") + (f" · load {hw['load'][0]:.2f}" if hw.get("load") else ""), "ok"],
+                   ["Memory", f"{hw['mem_pct']:.0f}% used" if hw.get("mem_pct") is not None else "—", lvl("pi_mem")],
+                   ["Up for", _dur(hw.get("uptime")) if hw.get("uptime") else "—", "ok"],
+                   ["Pi-hole", (hw.get("version") or "—") + (" · update ready" if hw.get("update") else " · up to date" if hw.get("version") else ""),
+                    "info" if hw.get("update") else lvl("pihole")]]}
+    rec = st.get("record") or {}
+    ads = rec.get("ads") or 0
+    ads_txt = f"{ads / 1e6:.1f} million" if ads >= 1e6 else f"{ads:,}"
+    since = ""
+    try:
+        since = datetime.strptime(rec.get("since", ""), "%Y-%m-%d").strftime("%B")
+    except ValueError:
+        pass
+    record = " · ".join(x for x in (f"{ads_txt} ads blocked" + (f" since {since}" if since else ""),
+                                     f"{rec.get('days', 1)} days watching",
+                                     f"{rec.get('power_cuts', 0)} power cut{'s' if rec.get('power_cuts') != 1 else ''} survived",
+                                     f"longest uptime {(rec.get('longest_up') or 0) // 86400} days" if rec.get("longest_up") else "") if x)
+    full_alerts = [{"level": i["level"], "title": i["title"], "detail": i.get("detail", "")} for i in issues if i["level"] != "info"]
+    return {"pc": pc, "net": net, "kuma": kuma, "pi": pi, "record": record, "alerts": full_alerts[:4]}
+
+
 def tv_brief(st: dict) -> dict:
     """Extra readings for the TV's HAL screensaver, and what HAL says out loud there."""
     v, n, ph, km = st["vitals"], st["net"], st.get("pihole") or {}, st.get("kuma") or {}
@@ -1790,6 +1871,7 @@ def tv_brief(st: dict) -> dict:
     for a in alerts[1:]:
         lines.append({"text": a["title"] + ".", "say": spoken(a["title"] + ".")})
     return {"greeting": st["hal"]["greeting"], "say": spoken(say), "alerts": alerts, "voice": dict(TV_VOICE), "lines": lines[:8],
+            "screen": tv_screen(st),
             "cpu_temp": v["cpu"].get("temp"), "mem_used": v["mem"].get("used"), "mem_total": v["mem"].get("total"),
             "ping": n.get("ping_ms"), "net_down": n.get("down"), "internet_down": down,
             "downloading": det if det.startswith("downloading") else "",
