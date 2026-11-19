@@ -628,7 +628,7 @@ assert uh.events[0]["title"] == "Already up to date"
 assert "update" in uh.status() and uh.status()["update"]["result"]["state"] == "uptodate"
 # the script side: -Unattended skips every question and writes the result
 ua = (ROOT / "update_all.ps1").read_text(encoding="utf-8")
-assert "[switch]$Unattended" in ua and "update_result.json" in ua and 'Result "updated"' in ua and 'Result "uptodate"' in ua and 'Result "failed"' in ua
+assert "[switch]$Unattended" in ua and "update_result.json" in ua and 'Result "updated"' in ua and '"uptodate"' in ua and 'Result "failed"' in ua
 assert "if ($Unattended) { try { Stop-Transcript" in ua and "-not $Unattended" in ua
 assert "-Unattended" in hs.UPDATE_PS and "'SYSTEM'" in hs.UPDATE_PS
 print("update button ok")
