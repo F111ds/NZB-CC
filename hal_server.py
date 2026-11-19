@@ -136,8 +136,14 @@ QUOTE_CRIT = [
     "This mission is too important for me to allow you to ignore this, {name}. {issue}.",
     "I can see you're really upset about this, {name}. {issue}.",
 ]
-QUOTE_INFO = [
-    "Everything is functioning normally, {name}. There's one small thing you might like to know.",
+PROPER_WORDS = {"I", "Windows", "Microsoft", "Defender", "SABnzbd", "Jellyfin", "Sonarr", "Radarr", "Prowlarr", "Kodi",
+                "NZBGeek", "Tailscale", "HAL"}
+QUOTE_INFO = [   # only small things (notes): say what it is, so it can be found
+    "Everything is functioning normally, {name}. Just one small thing: {issue_lc}.",
+    "All systems are functioning normally, {name}. You might like to know that {issue_lc}.",
+]
+QUOTE_INFO_MANY = [
+    "Everything is functioning normally, {name}. There are {k} small things you might like to know about.",
 ]
 
 
@@ -160,13 +166,15 @@ def hal_quote(issues: list[dict], name: str, now: float | None = None) -> str:
     elif serious:
         pool, issue = QUOTE_MANY, serious[0]
     elif issues:
-        pool, issue = QUOTE_INFO, issues[0]
+        pool, issue = (QUOTE_INFO if len(issues) == 1 else QUOTE_INFO_MANY), issues[0]
     else:
         pool, issue = QUOTES_OK, None
     text = pool[slot % len(pool)]
     title = issue["title"] if issue else ""
-    lc = title[:1].lower() + title[1:] if title and not title[:2].isupper() else title
-    return text.format(name=name, n=len(serious), issue=title, issue_lc=lc)
+    first = title.split(" ", 1)[0] if title else ""
+    keep = first in PROPER_WORDS or first[:1].isdigit() or first[1:2].isupper()      # "Windows", "I", "SABnzbd", "UPS"...
+    lc = title if keep or not title else title[:1].lower() + title[1:]
+    return text.format(name=name, n=len(serious), k=len(issues), issue=title, issue_lc=lc)
 
 
 # ==============================================================================
@@ -1735,7 +1743,7 @@ class Hal:
             add("reboot", "info", "Windows wants a restart", "Updates finish installing after a restart.", "shield")
         upd = self.updates.get("updates") or []
         if upd:
-            add("updates", "info", f"{len(upd)} Windows update{'s' if len(upd) > 1 else ''} available", "", "shield")
+            add("updates", "info", f"{len(upd)} Windows update{'s are' if len(upd) > 1 else ' is'} available", "", "shield")
         ups = self.ups
         if ups:
             if ups.get("on_battery"):

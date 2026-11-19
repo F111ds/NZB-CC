@@ -255,7 +255,10 @@ function homeLine(){if(!H&&!S)return'I\'m thinking…';const parts=[],iss=issues
   if(!cur&&!kp&&!iss.length&&S)return S.hal.quote;
   return parts.join(' ')}
 let showHidden=false;
-function attention(max){const list=issues().slice(0,max).map(i=>'<div class="alert '+i.level+'" data-hal="'+esc(i.tab)+'"><span class="s '+i.level+'"></span><span class="grow"><b>'+esc(i.title)+'</b>'+(i.detail?'<p>'+esc(i.detail)+'</p>':'')+'</span><button class="snz" data-snooze="'+esc(i.key)+'" aria-label="Hide for 24 hours">Hide 24 h</button></div>').join('');
+// Small things (notes like 'Windows wants a restart'): one card, as in HAL, so what HAL mentions can be seen.
+function notesCard(){const n=S?S.issues.filter(i=>i.level==='info'):[];if(!n.length)return'';
+  return'<div class="alert info" data-hal="'+esc(n[0].tab)+'" style="background:var(--card);border-color:#1f2a3a"><span class="s" style="background:var(--sky);box-shadow:0 0 8px var(--sky)"></span><span class="grow"><b>'+(n.length>1?n.length+' small things':'One small thing')+'</b><p>'+esc(n.map(i=>i.title).join(' · '))+'</p></span><button class="snz" data-snooze="'+esc(n.map(i=>i.key).join('|'))+'" aria-label="Hide for 24 hours">Hide 24 h</button></div>'}
+function attention(max){const list=issues().slice(0,max).map(i=>'<div class="alert '+i.level+'" data-hal="'+esc(i.tab)+'"><span class="s '+i.level+'"></span><span class="grow"><b>'+esc(i.title)+'</b>'+(i.detail?'<p>'+esc(i.detail)+'</p>':'')+'</span><button class="snz" data-snooze="'+esc(i.key)+'" aria-label="Hide for 24 hours">Hide 24 h</button></div>').join('')+notesCard();
   const h=(S&&S.snoozed)||[];if(!h.length)return list;
   const until=Math.min(...h.map(i=>i.until));
   let x=list+'<div class="hidline"><span>'+h.length+' alert'+(h.length>1?'s':'')+' hidden until '+esc((new Date(until*1000).toDateString()===new Date().toDateString()?'':new Date(until*1000).toDateString()===new Date(Date.now()+864e5).toDateString()?'tomorrow ':new Date(until*1000).toLocaleDateString([],{weekday:'short'})+' ')+clock(until*1000))+'</span><button data-showhidden>'+(showHidden?'CLOSE':'SHOW')+'</button></div>';
