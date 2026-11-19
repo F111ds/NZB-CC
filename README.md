@@ -1,6 +1,6 @@
 mobile nzb command center
 
-Screenshots of every page of the HAL 9000 phone app: [docs/screenshots](docs/screenshots/README.md).
+Screenshots of every page of the HAL 9000 phone app: [docs/app-screenshots](docs/app-screenshots/README.md).
 
 ## Phone app home-screen icons
 
