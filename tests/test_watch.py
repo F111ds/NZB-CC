@@ -15,7 +15,14 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import ast
+from collections import Counter
+
 import mobile_server as m
+
+# Two functions with the same name: the later one silently replaces the earlier (this bit us once).
+_defs = Counter(n.name for n in ast.parse((ROOT / "mobile_server.py").read_text(encoding="utf-8")).body if isinstance(n, ast.FunctionDef))
+assert not [k for k, v in _defs.items() if v > 1], [k for k, v in _defs.items() if v > 1]
 
 tmp = Path(tempfile.mkdtemp())
 m.WATCH_FILE = tmp / "watch_positions.json"

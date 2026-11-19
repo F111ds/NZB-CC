@@ -2496,7 +2496,7 @@ def _watch_parse(body: dict) -> tuple[str, int]:
     return kind, item_id
 
 
-def _norm_title(text: str) -> str:
+def _watch_title(text: str) -> str:
     t = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
     return re.sub(r"^(the|a|an) ", "", t).replace(" ", "")
 
@@ -2564,7 +2564,7 @@ def _jf_match(kind: str, kd: dict) -> dict | None:
         show = str(kd.get("showtitle") or "")
         series = (jf_request(f"/Users/{uid}/Items", {"searchTerm": show[:80], "IncludeItemTypes": "Series", "Recursive": "true",
                                                      "Limit": 10}, timeout=10) or {}).get("Items") or []
-        series.sort(key=lambda s: _norm_title(s.get("Name")) != _norm_title(show))
+        series.sort(key=lambda s: _watch_title(s.get("Name")) != _watch_title(show))
         items = []
         for s in series[:2]:
             eps = jf_request(f"/Shows/{s.get('Id')}/Episodes", {"UserId": uid, "Season": to_int(kd.get("season")),
@@ -2577,7 +2577,7 @@ def _jf_match(kind: str, kd: dict) -> dict | None:
         if fname and any(_file_name(p) == fname for p in paths if p):
             score += 100
         if kind == "movie":
-            if _norm_title(it.get("Name")) == _norm_title(kd.get("title")):
+            if _watch_title(it.get("Name")) == _watch_title(kd.get("title")):
                 score += 50
                 y1, y2 = to_int(it.get("ProductionYear")), to_int(kd.get("year"))
                 score += 20 if y1 and y1 == y2 else 10 if y1 and y2 and abs(y1 - y2) == 1 else 0
@@ -2589,7 +2589,7 @@ def _jf_match(kind: str, kd: dict) -> dict | None:
     return best if best_score >= 50 else None
 
 
-def _stream_label(st: dict) -> str:
+def _jf_stream_label(st: dict) -> str:
     return str(st.get("DisplayTitle") or st.get("Language") or st.get("Codec") or "Track")[:60]
 
 
@@ -2631,10 +2631,10 @@ def watch_item(kind: str, item_id: int, ip: str = "", host: str = "") -> dict:
     audio = [s for s in streams if s.get("Type") == "Audio"]
     subs = [s for s in streams if s.get("Type") == "Subtitle"]
     out["chips"] = [c for c in [(res + " HDR") if hdr and res else res,
-                                "Atmos" if any("atmos" in _stream_label(a).lower() for a in audio) else "",
+                                "Atmos" if any("atmos" in _jf_stream_label(a).lower() for a in audio) else "",
                                 "Subs" if subs else ""] if c]
-    out["audio"] = [{"index": to_int(a.get("Index")), "label": _stream_label(a), "default": bool(a.get("IsDefault"))} for a in audio][:20]
-    out["subs"] = [{"index": to_int(s.get("Index")), "label": _stream_label(s) + ("" if s.get("IsTextSubtitleStream") else " (burned in)"),
+    out["audio"] = [{"index": to_int(a.get("Index")), "label": _jf_stream_label(a), "default": bool(a.get("IsDefault"))} for a in audio][:20]
+    out["subs"] = [{"index": to_int(s.get("Index")), "label": _jf_stream_label(s) + ("" if s.get("IsTextSubtitleStream") else " (burned in)"),
                     "default": bool(s.get("IsDefault") or s.get("IsForced"))} for s in subs][:30]
     out["direct"] = str(video.get("Codec") or "").lower() in ("h264", "hevc", "h265")
     out["poster"] = "j:" + str(jf.get("Id") or "")
