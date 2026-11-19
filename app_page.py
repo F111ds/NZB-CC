@@ -43,6 +43,14 @@ h1{font-size:26px;margin:2px 0 10px}
 .hero{display:flex;gap:18px;align-items:center;margin:6px 0 14px;padding-left:9px}
 .hero .g{font:600 10px var(--mono);letter-spacing:.14em;color:var(--muted);text-transform:uppercase}
 .hero .q{font-size:15px;font-style:italic;color:var(--text);margin-top:4px;line-height:1.35;min-height:40px}
+/* phone Home: HAL's eye in the middle, his words underneath (as in the first HAL mock-up) */
+.hero.center{flex-direction:column;gap:0;padding-left:0;text-align:center;margin:8px 0 16px}
+.hero.center .eye{width:124px;height:124px;box-shadow:0 0 0 2px #2c2c31,0 0 0 6px #0d0d0f,0 0 0 7px #3b3b42,0 18px 50px rgba(255,30,20,.16)}
+.hero.center .eye.warning{box-shadow:0 0 0 2px #2c2c31,0 0 0 6px #0d0d0f,0 0 0 7px #3b3b42,0 0 0 10px rgba(251,191,36,.55)}
+.hero.center .eye.critical{box-shadow:0 0 0 2px #2c2c31,0 0 0 6px #0d0d0f,0 0 0 7px #3b3b42,0 0 0 10px rgba(255,42,31,.6),0 10px 60px rgba(255,30,20,.4)}
+.hero.center .eye::before{inset:19px}
+.hero.center .g{margin-top:18px}
+.hero.center .q{font-size:16px;margin:6px 4px 0;min-height:66px}
 .caret{display:inline-block;width:2px;height:1em;background:var(--red2);vertical-align:-2px;margin-left:2px;animation:blink .8s steps(1) infinite}
 @keyframes blink{50%{opacity:0}}
 /* blocks */
@@ -261,7 +269,7 @@ function systemsList(){if(!S)return'<div class="list"><div class="empty">'+(wind
 function homeBody(){if(DESK)return'<div class="cols"><div>'+attention(3)+downloadsCard()+arrivedList(5)+totals()+'</div><div>'+tvCard(true)+jfList()+upcomingList(5,'COMING UP')+'</div><div>'+vitals()+systemsList()+'<p class="hint" style="text-align:left">“'+esc(S?S.hal.quote:'')+'”</p></div></div>';
   return attention(2)+downloadsCard()+tvCard(false)+jfList()+arrivedList(4)+upcomingList(3,'TONIGHT & THIS WEEK')+totals()}
 function renderHome(){const el=$('t-home');
-  if(!$('heye'))el.innerHTML='<div id="hhead"></div><div class="hero"><button class="eye'+(DESK?' big':'')+'" id="heye" aria-label="Hear HAL"></button><div><div class="g" id="hgreet"></div><div class="q" id="hquote"></div></div></div><div id="hbody"></div>';
+  if(!$('heye'))el.innerHTML='<div id="hhead"></div><div class="hero'+(DESK?'':' center')+'"><button class="eye'+(DESK?' big':'')+'" id="heye" aria-label="Hear HAL"></button><div><div class="g" id="hgreet"></div><div class="q" id="hquote"></div></div></div><div id="hbody"></div>';
   $('hhead').innerHTML=topbar('',true);$('hbody').innerHTML=homeBody();$('hgreet').textContent=greeting();
   const eye=$('heye');eye.className='eye'+(DESK?' big':'')+' '+(S?S.hal.level:'')+(eye.classList.contains('talking')?' talking':'');
   const line=homeLine();if(line!==lastQuote){const first=!lastQuote;lastQuote=line;talk(eye,$('hquote'),line,!first&&talkative()&&unlocked)}}
