@@ -108,6 +108,15 @@ choose, and cancels it if the power comes back in time.
 `python hal_server.py --demo` shows the app with made-up data (`--demo-ups battery` for a power cut), on any PC.
 HAL's own files: `hal_settings.json`, `hal_state.json` (history and log), `hal_server.log`.
 
+## Start everything when the PC turns on (no login needed)
+
+Right-click **setup_autologon.ps1** > Run with PowerShell. It downloads Microsoft's free Sysinternals **Autologon**
+(checked to be signed by Microsoft), opens its window so you can type your Windows password there (a Microsoft
+account's password, not the PIN; the script never sees it), and adds the task "Lock screen after automatic login".
+After that, when the PC turns on or restarts, Windows logs you in by itself, SABnzbd, Sonarr, Radarr, Prowlarr,
+Jellyfin, the phone server and HAL all start as usual, and the screen locks 8 seconds later (your PIN is still
+needed to use the PC). Undo: run it with `-Undo`.
+
 ## Phone server files
 
 `mobile_server.py` keeps its web page in `mobile_page.py`, its icons in `mobile_icons.py` and the all-in-one app in
