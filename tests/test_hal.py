@@ -178,7 +178,7 @@ assert st["hal"]["level"] == "warning", st["hal"]
 keys = {i["key"]: i for i in st["issues"]}
 assert "full:Z:" in keys and keys["full:Z:"]["level"] == "warning" and "9 days" in keys["full:Z:"]["detail"], keys
 assert "reboot" in keys and keys["reboot"]["level"] == "info"
-assert {x["id"] for x in st["systems"]} == {"services", "network", "storage", "hardware", "security", "power"}
+assert {x["id"] for x in st["systems"]} == {"services", "network", "storage", "hardware", "security", "power", "pihole"}
 z = next(d for d in st["drives"] if d["mount"] == "Z:")
 assert z["label"] == "Media" and z["disk"]["name"] == "Seagate IronWolf 4TB" and 8 < z["days_left"] < 11
 assert all(sv["state"] == "up" for sv in st["services"])
