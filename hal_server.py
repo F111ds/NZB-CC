@@ -2560,7 +2560,8 @@ nav.tabs button.on{color:var(--red2)}nav.tabs svg{width:23px;height:23px}
 .sheet .panel{background:var(--bg);width:100%;max-width:640px;max-height:92vh;overflow-y:auto;border-radius:20px 20px 0 0;padding:18px 16px calc(24px + env(safe-area-inset-bottom));border-top:1px solid #222}
 label.f{display:block;font-size:13px;color:var(--soft);margin:12px 0 6px}
 select.field{appearance:none;-webkit-appearance:none}
-input.field,select.field{width:100%;background:var(--card);border:1px solid #26262b;border-radius:10px;color:var(--white);font:15px var(--mono);padding:11px 12px}
+input.field,select.field{width:100%;background:var(--card);border:1px solid #26262b;border-radius:10px;color:var(--white);font:16px var(--mono);padding:11px 12px}
+/* 16px: an iPhone zooms into smaller text boxes, and a home-screen app then stays zoomed in */
 .sw{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
 .sw span{font-size:14px}.sw small{display:block;color:var(--muted);font-size:12px}
 .sw input{width:22px;height:22px;accent-color:#FF3B1F;flex:none}

@@ -87,7 +87,7 @@ h1{font-size:26px;margin:2px 0 10px}
 .remote button{height:44px;border-radius:11px;background:rgba(255,255,255,.07);border:0;font-size:15px}
 .remote button.on{background:#3a0d0a;color:#ffb4a8}
 .search{display:flex;gap:8px;margin-bottom:10px}
-.search input{flex:1;min-width:0;background:var(--card);border:1px solid #26262b;border-radius:12px;padding:12px 14px;font-size:15px}
+.search input{flex:1;min-width:0;background:var(--card);border:1px solid #26262b;border-radius:12px;padding:12px 14px;font-size:16px}
 .seg{display:flex;background:var(--card);border-radius:12px;padding:4px;margin:0 0 12px}
 .seg button{flex:1;min-height:38px;border:0;border-radius:9px;background:transparent;color:var(--muted);font-weight:600;font-size:13px}.seg button.on{background:#26262b;color:var(--white)}
 .chiprow{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin:-2px 0 10px;scrollbar-width:none;align-items:center}
@@ -128,7 +128,8 @@ aside.side{display:none}
 #toast{position:fixed;left:16px;right:16px;bottom:calc(96px + env(safe-area-inset-bottom));max-width:600px;margin:0 auto;background:#1c1c21;border:1px solid #2c2c31;border-radius:12px;padding:12px 14px;font-size:14px;z-index:20;opacity:0;transform:translateY(10px);transition:all .25s;pointer-events:none}
 #toast.on{opacity:1;transform:none}#toast.bad{border-color:#5a1410}
 #pair{max-width:420px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 50px) 22px 40px;text-align:center}
-#pair input{width:100%;background:var(--card);border:1px solid #26262b;border-radius:10px;padding:12px;font:15px var(--mono);margin:14px 0 10px}
+#pair input{width:100%;background:var(--card);border:1px solid #26262b;border-radius:10px;padding:12px;font:16px var(--mono);margin:14px 0 10px}
+/* (16px: an iPhone zooms into smaller text boxes, and a home-screen app then stays zoomed in) */
 </style></head><body>
 
 <aside class="side" id="side">
@@ -254,7 +255,7 @@ function downloadsCard(){if(!H)return'';if(H.sab_ok===false)return'<div class="c
     '<button class="btn" data-q="'+(H.paused?'resume':'pause')+'">'+(H.paused?'▶':'❚❚')+'</button></span></h3><div class="tt">'+esc(c.name)+'</div>'+
     '<div class="sub">'+f0(c.pct,'%')+' · '+esc(c.sizeleft||'')+' left'+(s!=null&&!H.paused?' · ready ~'+clock(Date.now()+s*1000):'')+'</div><div class="bar"><i style="width:'+(c.pct||0)+'%"></i></div></div>'}
 function tvCard(full){const k=H&&H.kodi;const p=k&&k.playing;
-  if(!p){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span></h3><div class="tt">Nothing\'s playing, '+esc(NAME())+'.</div><div class="sub">'+(k&&k.configured===false?'Kodi isn\'t set up yet.':k&&k.online===false?'Kodi isn\'t answering (the TV may be off).':'Pick something below.')+'</div>'+
+  if(!p){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span></h3><div class="tt">Nothing\'s playing, '+esc(NAME())+'.</div><div class="sub">'+(k&&k.configured===false?'Kodi isn\'t set up yet.':k&&k.online===false?'Kodi isn\'t answering (the TV may be off).':'Kodi is ready when you are.')+'</div>'+
     (H&&H.tv_ready?'<button class="btn r wide" style="margin-top:12px" data-tvon>Turn the TV on and open Kodi</button>':'')+'</div>'}
   return'<div class="card tvcard"><h3><span class="k">NOW ON THE TV</span>'+(full?'':'<button class="btn" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'▶ Play':'❚❚ Pause')+'</button>')+'</h3>'+
     '<div class="tt" style="font-size:'+(full?17:14)+'px">'+esc(p.title)+'</div><div class="sub">'+esc((p.sub?p.sub+' · ':'')+mmss(p.time)+' / '+mmss(p.total))+'</div><div class="bar"><i style="width:'+(p.pct||0)+'%;background:#ffb4a8"></i></div>'+
@@ -299,9 +300,18 @@ function rGet(){let x='<div class="narrow">'+topbar('Get')+'<form class="search"
       (Q.slots.length?Q.slots.map(s=>{const p=String(s.status).toLowerCase()==='paused';return'<div class="row"><span class="t"><b>'+esc(s.name)+'</b><span>'+esc([f0(s.percentage,'%'),s.status,s.sizeleft?s.sizeleft+' left':'',s.eta&&s.eta!=='0:00:00'?s.eta:'',s.cat].filter(Boolean).join(' · '))+'</span></span><button class="btn" data-qi="'+(p?'resume':'pause')+'" data-id="'+esc(s.id)+'">'+(p?'▶':'❚❚')+'</button><button class="btn" data-qi="delete" data-id="'+esc(s.id)+'" data-name="'+esc(s.name)+'">✕</button></div>'}).join(''):'<div class="empty">The queue is empty, '+esc(NAME())+'.</div>')+'</div>'}}
   else x+=UP?(upcomingList(40,'NEXT 14 DAYS')||'<div class="list"><div class="empty">Nothing coming up in the next two weeks.</div></div>'):'<div class="list"><div class="empty">I\'m asking Sonarr and Radarr…</div></div>';
   return x+totals()+'</div>'}
+const mins=s=>s>=3600?Math.floor(s/3600)+' h '+String(Math.round(s%3600/60)).padStart(2,'0'):Math.round(s/60)+' min';
+function movieRow(m,finish){const meta=[m.year,m.runtime?mins(m.runtime):'',m.imdb?'IMDb '+Number(m.imdb).toFixed(1):'',finish&&m.runtime?mins(Math.max(0,m.runtime-m.resume))+' left':'',!finish&&m.watched?'watched':''].filter(Boolean).join(' · ');
+  return'<div class="row"><span class="s'+(m.watched?' off':'')+'"></span><span class="t"><b>'+esc(m.title)+'</b><span>'+esc(meta)+'</span></span><button class="btn r" data-movie="'+m.id+'">▶ TV</button></div>'}
 function rWatch(){let x='<div class="narrow">'+topbar('Watch')+tvCard(true);
-  const c=K&&K.continue||[];if(c.length)x+='<div class="sec"><span>CONTINUE WATCHING</span></div><div class="list">'+c.map(it=>'<div class="row"><span class="t"><b>'+esc(it.show.title+' · S'+it.episode.season+' E'+it.episode.episode)+'</b><span>'+esc(it.episode.title+' · '+it.show.watched+' of '+it.show.episodes+' watched')+'</span></span><button class="btn r" data-ep="'+it.episode.id+'">▶ TV</button></div>').join('')+'</div>';
-  else if(K===null)x+='<div class="list"><div class="empty">I\'m asking Kodi…</div></div>';
+  if(K===null)x+='<div class="list"><div class="empty">I\'m asking Kodi…</div></div>';
+  else if(K.online===false&&K.configured!==false)x+='<div class="list"><div class="empty">Kodi isn\'t answering, '+esc(NAME())+'. '+(H&&H.tv_ready?'Turn the TV on above.':'Turn the TV on and open Kodi.')+'</div></div>';
+  const c=K&&K.continue||[];if(c.length)x+='<div class="sec"><span>CONTINUE WATCHING</span></div><div class="list">'+c.map(it=>'<div class="row"><span class="s"></span><span class="t"><b>'+esc(it.show.title+' · S'+it.episode.season+' E'+it.episode.episode)+'</b><span>'+esc(it.episode.title+' · '+it.show.watched+' of '+it.show.episodes+' watched')+'</span></span><button class="btn r" data-ep="'+it.episode.id+'">▶ TV</button></div>').join('')+'</div>';
+  const rec=K&&K.recent||[],part=rec.filter(m=>m.resume>60&&!m.watched);
+  if(part.length)x+='<div class="sec"><span>FINISH WATCHING</span></div><div class="list">'+part.slice(0,4).map(m=>movieRow(m,true)).join('')+'</div>';
+  const fresh=rec.filter(m=>!part.includes(m));
+  if(fresh.length)x+='<div class="sec"><span>NEW IN YOUR LIBRARY</span></div><div class="list">'+fresh.slice(0,8).map(m=>movieRow(m,false)).join('')+'</div>';
+  if(K&&K.counts)x+='<p class="hint">Your library: '+[K.counts.movies?K.counts.movies.toLocaleString()+' movies':'',K.counts.shows?K.counts.shows.toLocaleString()+' shows':'',K.counts.episodes?K.counts.episodes.toLocaleString()+' episodes':''].filter(Boolean).join(' · ')+'</p>';
   x+=jfList();
   x+='<div class="sec"><span>MORE</span></div><div class="list"><a class="row" href="/kodi" style="color:inherit;text-decoration:none"><span class="t"><b>Library, remote and search</b><span>The full Kodi and Jellyfin pages (classic app)</span></span><span class="m">›</span></a></div>';
   return x+'</div>'}
@@ -361,6 +371,7 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a');if(!c
   if(d.seg){getSeg=d.seg;render();if(d.seg==='upcoming')loadUpcoming();return}
   if(d.play){c.disabled=true;act(()=>api('/api/home/play',{id:d.play}),r=>r&&r.started_tv?'Turning the TV on. It\'ll start in a moment.':'Starting it on the TV.');return}
   if(d.ep){act(()=>api('/api/kodi/play',{episodeid:Number(d.ep)}),'Starting it on the TV.');return}
+  if(d.movie){act(()=>api('/api/kodi/play',{movieid:Number(d.movie)}),'Starting it on the TV.');return}
   if(d.kc){act(()=>api('/api/kodi/control',{action:d.kc,playerid:Number(d.pid)}));return}
   if(d.jf){act(()=>api('/api/jellyfin/control',{session:d.sid,action:d.jf}));return}
   if('tvon' in d){act(()=>api('/api/tv/on',{kodi:true}),'Turning the TV on and opening Kodi.');return}
