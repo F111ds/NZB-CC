@@ -409,6 +409,25 @@ assert hs.load_or_create_access_token(kf) == code43
 assert hs.clean_code(" " + code43 + "\\n\r\n") == code43
 print("key file ok")
 
+# ---------------- a key file holding a typed-out "\\n" (as on the owner's PC) ----------------
+weird = code43 + "\\n"                     # 45 characters: ...Lt5c\n
+hs._token_bytes = weird.encode()
+srv2 = ThreadingHTTPServer(("127.0.0.1", 0), hs.HalHandler)
+threading.Thread(target=srv2.serve_forever, daemon=True).start()
+port = srv2.server_address[1]
+assert call("/api/status", tok=weird)[0] == 200           # exactly as in the file (what the PIN hands out)
+assert call("/api/status", tok=code43)[0] == 200          # without the \n
+assert call("/api/status", tok=code43 + "\\n ")[0] == 200
+code, body, _ = call("/api/status", tok=code43[:-1])
+assert code == 401 and "has 43" in json.loads(body)["error"]
+hs.AUTH_FAILURES.clear("127.0.0.1")
+hs.PAIRING.current()
+code, body, _ = call("/api/pair", {"pin": hs.PAIRING.pin}, tok=None)
+assert call("/api/status", tok=json.loads(body)["token"])[0] == 200   # PIN, then signed in
+srv2.shutdown()
+hs._token_bytes = token.encode()
+print("typed-out \\n key ok")
+
 # ---------------- state is saved and loaded back ----------------
 h4 = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=hs.DemoMonitor(), start_threads=False)
 h4.add_event("warning", "Test event")

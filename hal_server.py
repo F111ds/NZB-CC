@@ -1985,13 +1985,17 @@ class HalHandler(BaseHTTPRequestHandler):
             return False
         raw = self.headers.get("X-Mobile-Token") or ""
         supplied = clean_code(raw).encode("utf-8")
-        if not secrets.compare_digest(supplied, _token_bytes):
+        # The code exactly as in mobile_access_key.txt, or both sides without stray characters (a file can hold a
+        # typed-out "\n" at the end: the NZB app uses the code that way, so both forms are accepted).
+        exact = secrets.compare_digest(raw.encode("utf-8", "replace"), _token_bytes)
+        if not exact and not secrets.compare_digest(supplied, clean_code(_token_bytes.decode()).encode("utf-8")):
             if raw:
                 AUTH_FAILURES.record(ip)
-                same_start = supplied[:4] == _token_bytes[:4]
-                log.warning("Wrong access code from %s (%d characters, the code has %d; %s)", ip, len(supplied), len(_token_bytes),
+                expected = clean_code(_token_bytes.decode()).encode("utf-8")
+                same_start = supplied[:4] == expected[:4]
+                log.warning("Wrong access code from %s (%d characters, the code has %d; %s)", ip, len(supplied), len(expected),
                             "same first characters" if same_start else "different first characters")
-                hint = (f"You entered {len(supplied)} characters; the code on this PC has {len(_token_bytes)}"
+                hint = (f"You entered {len(supplied)} characters; the code on this PC has {len(expected)}"
                         + (", and it starts the same way, so check the end." if same_start else
                            ", and it starts differently, so it's a different code.") if supplied else "")
                 self.send_json(401, {"error": "Just what do you think you're doing, Dave? That isn't the access code. " + hint +
