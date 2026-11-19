@@ -18,6 +18,7 @@ drive_history.json
 tv_host.txt
 tv_app_installed.txt
 tv_user_profile.txt
+tv_update_result_*.txt
 
 # --- Python ---
 __pycache__/

@@ -110,6 +110,7 @@ if ($UpdateOnly) {
     $ver = (Tv "dumpsys package $pkg | grep -m1 versionName").Trim()
     Write-Host "TV app now: $ver" -ForegroundColor Green
     MarkInstalled
+    if ($ResultFile) { try { [IO.File]::WriteAllText($ResultFile, "OK $($ver -replace '^versionName=', '')") } catch { } }
     exit 0
 }
 
