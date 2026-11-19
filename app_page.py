@@ -64,6 +64,10 @@ h1{font-size:26px;margin:2px 0 10px}
 .alert{display:flex;gap:11px;width:100%;text-align:left;background:linear-gradient(90deg,#2a1d05,#17140b);border:1px solid #4a3609;border-radius:14px;padding:11px 13px;margin-bottom:10px}
 .alert.critical{background:linear-gradient(90deg,#300908,#170b0b);border-color:#5a1410}
 .alert b{font-size:14px;display:block}.alert p{margin:2px 0 0;font-size:12.5px;color:var(--text)}
+div.alert{cursor:pointer}.alert .grow{flex:1;min-width:0}
+.snz{flex:none;align-self:center;border:0;border-radius:9px;background:rgba(255,255,255,.08);color:var(--soft);font:600 11px var(--mono);padding:7px 9px;margin-left:6px}
+.hidline{display:flex;align-items:center;justify-content:space-between;gap:10px;font:12px var(--mono);color:var(--muted);margin:-2px 2px 10px}
+.hidline button{background:none;border:0;color:var(--red2);font:700 11px var(--mono);letter-spacing:.06em;padding:4px 0}
 .s{width:9px;height:9px;border-radius:50%;flex:none;background:var(--green);box-shadow:0 0 8px var(--green)}
 .s.warning{background:var(--amber);box-shadow:0 0 8px var(--amber)}.s.critical,.s.down{background:var(--red);box-shadow:0 0 10px var(--red)}
 .s.off,.s.info{background:#3f3f46;box-shadow:none}
@@ -248,7 +252,13 @@ function homeLine(){if(!H&&!S)return'I\'m thinking…';const parts=[],iss=issues
   else if(iss.length>1)parts.push(iss.length+' things need your attention.');
   if(!cur&&!kp&&!iss.length&&S)return S.hal.quote;
   return parts.join(' ')}
-function attention(max){return issues().slice(0,max).map(i=>'<button class="alert '+i.level+'" data-hal="'+esc(i.tab)+'"><span class="s '+i.level+'"></span><span><b>'+esc(i.title)+'</b>'+(i.detail?'<p>'+esc(i.detail)+'</p>':'')+'</span></button>').join('')}
+let showHidden=false;
+function attention(max){const list=issues().slice(0,max).map(i=>'<div class="alert '+i.level+'" data-hal="'+esc(i.tab)+'"><span class="s '+i.level+'"></span><span class="grow"><b>'+esc(i.title)+'</b>'+(i.detail?'<p>'+esc(i.detail)+'</p>':'')+'</span><button class="snz" data-snooze="'+esc(i.key)+'" aria-label="Hide for 24 hours">Hide 24 h</button></div>').join('');
+  const h=(S&&S.snoozed)||[];if(!h.length)return list;
+  const until=Math.min(...h.map(i=>i.until));
+  let x=list+'<div class="hidline"><span>'+h.length+' alert'+(h.length>1?'s':'')+' hidden until '+esc((new Date(until*1000).toDateString()===new Date().toDateString()?'':new Date(until*1000).toDateString()===new Date(Date.now()+864e5).toDateString()?'tomorrow ':new Date(until*1000).toLocaleDateString([],{weekday:'short'})+' ')+clock(until*1000))+'</span><button data-showhidden>'+(showHidden?'CLOSE':'SHOW')+'</button></div>';
+  if(showHidden)x+='<div class="list">'+h.map(i=>'<div class="row"><span class="s '+i.level+'"></span><span class="t"><b>'+esc(i.title)+'</b><span>Hidden until '+esc(new Date(i.until*1000).toLocaleString([],{weekday:'short',hour:'numeric',minute:'2-digit'}))+'</span></span><button class="btn" data-unsnooze="'+esc(i.key)+'">Show again</button></div>').join('')+'</div>';
+  return x}
 function downloadsCard(){if(!H)return'';if(H.sab_ok===false)return'<div class="card"><h3><span class="k">DOWNLOADS</span><span class="pill w">OFFLINE</span></h3><div class="sub">SABnzbd isn\'t answering: '+esc(H.sab_error||'')+'</div></div>';
   const c=H.current;if(!c)return'<div class="card"><h3><span class="k">DOWNLOADS</span><span class="pill o">IDLE</span></h3><div class="sub">Nothing downloading. What would you like, '+esc(NAME())+'?</div></div>';
   const s=secsOf(c.eta);return'<div class="card"><h3><span class="k">DOWNLOADING'+(H.total>1?' · 1 OF '+H.total:'')+'</span><span style="display:flex;gap:6px;align-items:center"><span class="pill'+(H.paused?' w':'')+'">'+esc(H.paused?'PAUSED':H.speed)+'</span>'+
@@ -320,7 +330,11 @@ function rSystem(){let x='<div class="narrow">'+topbar('');
   x+=vitals()+attention(4)+systemsList();
   x+='<div class="sec"><span>POD BAY CONTROLS</span></div><div class="list"><button class="row" data-hal="log"><span class="t"><b>Log, Lock, Sleep, Fix network, Restart</b><span>Hold to restart: “I\'m afraid I can\'t do that, '+esc(NAME())+'.”</span></span><span class="m">›</span></button></div>';
   return x+'</div>'}
-function render(){if(!$('app')||$('app').classList.contains('hidden'))return;
+// Don't redraw under a finger: a refresh that swaps a button between touch-down and touch-up loses the tap.
+let pressing=false,renderLater=false;
+document.addEventListener('pointerdown',()=>{pressing=true},true);
+for(const ev of ['pointerup','pointercancel'])document.addEventListener(ev,()=>{setTimeout(()=>{pressing=false;if(renderLater){renderLater=false;render()}},0)},true);
+function render(){if(!$('app')||$('app').classList.contains('hidden'))return;if(pressing){renderLater=true;return}
   if(tab==='home')renderHome();
   else{const el=$('t-'+tab),f={get:rGet,watch:rWatch,system:rSystem}[tab];const focused=document.activeElement&&document.activeElement.id==='sq';
     const sqv=$('sq')?$('sq').value:'';el.innerHTML=f();if($('sq')){$('sq').value=sqv;if(focused)$('sq').focus()}}
@@ -355,7 +369,10 @@ function doSearch(q){if(!q)return;lastQuery=q;searching=true;render();
   api('/api/search',{query:q,indexer:'*',category:getCat}).then(d=>{results=d.results||[];searching=false;if(d.errors&&d.errors.length)toast(d.errors[0],true);render()})
     .catch(err=>{searching=false;toast(err.message,true);render()})}
 document.addEventListener('submit',e=>{if(e.target.id!=='sform')return;e.preventDefault();doSearch($('sq').value.trim())});
-document.addEventListener('click',e=>{const c=e.target.closest('button,a');if(!c)return;const d=c.dataset;
+document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-hal]');if(!c)return;const d=c.dataset;
+  if(d.snooze!==undefined||d.unsnooze!==undefined){const off=d.unsnooze!==undefined;api('/hal/api/snooze',{keys:(off?d.unsnooze:d.snooze).split('|'),hours:24,off})
+    .then(r=>{toast(r.message,!r.ok);refresh()}).catch(err=>toast(err.message,true));return}
+  if('showhidden' in d){showHidden=!showHidden;render();return}
   if(d.tab){show(d.tab);return}
   if('settings' in d){openSettings();return}
   if('alerts' in d){location.href='/hal/?tab=log&from=app';return}

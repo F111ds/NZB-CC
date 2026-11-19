@@ -532,4 +532,60 @@ assert "--hal-port" in ms._autostart_args(ms.parse_args(["--hal-port", "9001"]))
 msrv.shutdown()
 print("hal inside the phone server ok")
 
+
+# ---------------- Hide 24 h (snooze) ----------------
+sh = hs.make_demo_hal()
+sh.demo = False
+hs.STATE_FILE = tmp / "snooze_state.json"
+st = sh.status()
+keys = [i["key"] for i in st["issues"]]
+assert "full:Z:" in keys and st["hal"]["level"] == "warning"
+assert sh.snooze(["full:Z:", "nope"], 24) == 1
+st = sh.status()
+assert "full:Z:" not in [i["key"] for i in st["issues"]]
+hid = st["snoozed"]
+assert [i["key"] for i in hid] == ["full:Z:"] and hid[0]["until"] > time.time() + 23 * 3600
+for t in range(0, 180 * 12, 180):          # every line HAL might pick: none mentions the hidden alert
+    assert "92% full" not in hs.hal_quote([i for i in st["issues"]], "Dave", now=t)
+storage = next(x for x in st["systems"] if x["id"] == "storage")
+# no phone alert while hidden
+sh.events.clear(); sh.announced.clear(); sh.pending.clear(); pushes.clear()
+sh.evaluate()
+assert not any(e["title"].startswith("Drive Z: is") for e in sh.events)
+# saved, and loaded back
+saved = json.loads(hs.STATE_FILE.read_text())
+assert "full:Z:" in saved["snoozed"]
+# time's up and still there: shows again, and the phone hears about it again
+sh.snoozed["full:Z:"]["until"] = time.time() - 1
+sh.evaluate()
+assert "full:Z:" not in sh.snoozed and any(e["title"].startswith("Drive Z: is") for e in sh.events)
+# gets worse: shows again at once
+sh.snooze(["full:Z:"])
+sh.snoozed["full:Z:"]["level"] = "info"          # pretend it was milder when hidden
+assert "full:Z:" in [i["key"] for i in sh.status()["issues"]] and "full:Z:" not in sh.snoozed
+# goes away for a while: snooze dropped, so it shows if it comes back
+sh.snooze(["full:Z:"])
+sh.apply_snoozes([], time.time())
+assert "full:Z:" in sh.snoozed                    # a short gap isn't "gone"
+sh.apply_snoozes([], time.time() + sh.SNOOZE_GRACE + 1)
+assert "full:Z:" not in sh.snoozed
+# unsnooze
+sh.snooze(["full:Z:"]); assert sh.unsnooze(["full:Z:"]) == 1 and "full:Z:" in [i["key"] for i in sh.status()["issues"]]
+# over HTTP
+hs.HAL = sh
+srv3 = ThreadingHTTPServer(("127.0.0.1", 0), hs.HalHandler)
+threading.Thread(target=srv3.serve_forever, daemon=True).start()
+port = srv3.server_address[1]
+hs._token_bytes = token.encode()
+code, body, _ = call("/api/snooze", {"keys": ["full:Z:"], "hours": 24})
+r = json.loads(body)
+assert code == 200 and r["ok"] and "keep quiet" in r["message"]
+assert json.loads(call("/api/status")[1])["snoozed"][0]["key"] == "full:Z:"
+code, body, _ = call("/api/snooze", {"keys": ["full:Z:"], "off": True})
+assert code == 200 and json.loads(call("/api/status")[1])["snoozed"] == []
+assert call("/api/snooze", {"keys": "full:Z:"})[0] == 400
+assert json.loads(call("/api/snooze", {"keys": ["gone:X"]})[1])["ok"] is False
+srv3.shutdown()
+print("snooze ok")
+
 print("\nALL HAL TESTS PASSED")

@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1084,6 +1084,10 @@ class Hal:
         self.seen: set[str] = set(st.get("seen") or [])                    # services that have ever answered
         self.launch: dict[str, dict] = st.get("launch") or {}               # how to start a service again
         self.power_log: list = (st.get("power_log") or [])[-50:]
+        # Alerts you hid ("Hide 24 h"): key -> {"until", "level", "title"}. They come back when the time is up,
+        # when they get worse, or when the problem goes away and later returns.
+        self.snoozed: dict[str, dict] = {k: v for k, v in (st.get("snoozed") or {}).items() if isinstance(v, dict)}
+        self._snooze_gone: dict[str, float] = {}
         self.services: dict[str, dict] = {}
         self.devices: list[dict] = []
         self.net: dict = {}
@@ -1144,7 +1148,7 @@ class Hal:
             data = {"minutes": {k: list(v) for k, v in self.minutes.items()},
                     "hours": {k: list(v) for k, v in self.hours.items()},
                     "free": self.free_samples, "events": list(self.events), "seen": sorted(self.seen),
-                    "launch": self.launch, "power_log": self.power_log[-50:]}
+                    "launch": self.launch, "power_log": self.power_log[-50:], "snoozed": self.snoozed}
         save_json(STATE_FILE, data)
 
     def update_settings(self, s: dict) -> None:
@@ -1717,6 +1721,54 @@ class Hal:
             add("ups_err", "warning", "I've lost contact with the UPS", self.ups_error, "shield", 60)
         return issues
 
+    # ---- hiding alerts for a while ----
+    SNOOZE_GRACE = 600   # an issue must be gone this long before its snooze is dropped (flapping network checks)
+
+    def apply_snoozes(self, issues: list[dict], now: float | None = None) -> tuple[list[dict], list[dict]]:
+        """(showing, hidden). Drops a snooze when its time is up, when the issue got worse, or when the issue
+        has been gone for a while (so it shows again if it comes back)."""
+        now = time.time() if now is None else now
+        current = {i["key"]: i for i in issues}
+        with self.lock:
+            for k, sn in list(self.snoozed.items()):
+                i = current.get(k)
+                if i is None:
+                    gone = self._snooze_gone.setdefault(k, now)
+                    if now - gone >= self.SNOOZE_GRACE or now >= sn.get("until", 0):
+                        self.snoozed.pop(k, None)
+                        self._snooze_gone.pop(k, None)
+                    continue
+                self._snooze_gone.pop(k, None)
+                if now >= sn.get("until", 0) or LEVELS[i["level"]] > LEVELS.get(sn.get("level"), 1):
+                    self.snoozed.pop(k, None)
+                    self.announced.pop(k, None)      # it's back: tell the phone again
+                    self.cooldown.pop(k, None)
+            showing = [i for i in issues if i["key"] not in self.snoozed]
+            hidden = [{**i, "until": self.snoozed[i["key"]]["until"]} for i in issues if i["key"] in self.snoozed]
+        return showing, hidden
+
+    def snooze(self, keys: list[str], hours: float = 24) -> int:
+        snap = self.monitor.snapshot() if self.monitor else {}
+        current = {i["key"]: i for i in self.compute_issues(snap, self.drives(snap))}
+        until = time.time() + hours * 3600
+        n = 0
+        with self.lock:
+            for k in keys:
+                if k in current:
+                    self.snoozed[k] = {"until": until, "level": current[k]["level"], "title": current[k]["title"]}
+                    n += 1
+        if n:
+            log.info("Hid %d alert(s) for %s h", n, hours)
+            self.save()
+        return n
+
+    def unsnooze(self, keys: list[str]) -> int:
+        with self.lock:
+            n = sum(1 for k in keys if self.snoozed.pop(k, None) is not None)
+        if n:
+            self.save()
+        return n
+
     def evaluate(self) -> list[dict]:
         """Turns the current issues into log entries and phone alerts (after their sustain time),
         and reports recoveries. Returns the issues that are showing now."""
@@ -1725,11 +1777,14 @@ class Hal:
         snap = self.monitor.snapshot()
         issues = self.compute_issues(snap, self.drives(snap))
         now = time.time()
+        self.apply_snoozes(issues, now)
         keys = {i["key"] for i in issues}
         for i in issues:
             if LEVELS[i["level"]] < LEVELS["warning"]:
                 continue
             start = self.pending.setdefault(i["key"], now)
+            if i["key"] in self.snoozed:
+                continue                                   # hidden: no phone alert until it shows again
             if i["key"] not in self.announced and now - start >= i["sustain"] and now >= self.cooldown.get(i["key"], 0):
                 self.announced[i["key"]] = i
                 self.add_event(i["level"], i["title"], i["detail"], push=True)
@@ -1750,8 +1805,8 @@ class Hal:
     def status(self) -> dict:
         snap = self.monitor.snapshot() if self.monitor else {}
         drives = self.drives(snap)
-        issues = self.compute_issues(snap, drives)
         now = time.time()
+        issues, hidden = self.apply_snoozes(self.compute_issues(snap, drives), now)
         s = self.settings
         level = max((i["level"] for i in issues if LEVELS[i["level"]] >= 2), key=lambda x: LEVELS[x], default="ok")
         cpu, mem = snap.get("cpu") or {}, snap.get("mem") or {}
@@ -1829,6 +1884,7 @@ class Hal:
             "admin": snap.get("admin"), "windows": IS_WINDOWS or self.demo,
             "hal": {"level": level, "quote": hal_quote(issues, name, now), "greeting": greeting(name), "name": name},
             "issues": [{k: v for k, v in i.items() if k != "sustain"} for i in sorted(issues, key=lambda i: -LEVELS[i["level"]])],
+            "snoozed": [{k: v for k, v in i.items() if k != "sustain"} for i in sorted(hidden, key=lambda i: -LEVELS[i["level"]])],
             "systems": systems,
             "vitals": {
                 "cpu": {"pct": cpu.get("total"), "temp": cpu.get("temp"), "freq": cpu.get("freq"), "per_core": cpu.get("per_core") or [],
@@ -2386,6 +2442,22 @@ class HalRoutes:
                 hal.add_event("info", f"Restarting {dict((s['id'], s['name']) for s in SERVICES)[sid]}", "Requested from the phone.")
                 job = hal.restart_service(sid)
                 self._h_json(200, {"ok": True, "message": job.get("msg", "Restarting…")})
+            elif path == "/api/snooze":
+                keys = body.get("keys")
+                if not isinstance(keys, list) or not keys or len(keys) > 30 or not all(isinstance(k, str) and 0 < len(k) <= 200 for k in keys):
+                    raise ValueError("Which alerts?")
+                name = hal.settings["name"]
+                if body.get("off"):
+                    hal.unsnooze(keys)
+                    self._h_json(200, {"ok": True, "message": f"It's back on the list, {name}."})
+                    return
+                hours = to_float(body.get("hours"), 24) or 24
+                hours = min(168, max(1, hours))
+                n = hal.snooze(keys, hours)
+                until = datetime.fromtimestamp(time.time() + hours * 3600).strftime("%I:%M %p").lstrip("0")
+                self._h_json(200, {"ok": bool(n), "message": (f"Very well, {name}. I'll keep quiet about it until {until} tomorrow"
+                                                              if hours == 24 else f"Very well, {name}. Hidden until {until}") +
+                                   ", unless it gets worse." if n else "That alert has already gone away."})
             elif path == "/api/settings":
                 new = validate_settings(body, hal.settings)
                 hal.update_settings(new)
@@ -2511,6 +2583,10 @@ details.ev .raw{font:12px var(--mono);color:var(--muted);margin-top:8px;word-bre
 .alert.critical{background:linear-gradient(90deg,#300908,#170b0b);border-color:#5a1410}
 .alert.info{background:var(--card);border-color:#1f2a3a}
 .alert b{font-size:14px;display:block}.alert p{margin:3px 0 0;font-size:13px;color:var(--text)}
+div.alert{cursor:pointer}.alert .grow{flex:1;min-width:0}
+.snz{flex:none;align-self:center;border:0;border-radius:9px;background:rgba(255,255,255,.08);color:var(--soft);font:600 11px var(--mono);padding:7px 9px;margin-left:6px}
+.hidline{display:flex;align-items:center;justify-content:space-between;gap:10px;font:12px var(--mono);color:var(--muted);margin:-2px 2px 12px}
+.hidline button{background:none;border:0;color:var(--red2);font:700 11px var(--mono);letter-spacing:.06em;padding:4px 0}
 .alert .s{margin-top:5px}
 .card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:12px}
 .card h3{margin:0;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:8px}
@@ -2656,8 +2732,9 @@ function rStatus(){
   let head='<div class="top"><span class="brand"><b>HAL</b> 9000</span><span style="display:flex;gap:8px">'+spk+'<button class="iconbtn" data-go="log" aria-label="Log and controls">'+svg('bell','#D4D4D8')+(S.unread?'<i></i>':'')+'</button></span></div>';
   if(S.power.shutdown_at&&S.power.shutdown_at>S.now)head+='<div class="banner"><b>Shutting down in '+Math.max(0,Math.round(S.power.shutdown_at-S.now))+' s</b><button class="btn red" data-act="cancel_shutdown">Cancel</button></div>';
   let x='';
-  x+=alerts.map(i=>'<button class="alert '+i.level+'" data-go="'+esc(i.tab)+'"><span class="s '+i.level+'"></span><span><b>'+esc(i.title)+'</b>'+(i.detail?'<p>'+esc(i.detail)+'</p>':'')+'</span></button>').join('');
-  if(notes.length)x+='<button class="alert info" data-go="'+esc(notes[0].tab)+'"><span class="s info"></span><span><b>'+(notes.length>1?notes.length+' small things':'One small thing')+'</b><p>'+esc(notes.map(i=>i.title).join(' · '))+'</p></span></button>';
+  x+=alerts.map(i=>'<div class="alert '+i.level+'" data-go="'+esc(i.tab)+'"><span class="s '+i.level+'"></span><span class="grow"><b>'+esc(i.title)+'</b>'+(i.detail?'<p>'+esc(i.detail)+'</p>':'')+'</span><button class="snz" data-snooze="'+esc(i.key)+'" aria-label="Hide for 24 hours">Hide 24 h</button></div>').join('');
+  if(notes.length)x+='<div class="alert info" data-go="'+esc(notes[0].tab)+'"><span class="s info"></span><span class="grow"><b>'+(notes.length>1?notes.length+' small things':'One small thing')+'</b><p>'+esc(notes.map(i=>i.title).join(' · '))+'</p></span><button class="snz" data-snooze="'+esc(notes.map(i=>i.key).join('|'))+'" aria-label="Hide for 24 hours">Hide 24 h</button></div>';
+  x+=hiddenAlerts();
   const ct=lvlOf(v.cpu.temp,v.limits.cpu_temp-10,v.limits.cpu_temp);
   x+='<div class="grid2">'+
    '<button class="tile" data-go="vitals"><div class="k">CPU</div><div class="v">'+f0(v.cpu.pct)+'<small>%'+(v.cpu.temp!=null?' · '+f0(v.cpu.temp)+'°C':'')+'</small></div><div class="bar"><i class="'+lvlOf(v.cpu.pct,75,90)+'" style="width:'+(v.cpu.pct||0)+'%"></i></div></button>'+
@@ -2700,7 +2777,7 @@ function say(text){if(!talkative()||!unlocked||talkRun)return;const sec=document
 document.addEventListener('pointerdown',e=>{if(unlocked||!CAN_SPEAK)return;unlocked=true;updateTap();
   if(!talkative()||!S||e.target.closest('#heye,[data-talk]'))return;
   setTimeout(()=>{if(!voiceOn&&$('heye'))talk($('heye'),$('hquote'),lastQuote,true,S.hal.greeting)},60)},true);
-function updateTap(){const t=$('htap');if(!t)return;t.textContent=!talkative()?'TAP HAL TO HEAR HIM':unlocked?'':'TAP ANYWHERE AND I\'LL TALK';t.classList.toggle('hidden',!t.textContent)}
+function updateTap(){const t=$('htap');if(!t)return;t.textContent=!talkative()?'TAP HAL TO HEAR HIM':unlocked?'':'TAP ANYWHERE AND I\'LL TALK';t.style.visibility=t.textContent?'visible':'hidden';if(!t.textContent)t.textContent='\u00a0'}   // keeps its space: no jump under the first tap
 function setTalk(on){LS.set('hal_talk',on?'on':'off');if(!on)stopTalk();render();if(on){unlocked=true;talk($('heye'),$('hquote'),'Thank you, '+S.hal.name+'. I\'ll talk to you from now on.',true)}}
 function stopTalk(){if(talkRun){talkRun.stop();talkRun=null}if(CAN_SPEAK&&voiceOn){speechSynthesis.cancel();voiceOn=false}}
 // Types text into textEl while the eye's light rises on vowels and dips at spaces and punctuation.
@@ -2746,6 +2823,14 @@ function renderStatus(){
   $('hsub').textContent='UP '+dur(S.uptime).toUpperCase()+' · '+S.host.toUpperCase()+(lastOk?' · LIVE':'');
   updateTap();
   if(h.quote!==lastQuote){const first=!lastQuote;lastQuote=h.quote;if(!voiceOn)talk(eye,$('hquote'),lastQuote,!first&&talkative()&&unlocked)}}
+
+// Alerts hidden with "Hide 24 h": one line, and the list (with "Show again") when opened.
+let showHidden=false;
+function hiddenAlerts(){const h=(S&&S.snoozed)||[];if(!h.length)return'';
+  const until=Math.min(...h.map(i=>i.until)),d=new Date(until*1000),t=d.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}),when=(d.toDateString()===new Date().toDateString()?'':d.toDateString()===new Date(Date.now()+864e5).toDateString()?'tomorrow ':d.toLocaleDateString([],{weekday:'short'})+' ')+t;
+  let x='<div class="hidline"><span>'+h.length+' alert'+(h.length>1?'s':'')+' hidden until '+esc(when)+'</span><button data-showhidden>'+(showHidden?'CLOSE':'SHOW')+'</button></div>';
+  if(showHidden)x+='<div class="list" style="margin-bottom:12px">'+h.map(i=>'<div class="row"><span class="s '+i.level+'"></span><span class="t"><b>'+esc(i.title)+'</b><span>Hidden until '+esc(new Date(i.until*1000).toLocaleString([],{weekday:'short',hour:'numeric',minute:'2-digit'}))+'</span></span><button class="btn" data-unsnooze="'+esc(i.key)+'">Show again</button></div>').join('')+'</div>';
+  return x}
 
 /* ---------- Vitals ---------- */
 function rVitals(){
@@ -2919,6 +3004,9 @@ function bindHold(el){let t0=0,raf=0;const fill=el.querySelector('.fill');
   el.onpointerdown=e=>{e.preventDefault();t0=performance.now();raf=requestAnimationFrame(step)};
   el.onpointerup=el.onpointerleave=el.onpointercancel=()=>{if(t0&&performance.now()-t0<2000)toast('I\'m afraid I can\'t do that, '+S.hal.name+'. Hold for 2 seconds.');reset()}}
 document.addEventListener('click',async e=>{
+  const sz=e.target.closest('[data-snooze],[data-unsnooze]');if(sz){const off='unsnooze' in sz.dataset;const keys=(off?sz.dataset.unsnooze:sz.dataset.snooze).split('|');
+    try{const r=await api('/api/snooze',{keys,hours:24,off});toast(r.message,!r.ok);refresh()}catch(err){toast(err.message,true)}return}
+  if(e.target.closest('[data-showhidden]')){showHidden=!showHidden;render();return}
   const go=e.target.closest('[data-go]');if(go){show(go.dataset.go);return}
   const r=e.target.closest('[data-range]');if(r){range=r.dataset.range;hist=null;render();loadHist(true);return}
   const a=e.target.closest('[data-act]');if(a){if(a.dataset.confirm&&!confirm(a.dataset.confirm))return;act(a.dataset.act);return}
@@ -2964,7 +3052,11 @@ async function loadEv(refresh){try{evData=await api('/api/winevents'+(refresh?'?
 function show(t){tab=t;['status','vitals','services','drives','shield','log','events'].forEach(k=>$('t-'+k).classList.toggle('hidden',k!==t));
   document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.tab===(t==='log'?'status':t==='events'?'shield':t)));if(t==='events')loadEv(false);
   window.scrollTo(0,0);if(t==='log'){events=null;loadEvents()}if(t==='vitals')loadHist(true);if(t==='drives')loadCleanup();render()}
-function render(){if(!S)return;if(tab==='status'){renderStatus();return}const f={vitals:rVitals,services:rServices,drives:rDrives,shield:rShield,log:rLog,events:rEvents}[tab];
+// Don't redraw under a finger: a refresh that swaps a button between touch-down and touch-up loses the tap.
+let pressing=false,renderLater=false;
+document.addEventListener('pointerdown',()=>{pressing=true},true);
+for(const ev of ['pointerup','pointercancel'])document.addEventListener(ev,()=>{setTimeout(()=>{pressing=false;if(renderLater){renderLater=false;render()}},0)},true);
+function render(){if(!S)return;if(pressing){renderLater=true;return}if(tab==='status'){renderStatus();return}const f={vitals:rVitals,services:rServices,drives:rDrives,shield:rShield,log:rLog,events:rEvents}[tab];
   const el=$('t-'+tab);el.innerHTML=f();el.querySelectorAll('[data-hold]').forEach(bindHold)}
 async function loadEvents(){try{events=(await api('/api/events')).events;if(S)S.unread=0;if(tab==='log')render()}catch(e){}}
 async function loadHist(force){if(!force&&range!=='live'&&Date.now()-histAt<60000)return;try{hist=(await api('/api/history?range='+range)).series;histAt=Date.now();if(tab==='vitals')render()}catch(e){}}
