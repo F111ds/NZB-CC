@@ -71,6 +71,15 @@ if ($LASTEXITCODE -ne 0) {
 }
 # Remember the TV's address, so "Update everything" can update the TV app later.
 try { [IO.File]::WriteAllText((Join-Path (Split-Path $PSScriptRoot -Parent) 'tv_host.txt'), $TvHost, (New-Object System.Text.UTF8Encoding $false)) } catch { }
+# And whose ADB key the TV trusts: "Update everything" from the phone runs as Windows' SYSTEM account, which has
+# no ~\.android\adbkey of its own; it uses this profile's (tools\tv.py looks there).
+if ($env:USERPROFILE -and $env:USERPROFILE -notmatch 'systemprofile') {
+    try { [IO.File]::WriteAllText((Join-Path (Split-Path $PSScriptRoot -Parent) 'tv_user_profile.txt'), $env:USERPROFILE, (New-Object System.Text.UTF8Encoding $false)) } catch { }
+}
+function MarkInstalled {
+    # Tells "Update everything" the TV has this exact app, so it doesn't install it again.
+    try { [IO.File]::WriteAllText((Join-Path (Split-Path $PSScriptRoot -Parent) 'tv_app_installed.txt'), (Get-FileHash $Apk -Algorithm SHA256).Hash) } catch { }
+}
 
 if ($UpdateOnly) {
     Step 'Updating the app on the TV (settings and screensaver choice stay as they are)'
@@ -89,6 +98,7 @@ if ($UpdateOnly) {
     ) | & $py -I tools\tv.py --batch | Out-Null
     $ver = (Tv "dumpsys package $pkg | grep -m1 versionName").Trim()
     Write-Host "TV app now: $ver" -ForegroundColor Green
+    MarkInstalled
     exit 0
 }
 
@@ -167,6 +177,7 @@ Tv 'rm -f /data/local/tmp/nzbcc-launcher.apk' | Out-Null
 if ($out -notmatch 'Success') { throw 'pm install failed (see above).' }
 $ver = (Tv "dumpsys package $pkg | grep -m1 versionName").Trim()
 Write-Host "Launcher on the TV now: $ver" -ForegroundColor Green
+MarkInstalled
 
 # ---- settings: wallpaper off, glass dock, Kodi row -----------------------------------------------
 Step 'Turning the wallpaper off and pointing the Kodi row at this PC'

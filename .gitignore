@@ -17,6 +17,7 @@ media_inspector_cache.json
 drive_history.json
 tv_host.txt
 tv_app_installed.txt
+tv_user_profile.txt
 
 # --- Python ---
 __pycache__/
