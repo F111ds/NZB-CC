@@ -6,7 +6,8 @@
 
   What is backed up (into the folder settings-backup\ of your GitHub repository):
     nzb_manager_config.json, mobile_settings.json, system_center_config.json, nzb_daily_stats.json,
-    tv_photos_folder.txt and the newest TV launcher settings (tv-launcher\backup\config-*.json).
+    hal_settings.json (HAL 9000), tv_photos_folder.txt and the newest TV launcher settings
+    (tv-launcher\backup\config-*.json).
   What is REMOVED first, because the repository is public:
     every API key, token, password and Pre-Shared Key (also anything stored as "dpapi:..."),
     your ntfy alert topic address (it works like a password), your search history and saved searches.
@@ -97,7 +98,7 @@ try {
         $dest = Join-Path $work "settings-backup"
         if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
         New-Item -ItemType Directory -Path $dest | Out-Null
-        $jsons = @("nzb_manager_config.json", "mobile_settings.json", "system_center_config.json", "nzb_daily_stats.json")
+        $jsons = @("nzb_manager_config.json", "mobile_settings.json", "system_center_config.json", "nzb_daily_stats.json", "hal_settings.json")
         $tvBackup = Get-ChildItem (Join-Path $Folder "tv-launcher\backup") -Filter "config-*.json" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
         $sources = @($jsons | ForEach-Object { @{ src = (Join-Path $Folder $_); name = $_ } })
         if ($tvBackup) { $sources += @{ src = $tvBackup.FullName; name = "tv-launcher-config.json" } }
@@ -123,7 +124,8 @@ repository is public.
 To restore: copy these files back into your NZB Command Center folder (tv-launcher-config.json is
 the TV launcher's config.json), then enter new keys: SABnzbd and indexers in the desktop app's
 Settings, the Kodi password in its Kodi tab, Jellyfin in its Media Server tab, the TV's
-Pre-Shared Key in the phone app's Kodi tab. A new phone access code is made automatically.
+Pre-Shared Key in the phone app's Kodi tab, and HAL 9000's ntfy topic in its Settings (if you gave it its own).
+A new phone access code is made automatically.
 "@ | Set-Content (Join-Path $dest "README.md") -Encoding UTF8
 
         # --- Safety check: no removed value may appear anywhere in the backup ---

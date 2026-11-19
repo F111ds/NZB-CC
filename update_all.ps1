@@ -20,8 +20,10 @@ $TaskName = "NZB Mobile Server"
 
 # Only administrator can stop/start a phone server that runs as administrator (setup_startup.ps1).
 $hasTask = [bool](Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
+$HalTask = "HAL 9000 Server"
+$hasHal = [bool](Get-ScheduledTask -TaskName $HalTask -ErrorAction SilentlyContinue)
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if ($hasTask -and -not $isAdmin -and $PSCommandPath) {
+if (($hasTask -or $hasHal) -and -not $isAdmin -and $PSCommandPath) {
     if ($Elevated) { Write-Host "Administrator rights were not granted." -ForegroundColor Red; Read-Host "Press Enter to close"; exit 1 }
     Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Elevated"
     exit
@@ -58,7 +60,7 @@ try {
     if (-not $paths) {
         $paths = @("mobile_server.py", "nzb_command_center.py", "media_server.py", "media_inspector.py", "kodi_client.py",
                    "system_command_center.py", "system_monitor.py", "app_icon.ico", "system_center_icon.ico", "README.md",
-                   "update_phone_app.ps1", "update_all.ps1", "setup_startup.ps1")
+                   "update_phone_app.ps1", "update_all.ps1", "setup_startup.ps1", "hal_server.py", "setup_hal_startup.ps1")
     }
     $wanted = @($paths | Where-Object {
         ($_ -notmatch '/' -and $_ -match '\.(py|ps1|ico|md)$' -and $_ -ne 'CLAUDE.md') -or
@@ -122,6 +124,10 @@ try {
         if ($running[0].CommandLine -match 'mobile_server\.py"?\s*(.*)$') { $args2 = $Matches[1].Trim() }
     }
     if ($hasTask) { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
+    # HAL 9000 too (restarted after the update)
+    if ($hasHal) { Stop-ScheduledTask -TaskName $HalTask -ErrorAction SilentlyContinue }
+    @(Get-CimInstance Win32_Process -Filter "Name LIKE 'python%' OR Name = 'py.exe'" | Where-Object { $_.CommandLine -match 'hal_server\.py' }) |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     if ($running.Count) { $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep 2; Say "`nStopped the phone server." }
 
     # --- 4. Back up and replace ---
@@ -153,6 +159,8 @@ try {
             Say "Phone server started again." Green
         } else { Say "Start the phone server the way you usually do." Yellow }
     } else { Say "The phone server wasn't running; start it the way you usually do." Yellow }
+
+    if ($hasHal) { Start-ScheduledTask -TaskName $HalTask; Say "HAL 9000 started again." Green }
 
     $v = if ((Get-Content (Join-Path $Folder "mobile_server.py") -Raw) -match 'VERSION = "([\d.]+)"') { $Matches[1] } else { "?" }
     Say "`nDone. Phone app version $v. Open the desktop apps again, and reopen the app on your phone." Cyan
