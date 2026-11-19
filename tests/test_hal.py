@@ -633,4 +633,24 @@ assert "if ($Unattended) { try { Stop-Transcript" in ua and "-not $Unattended" i
 assert "-Unattended" in hs.UPDATE_PS and "'SYSTEM'" in hs.UPDATE_PS
 print("update button ok")
 
+
+# ---------------- one drive alert, not two ----------------
+sent = []
+ms.drive_report = lambda **k: {"drives": []}
+ms.drive_alerts = lambda report, settings, state, now: iter([("Drive Z: is hot", "55 C", 4)])
+ms.send_notification = lambda title, message, **k: sent.append(title) or True
+w = ms.BackgroundWorker()
+ms._hal_state["running"] = True
+w.check_drives({"ntfy_url": "https://ntfy.sh/x"}, time.time())
+assert sent == []                                   # HAL sends drive alerts; the phone server stays quiet
+ms._hal_state["running"] = False
+w.check_drives({"ntfy_url": "https://ntfy.sh/x"}, time.time())
+assert sent == ["Drive Z: is hot"]                  # without HAL, as before
+# Lock from outside the desktop
+if not hs.IS_WINDOWS:
+    ok, msg = hs.lock_via_session("Dave")
+    assert ok is False and "Windows" in msg
+assert "LockWorkStation" in hs.LOCK_PS and "Interactive" in hs.LOCK_PS and "Win32_ComputerSystem" in hs.LOCK_PS
+print("drive alerts once, lock ok")
+
 print("\nALL HAL TESTS PASSED")
