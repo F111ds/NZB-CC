@@ -210,9 +210,7 @@ public class HalDream extends DreamService {
         eye.start();
         tts = new TextToSpeech(this, status -> {
             if (status != TextToSpeech.SUCCESS || tts == null) return;
-            pickVoice();
-            tts.setPitch(0.7f);
-            tts.setSpeechRate(0.85f);
+            applyVoice(null);
             tts.setOnUtteranceProgressListener(new Talk());
             ttsReady = true;
             android.util.Log.i("HalDream", "Text-to-speech ready: " + tts.getDefaultEngine() + ", voice " + (tts.getVoice() != null ? tts.getVoice().getName() : "?"));
@@ -364,33 +362,66 @@ public class HalDream extends DreamService {
             double p = f.optDouble("pct");
             tile(5, f.optString("mount") + " " + Math.round(p) + "%", size(f.optDouble("free")) + " free", p >= 90 ? amber : white);
         }
+        if (ttsReady) applyVoice(j.optJSONObject("voice"));
         maybeTalk(j.optString("say", ""));
     }
 
     // ---- talking --------------------------------------------------------------------------------
 
-    private void pickVoice() {
+    private String voiceKey = "";
+
+    /**
+     * A man's voice, low and slow. The PC says which (brief.voice: pitch, rate, prefer = Google voice names best
+     * first), so it can be tuned there; without it, the same defaults as the PC's. Only re-applied when it changes.
+     */
+    private void applyVoice(JSONObject cfg) {
+        if (tts == null) return;
+        float pitch = cfg != null ? (float) cfg.optDouble("pitch", 0.55) : 0.55f;
+        float rate = cfg != null ? (float) cfg.optDouble("rate", 0.72) : 0.72f;
+        String[] prefer = {"en-gb-x-rjs", "en-gb-x-gbd", "en-gb-x-gbb", "en-us-x-iom", "en-us-x-tpd", "en-us-x-iol", "en-au-x-aud", "en-au-x-aub"};
+        JSONArray pa = cfg != null ? cfg.optJSONArray("prefer") : null;
+        if (pa != null && pa.length() > 0) {
+            prefer = new String[pa.length()];
+            for (int i = 0; i < pa.length(); i++) prefer[i] = pa.optString(i, "").toLowerCase(Locale.US);
+        }
+        String key = pitch + "|" + rate + "|" + String.join(",", prefer);
+        if (key.equals(voiceKey)) return;
+        voiceKey = key;
+        tts.setPitch(Math.max(0.3f, Math.min(1.5f, pitch)));
+        tts.setSpeechRate(Math.max(0.4f, Math.min(1.5f, rate)));
         try {
             Voice best = null;
             int bestScore = Integer.MIN_VALUE;
+            StringBuilder seen = new StringBuilder();
             for (Voice v : tts.getVoices()) {
                 Locale l = v.getLocale();
-                if (l == null || !"en".equals(l.getLanguage()) || v.isNetworkConnectionRequired()) continue;
+                if (l == null || !"en".equals(l.getLanguage())) continue;
                 // A voice listed but not downloaded says nothing at all.
-                if (v.getFeatures() != null && v.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)) continue;
+                boolean missing = v.getFeatures() != null && v.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED);
                 String n = v.getName().toLowerCase(Locale.US);
+                seen.append(n).append(missing ? "(not installed) " : " ");
+                if (missing) continue;
                 int s = 0;
-                if (n.contains("male") && !n.contains("female")) s += 10;
-                if ("GB".equals(l.getCountry())) s += 4;
-                if ("US".equals(l.getCountry())) s += 2;
+                for (int i = 0; i < prefer.length; i++) {
+                    if (!prefer[i].isEmpty() && n.startsWith(prefer[i])) {
+                        s += 1000 - i * 10;
+                        break;
+                    }
+                }
+                if (n.contains("male") && !n.contains("female")) s += 100;
+                if (!v.isNetworkConnectionRequired()) s += 5;   // works even if the internet is slow
+                if ("GB".equals(l.getCountry())) s += 3;
                 s += v.getQuality() / 100;
                 if (s > bestScore) {
                     bestScore = s;
                     best = v;
                 }
             }
+            android.util.Log.i("HalDream", "English voices on this TV: " + seen);
             if (best == null || tts.setVoice(best) != TextToSpeech.SUCCESS) {
                 if (tts.setLanguage(Locale.UK) < TextToSpeech.LANG_AVAILABLE) tts.setLanguage(Locale.US);
+            } else {
+                android.util.Log.i("HalDream", "Using voice " + best.getName());
             }
         } catch (Exception e) {
             tts.setLanguage(Locale.US);
