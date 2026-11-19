@@ -95,6 +95,12 @@ function MarkInstalled {
 if ($UpdateOnly) {
     Step 'Updating the app on the TV (settings and screensaver choice stay as they are)'
     if (-not (Test-Path $Apk)) { throw "Missing $Apk" }
+    # Never interrupt what's on: only update while the TV is on its home screen (or asleep / screensaver).
+    $front = (Tv 'dumpsys activity activities | grep -m1 -E "mResumedActivity|ResumedActivity"').Trim()
+    if ($front -and $front -notmatch [regex]::Escape($pkg) -and $front -notmatch 'Dream|dream') {
+        $app = if ($front -match '\{[^ ]+ [^ ]+ ([^/ ]+)/') { $Matches[1] } else { 'an app' }
+        throw "The TV was busy ($app is open), so I left it alone. I'll update the TV app next time it's on the home screen."
+    }
     $ErrorActionPreference = 'Continue'
     & $py -I tools\b64push.py $Apk /data/local/tmp/nzbcc-launcher.apk 2>&1 | Out-Null
     $pushed = $LASTEXITCODE
@@ -103,11 +109,11 @@ if ($UpdateOnly) {
     $out = Tv 'pm install -r /data/local/tmp/nzbcc-launcher.apk; rm -f /data/local/tmp/nzbcc-launcher.apk'
     Write-Host $out.Trim()
     if ($out -notmatch 'Success') { throw 'The TV did not take the new app (see above). Run install-on-tv.ps1 without -UpdateOnly from the PC.' }
+    # Back to Home only if Home was what was showing (installing restarts the launcher; nothing else is touched).
     @(
         # HAL is a screen of his own now (the HAL tile), not a screensaver: back to the photos if HAL was picked.
         "c=`$(settings get secure screensaver_components); case `"`$c`" in *HalDream*) settings put secure screensaver_components $pkg/.PhotoDream ;; esac",
-        "am force-stop $pkg",
-        "am start -W -a android.intent.action.MAIN -c android.intent.category.HOME -n $pkg/.MainActivity"
+        "f=`$(dumpsys activity activities | grep -m1 -E 'mResumedActivity|ResumedActivity'); case `"`$f`" in *$pkg*|'') am start -W -a android.intent.action.MAIN -c android.intent.category.HOME -n $pkg/.MainActivity ;; esac"
     ) | & $py -I tools\tv.py --batch | Out-Null
     $ver = (Tv "dumpsys package $pkg | grep -m1 versionName").Trim()
     Write-Host "TV app now: $ver" -ForegroundColor Green
