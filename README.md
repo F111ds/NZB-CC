@@ -53,7 +53,8 @@ shows up (**It's mine** clears it). The first check just learns what's already t
 
 ## Pi-hole in HAL
 
-HAL watches the Pi-hole (Pi-hole 6 or 5, worked out on its own). With no address set it looks for it
+HAL watches the Pi-hole (Pi-hole 6 or 5, worked out on its own) and, on Pi-hole 6, the Raspberry Pi itself:
+model, temperature, CPU, memory, uptime and whether a Pi-hole update is available (alerts at 75°C and 92% memory). With no address set it looks for it
 among the PC's DNS servers. **System › Pi-hole** in the app shows what was blocked today, the most
 blocked sites and the busiest devices, with **Pause 5 min / 30 min / 1 hour** (it turns itself back on)
 and **Turn back on**. HAL alerts when the Pi-hole stops answering (websites stop loading everywhere),

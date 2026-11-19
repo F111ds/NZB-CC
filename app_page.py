@@ -153,6 +153,7 @@ body.noscroll{overflow:hidden}
 .dline{display:flex;gap:12px;align-items:center;margin:18px 0 6px;font-style:italic;color:var(--soft);font-size:14px}
 .plot{color:var(--soft);font-size:14px;line-height:1.5}
 .wgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}.wgrid b{display:block;font:600 15px var(--mono);margin-top:2px}
+.piline{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:13px;color:var(--text)}.piline b{font:600 12px var(--mono);color:var(--soft)}
 .qrow{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
 .qb{border:0;border-radius:14px;background:var(--card);color:var(--text);padding:10px 4px;font-size:12px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:4px}.qb span{font-size:20px}.qb.warn{color:var(--amber)}
 .cardbtn{display:block;width:100%;text-align:left;border:0;color:inherit;font:inherit}
@@ -372,7 +373,18 @@ function piholeCard(){const p=S&&S.pihole;if(!p||!p.found)return'';
   const on=p.blocking!==false;
   return'<div class="card"><h3><button class="k linkish" data-pihole>PI-HOLE ›</button><span class="mono" style="color:var(--'+(on?'green':p.timer?'amber':'red2')+')">● '+(on?'BLOCKING':p.timer?'PAUSED · '+mmss(p.timer):'OFF')+'</span></h3>'+
     '<div class="wgrid" style="margin-top:10px"><div><span class="k">BLOCKED TODAY</span><b>'+big(p.blocked)+'</b></div><div><span class="k">OF LOOKUPS</span><b>'+(p.percent==null?'—':Math.round(p.percent)+'%')+'</b></div><div><span class="k">DEVICES</span><b>'+big(p.clients)+'</b></div></div>'+
-    (on?'':'<button class="btn r wide" style="margin-top:12px" data-phresume>Turn ad blocking back on</button>')+'</div>'}
+    piLine(p.hw)+(on?'':'<button class="btn r wide" style="margin-top:12px" data-phresume>Turn ad blocking back on</button>')+'</div>'}
+const upFor=s=>!s?'—':s>=86400?Math.floor(s/86400)+' d '+Math.floor(s%86400/3600)+' h':Math.floor(s/3600)+' h '+Math.floor(s%3600/60)+' min';
+const piTempCol=t=>t==null?'var(--soft)':t>=75?'var(--red2)':t>=65?'var(--amber)':'var(--green)';
+function piLine(hw){if(!hw||(hw.temp==null&&hw.cpu_pct==null))return'';
+  return'<div class="piline"><span>🍓</span><span class="grow">'+esc(hw.model?hw.model.replace(/ Model /,' ').replace(/ Rev [\d.]+$/,''):'Raspberry Pi')+'</span>'+
+    (hw.temp!=null?'<b style="color:'+piTempCol(hw.temp)+'">'+Math.round(hw.temp)+'°C</b>':'')+(hw.cpu_pct!=null?'<b>CPU '+Math.round(hw.cpu_pct)+'%</b>':'')+(hw.mem_pct!=null?'<b>RAM '+Math.round(hw.mem_pct)+'%</b>':'')+'</div>'}
+function piCard(hw){if(!hw||(hw.temp==null&&hw.cpu_pct==null&&!hw.model))return'<div class="sec"><span>RASPBERRY PI</span></div><div class="list"><div class="empty">Pi-hole 6 tells me about the Pi itself; this one doesn\'t.</div></div>';
+  return'<div class="sec"><span>RASPBERRY PI</span>'+(hw.update?'<span style="color:var(--sky)">UPDATE AVAILABLE</span>':'')+'</div><div class="card">'+
+    '<div style="font-weight:600">'+esc(hw.model||'Raspberry Pi')+'</div><div class="sub" style="color:var(--soft);font-size:13px;margin-top:2px">'+esc([hw.hostname,hw.version?'Pi-hole '+hw.version:'',hw.cores?hw.cores+' cores':'',hw.mem_total?fb(hw.mem_total,0)+' RAM':''].filter(Boolean).join(' · '))+'</div>'+
+    '<div class="wgrid" style="margin-top:12px"><div><span class="k">TEMP</span><b style="color:'+piTempCol(hw.temp)+'">'+(hw.temp==null?'—':hw.temp.toFixed(1)+'°C')+'</b></div><div><span class="k">CPU</span><b>'+f0(hw.cpu_pct,'%')+'</b></div><div><span class="k">MEMORY</span><b>'+f0(hw.mem_pct,'%')+'</b></div></div>'+
+    '<div class="wgrid" style="margin-top:10px"><div><span class="k">UP FOR</span><b>'+upFor(hw.uptime)+'</b></div><div><span class="k">LOAD</span><b>'+(hw.load&&hw.load.length?hw.load[0].toFixed(2):'—')+'</b></div><div><span class="k">UPDATES</span><b style="color:var(--'+(hw.update?'sky':'green')+')">'+(hw.update?'yes':'none')+'</b></div></div>'+
+    (hw.update?'<div class="sub" style="color:var(--soft);font-size:13px;margin-top:10px">To update, on the Pi: sudo pihole -up</div>':'')+'</div>'}
 function renderHome(){const el=$('t-home');
   if(!$('heye'))el.innerHTML='<div id="hhead"></div><div class="hero'+(DESK?'':' center')+'"><button class="eye'+(DESK?' big':'')+'" id="heye" aria-label="Hear HAL"></button><div><div class="g" id="hgreet"></div><div class="q" id="hquote"></div></div></div><div id="hbody"></div>';
   $('hhead').innerHTML=topbar('',true);$('hbody').innerHTML=homeBody();$('hgreet').textContent=greeting();
@@ -590,6 +602,7 @@ function openPihole(){const p=S&&S.pihole;if(!p||!p.found){openConnections();ret
     x+='<div class="card"><h3><span class="k">AD BLOCKING</span><span class="mono" style="color:var(--'+(on?'green':p.timer?'amber':'red2')+')">● '+(on?'ON':p.timer?'PAUSED · '+mmss(p.timer)+' LEFT':'OFF')+'</span></h3>'+
       '<div class="wgrid" style="margin-top:12px"><div><span class="k">BLOCKED TODAY</span><b>'+big(p.blocked)+'</b></div><div><span class="k">OF ALL LOOKUPS</span><b>'+(p.percent==null?'—':Number(p.percent).toFixed(1)+'%')+'</b></div><div><span class="k">DEVICES</span><b>'+big(p.clients)+'</b></div></div>'+
       '<div class="sub" style="margin-top:10px;color:var(--soft);font-size:13px">'+big(p.queries)+' lookups today · '+big(p.domains)+' sites on the block lists'+(p.gravity_t?' · lists updated '+ago(p.gravity_t):'')+'</div></div>';
+    x+=piCard(p.hw);
     x+=on?'<div class="sec"><span>PAUSE BLOCKING</span></div><div class="crow" style="margin-top:0"><button class="btn wide half" data-phpause="5">5 min</button><button class="btn wide half" data-phpause="30">30 min</button><button class="btn wide half" data-phpause="60">1 hour</button></div><p class="hint" style="text-align:left">For when a site or app breaks. It turns itself back on.</p>'
       :'<button class="btn r wide big" data-phresume>Turn ad blocking back on</button>';
     if(p.top_blocked&&p.top_blocked.length)x+='<div class="sec"><span>MOST BLOCKED</span></div><div class="list">'+p.top_blocked.map(d=>'<div class="row"><span class="t"><b>'+esc(d[0])+'</b></span><span class="m">'+big(d[1])+'</span></div>').join('')+'</div>';
