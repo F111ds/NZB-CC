@@ -128,7 +128,13 @@ aside.side{display:none}
 .sheet .panel{background:var(--bg);width:100%;max-width:640px;max-height:92vh;overflow-y:auto;border-radius:20px 20px 0 0;padding:18px 16px calc(24px + env(safe-area-inset-bottom));border-top:1px solid #222}
 @media (min-width:1000px){.sheet{align-items:center}.sheet .panel{border-radius:20px}}
 .sw{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
-.sw small{display:block;color:var(--muted);font-size:12px}.sw input{width:22px;height:22px;accent-color:#FF3B1F;flex:none}
+.sw small{display:block;color:var(--muted);font-size:12px}
+.fld{display:block;font-size:12px;color:var(--soft);margin:10px 0 5px}
+.inp{width:100%;background:var(--card2);border:1px solid #26262b;border-radius:10px;padding:11px 12px;font:16px var(--mono);color:var(--white)}
+.cbox{background:var(--card);border-radius:14px;padding:12px 14px;margin-bottom:10px}
+.cbox h3{margin:0 0 2px;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.crow{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.warnbox{background:#2a1d05;border:1px solid #4a3609;border-radius:12px;padding:10px 12px;font-size:13px;color:#fde68a;margin-bottom:10px}.sw input{width:22px;height:22px;accent-color:#FF3B1F;flex:none}
 #updbar{position:fixed;left:0;right:0;top:0;z-index:15;background:#1a1407;border-bottom:1px solid #4a3609;color:#fde68a;text-align:center;font-weight:600;font-size:13px;padding:calc(env(safe-area-inset-top) + 8px) 12px 8px}
 #toast{position:fixed;left:16px;right:16px;bottom:calc(96px + env(safe-area-inset-bottom));max-width:600px;margin:0 auto;background:#1c1c21;border:1px solid #2c2c31;border-radius:12px;padding:12px 14px;font-size:14px;z-index:20;opacity:0;transform:translateY(10px);transition:all .25s;pointer-events:none}
 #toast.on{opacity:1;transform:none}#toast.bad{border-color:#5a1410}
@@ -367,13 +373,54 @@ async function loadKodi(){try{K=await api('/api/kodi');if(tab==='watch')render()
 async function act(fn,ok){try{const r=await fn();if(ok)toast(typeof ok==='function'?ok(r):ok);setTimeout(()=>{refresh();if(tab==='get')loadQueue()},600)}catch(e){toast(e.message,true)}}
 
 /* ---------- settings ---------- */
+/* ---------- Connections: SABnzbd, indexers, Kodi (the desktop app's settings, edited here) ---------- */
+let CONN=null;
+async function openConnections(){$('panel').innerHTML='<h2 style="margin:0">Connections</h2><p class="hint" style="text-align:left">I\'m reading the settings…</p>';$('sheet').classList.remove('hidden');
+  try{CONN=await api('/api/connections');CONN.indexers.forEach(x=>x.orig=x.index)}catch(e){toast(e.message,true);$('sheet').classList.add('hidden');return}renderConn()}
+function keyPh(set,what){return set?'Saved · type a new one to replace':'Not set yet'}
+function renderConn(){const c=CONN;
+  let x='<h2 style="margin:0 0 4px">Connections</h2><p class="hint" style="text-align:left;margin:0 0 10px">“I can give you my complete assurance that everything is connected, '+esc(NAME())+'.” Keys are encrypted on the PC and never shown here.</p>';
+  if(c.desktop_open)x+='<div class="warnbox">The NZB Command Center desktop window is open on the PC. Close it before saving here, or its next save puts the old settings back.</div>';
+  x+='<div class="cbox"><h3>SABnzbd <button class="btn" data-ctest="sab">Test</button></h3><label class="fld">Address</label><input class="inp" id="c_sab_url" value="'+esc(c.sab.url)+'" autocapitalize="off" autocorrect="off" inputmode="url">'+
+     '<label class="fld">API key (SABnzbd › Config › General)</label><input class="inp" id="c_sab_key" placeholder="'+keyPh(c.sab.key_set,'key')+'" autocapitalize="off" autocorrect="off" autocomplete="off"></div>';
+  x+='<div class="sec" style="margin-top:6px"><span>INDEXERS</span><button data-cadd>+ ADD</button></div>';
+  c.indexers.forEach((ix,i)=>{x+='<div class="cbox"><h3><span>'+esc(ix.name||'New indexer')+'</span><span style="display:flex;gap:6px"><button class="btn" data-ctest="indexer" data-i="'+i+'">Test</button><button class="btn" data-cdel="'+i+'">Remove</button></span></h3>'+
+     '<label class="fld">Name</label><input class="inp" data-ix="'+i+'" data-f="name" value="'+esc(ix.name)+'">'+
+     '<label class="fld">Address</label><input class="inp" data-ix="'+i+'" data-f="url" value="'+esc(ix.url)+'" placeholder="https://api.example.com" autocapitalize="off" autocorrect="off" inputmode="url">'+
+     '<label class="fld">API key</label><input class="inp" data-ix="'+i+'" data-f="api_key" placeholder="'+keyPh(ix.key_set,'key')+'" autocapitalize="off" autocorrect="off" autocomplete="off">'+
+     '<label class="sw" style="border:0;padding-bottom:0"><span>Search this indexer</span><input type="checkbox" data-ix="'+i+'" data-f="enabled"'+(ix.enabled?' checked':'')+'></label></div>'});
+  if(!c.indexers.length)x+='<div class="list"><div class="empty">No indexers yet. Tap + ADD.</div></div>';
+  x+='<div class="cbox" style="margin-top:14px"><h3>Kodi on the TV <button class="btn" data-ctest="kodi">Test</button></h3><label class="fld">Address</label><input class="inp" id="c_kodi_url" value="'+esc(c.kodi.url)+'" placeholder="http://192.168.68.62:8080" autocapitalize="off" autocorrect="off" inputmode="url">'+
+     '<label class="fld">User name</label><input class="inp" id="c_kodi_user" value="'+esc(c.kodi.username)+'" autocapitalize="off" autocorrect="off">'+
+     '<label class="fld">Password</label><input class="inp" id="c_kodi_pw" type="password" placeholder="'+keyPh(c.kodi.password_set,'password')+'" autocomplete="off"></div>';
+  x+='<p class="hint" style="text-align:left">Jellyfin and the TV\'s power settings are in the classic app (Jellyfin and Kodi tabs).</p>';
+  x+='<button class="btn r wide" id="csave" style="margin-top:6px">Save</button><button class="btn wide" id="cclose" style="margin-top:8px">Close</button>';
+  $('panel').innerHTML=x;$('cclose').onclick=()=>$('sheet').classList.add('hidden');$('csave').onclick=saveConn}
+function readConn(){const c=CONN;c.sab.url=$('c_sab_url').value;c.sab.key=$('c_sab_key').value;c.kodi.url=$('c_kodi_url').value;c.kodi.username=$('c_kodi_user').value;c.kodi.pw=$('c_kodi_pw').value;
+  document.querySelectorAll('[data-ix]').forEach(el=>{const ix=c.indexers[Number(el.dataset.ix)];ix[el.dataset.f]=el.type==='checkbox'?el.checked:el.value})}
+async function saveConn(){readConn();const c=CONN;const body={sab_url:c.sab.url,sab_api_key:(c.sab.key||'').trim(),kodi_url:c.kodi.url,kodi_username:c.kodi.username,kodi_password:c.kodi.pw||'',
+    indexers:c.indexers.map(ix=>({index:ix.orig,name:ix.name,url:ix.url,enabled:!!ix.enabled,api_key:(ix.api_key||'').trim()}))};
+  try{const r=await api('/api/connections',body);toast(r.warning?'Saved, but: '+r.warning:'Saved. I\'ll use the new settings from now on, '+NAME()+'.',!!r.warning);$('sheet').classList.add('hidden');CONN=null;refresh()}catch(e){toast(e.message,true)}}
+async function testConn(what,i){readConn();const c=CONN;let body={what};
+  if(what==='sab')body={what,url:c.sab.url,key:(c.sab.key||'').trim()};
+  if(what==='kodi')body={what,url:c.kodi.url,username:c.kodi.username,password:c.kodi.pw||''};
+  if(what==='indexer'){const ix=c.indexers[i];body={what,index:ix.orig,url:ix.url,key:(ix.api_key||'').trim()}}
+  toast('Testing…');try{const r=await api('/api/connections/test',body);toast(r.message,!r.ok)}catch(e){toast(e.message,true)}}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-ctest],[data-cadd],[data-cdel],[data-conn]');if(!b)return;const d=b.dataset;
+  if('conn' in d){openConnections();return}
+  if(!CONN)return;
+  if(d.ctest){testConn(d.ctest,Number(d.i));return}
+  if('cadd' in d){readConn();CONN.indexers.push({index:null,orig:null,name:'',url:'',enabled:true,key_set:false});renderConn();return}
+  if(d.cdel!==undefined){readConn();const ix=CONN.indexers[Number(d.cdel)];if(!confirm('Remove '+(ix.name||'this indexer')+'? It\'s only removed when you tap Save.'))return;CONN.indexers.splice(Number(d.cdel),1);renderConn();return}
+});
+
 function openSettings(){const sw=(id,t,sub,on)=>'<label class="sw"><span>'+t+(sub?'<small>'+sub+'</small>':'')+'</span><input type="checkbox" id="'+id+'"'+(on?' checked':'')+'></label>';
   $('panel').innerHTML='<h2 style="margin:0 0 4px">Settings</h2><p class="hint" style="text-align:left;margin:0 0 10px">“I can give you my complete assurance that everything is connected, '+esc(NAME())+'.”</p>'+
    (CAN_SPEAK?sw('stalk','Talk to me','HAL speaks on this phone after your first tap',talkative()):'')+
    '<div class="list" style="margin-top:12px"><a class="row" href="/hal/?tab=log&settings=1&from=app" style="color:inherit;text-decoration:none"><span class="t"><b>HAL: name, alerts, UPS, voice</b><span>HAL\'s own settings</span></span><span class="m">›</span></a>'+
    '<button class="row" data-update><span class="t"><b>Update everything</b><span>Newest version of the apps, from GitHub'+(S&&S.update&&S.update.result?' · last: '+esc(S.update.result.state==='updated'?'v'+S.update.result.version:S.update.result.state==='uptodate'?'up to date':'failed')+' '+esc(ago(S.update.result.t)):'')+'</span></span><span class="m">›</span></button>'+
    '<a class="row" href="/" style="color:inherit;text-decoration:none"><span class="t"><b>Classic NZB app</b><span>Indexers, saved searches, phone alerts, drives</span></span><span class="m">›</span></a>'+
-   '<div class="row"><span class="t"><b>Connections</b><span>SABnzbd, indexers, Kodi, Jellyfin: still in the desktop app for now</span></span></div></div>'+
+   '<button class="row" data-conn><span class="t"><b>Connections</b><span>SABnzbd, your indexers and Kodi</span></span><span class="m">›</span></button></div>'+
    '<button class="btn wide" id="sclose" style="margin-top:12px">Close</button><button class="btn wide" id="sforget" style="margin-top:8px;background:none;color:var(--muted)">Forget the access code on this device</button>';
   $('sheet').classList.remove('hidden');$('sclose').onclick=()=>$('sheet').classList.add('hidden');
   if($('stalk'))$('stalk').onchange=e=>{LS.set('hal_talk',e.target.checked?'on':'off');if(!e.target.checked&&CAN_SPEAK)speechSynthesis.cancel();render()};
