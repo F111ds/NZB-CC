@@ -4193,11 +4193,38 @@ def stream_for_file(file: str) -> dict | None:
     return next((x for x in load_streams() if path and x.get("path") == path), None)
 
 
-def _lan_ip_towards(host: str) -> str:
-    """This PC's address on the network that leads to host (the TV), for addresses the TV can open."""
+def _local_ipv4s() -> list[str]:
+    """Every IPv4 address this PC has (home network, VPNs, virtual adapters)."""
+    found = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip not in found and not ip.startswith(("127.", "169.254.")):
+                found.append(ip)
+    except OSError:
+        pass
+    return found
+
+
+def _lan_ip_towards(host: str, local_ips: list[str] | None = None) -> str:
+    """This PC's address on the TV's own network, for addresses the TV can open. An address in the same /24 as
+    the TV wins: with a VPN on, Windows' route to the TV can go through the VPN's address, which the TV can't reach."""
+    try:
+        target = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            target = ipaddress.ip_address(socket.gethostbyname(host))
+        except OSError:
+            target = None
+    ips = local_ips if local_ips is not None else _local_ipv4s()
+    if target is not None and target.version == 4:
+        net = ipaddress.ip_network(f"{target}/24", strict=False)
+        same = [ip for ip in ips if ipaddress.ip_address(ip) in net]
+        if same:
+            return same[0]
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect((host, 9))
+            s.connect((str(target or host), 9))
             return s.getsockname()[0]
     except OSError:
         return ""
