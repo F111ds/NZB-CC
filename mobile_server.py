@@ -4249,10 +4249,20 @@ def altmount_stream_url(path: str, viewer_host: str = "") -> str:
 
 
 def _kodi_host() -> str:
+    """The TV's (Kodi's) address, from the Kodi connection settings."""
     try:
-        return urllib.parse.urlsplit(normalize_kodi_url(get_config().get("kodi_url", ""))).hostname or ""
+        k = get_config().get("kodi") or {}
+        return urllib.parse.urlsplit(normalize_kodi_url(str(k.get("url") or ""))).hostname or ""
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _home_lan_ip() -> str:
+    """This PC's home-network address when the TV's isn't known: a private 192.168.x.x / 10.x / 172.16-31.x one,
+    192.168 first (VPNs and virtual adapters usually sit on 10.x or 172.x)."""
+    ips = [ip for ip in _local_ipv4s() if ipaddress.ip_address(ip).is_private]
+    ips.sort(key=lambda ip: (not ip.startswith("192.168."), ip.endswith(".1")))
+    return ips[0] if ips else ""
 
 
 def _stream_job_view(job: dict) -> dict:
@@ -4356,7 +4366,10 @@ def stream_to_tv(stream_id: str) -> dict:
     """Plays a streamed movie in Kodi, turning the TV on and opening Kodi first if needed."""
     entry = _stream_entry(stream_id)
     kodi_host = _kodi_host()
-    url = altmount_stream_url(entry["path"], _lan_ip_towards(kodi_host) if kodi_host else "")
+    url = altmount_stream_url(entry["path"], (_lan_ip_towards(kodi_host) if kodi_host else "") or _home_lan_ip())
+    if urllib.parse.urlsplit(url).hostname in ("localhost", "127.0.0.1", "::1"):
+        raise UpstreamError("I couldn't work out this PC's address on the home network for the TV. In Settings › "
+                            "Connections, set AltMount's address to the PC's address, e.g. http://192.168.68.60:8090.")
     try:
         kodi_call("JSONRPC.Ping", timeout=3)
         started_tv = False

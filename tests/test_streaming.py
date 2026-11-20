@@ -128,6 +128,17 @@ assert not m.is_stream_file("D:\\Movies\\Short Circuit.mkv") and not m.is_stream
 # ---- the PC's address for the TV: the one on the TV's network, even with a VPN and virtual adapters ----
 ips = ["192.168.35.1", "192.168.235.1", "10.5.0.2", "10.100.0.2", "192.168.68.60"]
 assert m._lan_ip_towards("192.168.68.62", ips) == "192.168.68.60"
+# the real lookup of Kodi's address (the connection settings keep it as {"kodi": {"url": ...}})
+_gc = m.get_config
+m.get_config = lambda: {"kodi": {"url": "http://192.168.68.62:8080", "username": "", "password": ""}}
+assert m._kodi_host() == "192.168.68.62"
+m.get_config = lambda: {"kodi": {"url": ""}}
+assert m._kodi_host() == ""
+m.get_config = _gc
+_li = m._local_ipv4s
+m._local_ipv4s = lambda: ["192.168.35.1", "10.5.0.2", "10.100.0.2", "192.168.68.60"]
+assert m._home_lan_ip() == "192.168.68.60"
+m._local_ipv4s = _li
 print("lan address ok")
 
 # ---- Stream: the job, then Play on TV ----
