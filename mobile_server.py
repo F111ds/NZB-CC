@@ -4216,17 +4216,35 @@ def stream_for_file(file: str) -> dict | None:
     return next((x for x in items if name and _norm_name(x.get("path", "")) == name), None)
 
 
+STREAM_RECENT_SECS = 12 * 3600      # "the one you sent to the TV" counts for this long
+_stream_logged: set[str] = set()
+
+
 def stream_title(file: str, label: str = "") -> tuple[str, str]:
     """(movie name, year) for a stream Kodi is playing: the name kept when it was streamed, else read from the
-    file's name (never from the address, which is what Kodi shows as its label)."""
+    file's name in the address, else the stream last sent to the TV with Play on TV. Never the address itself,
+    which is what Kodi shows as its label."""
     entry = stream_for_file(file)
     if entry:
         return entry["title"], str(entry.get("year") or "")
+    shown = re.sub(r"(download_key=)[^&|]+", r"\1…", str(file))[:300]
+    if shown not in _stream_logged:          # once per address: what Kodi reports, to match it next time
+        _stream_logged.add(shown)
+        log.info("stream title: no match for Kodi's file %r (label %r)", shown, str(label)[:120])
     base = stream_path_of(file).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
-    if not base and label and "://" not in label and "download_key" not in label:
-        base = label
-    title, year = release_title_year(base) if base else ("", "")
-    return title or "a stream from Usenet", year
+    if base:                                  # a file name in the address: the movie's name is in it
+        title, year = release_title_year(base)
+        if title:
+            return title, year
+    recent = [x for x in load_streams() if x.get("played") and time.time() - float(x["played"]) < STREAM_RECENT_SECS]
+    if recent:                                # no name in the address: the one last sent to the TV
+        last = max(recent, key=lambda x: float(x["played"]))
+        return last["title"], str(last.get("year") or "")
+    if label and "://" not in label and "download_key" not in label and "stream?" not in label:
+        title, year = release_title_year(label)
+        if title:
+            return title, year
+    return "a stream from Usenet", ""
 
 
 def _local_ipv4s() -> list[str]:
