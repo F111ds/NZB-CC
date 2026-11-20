@@ -83,7 +83,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.21.5"
+VERSION = "3.21.6"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -1521,19 +1521,64 @@ def tv_power_state(settings: dict | None = None) -> str:
 IRCC_POWER_OFF = "AAAAAQAAAAEAAAAvAw=="   # the remote's "power off" code (discrete, not a toggle)
 
 
-def tv_off() -> dict:
-    """Puts the TV in standby if it's on (Sony's IP control; the remote's power-off code if that's refused)."""
-    settings = load_settings()
-    if not tv_configured(settings):
-        raise ValueError("Set up TV control first.")
-    if tv_power_state(settings) != "on":
-        return {"ok": True, "already": True, "message": "The TV is already off."}
+def _tv_awake() -> bool | None:
+    """Whether the TV's screen is awake, asked over ADB (HAL's TV tools): True, False, or None if that can't tell.
+    Sony's IP control can say the TV is off while YouTube is on screen, so this is the second opinion."""
     try:
-        sony_call("system", "setPowerStatus", [{"status": False}], settings=settings)
-    except UpstreamError as exc:
-        log.info("tv off: setPowerStatus refused (%s), sending the remote's power-off", exc)
-        sony_ircc(IRCC_POWER_OFF, settings=settings)
-    return {"ok": True, "already": False, "message": "Turning the TV off."}
+        if not (_hal_mod and _hal_mod.tv_host()):
+            return None
+        ok, out = _hal_mod.tv_adb("dumpsys power | grep -m1 mWakefulness=", timeout=12)
+    except Exception:  # noqa: BLE001
+        return None
+    if not ok:
+        return None
+    if "Awake" in out:
+        return True
+    return False if re.search(r"Asleep|Dozing", out) else None
+
+
+def _tv_sleep_adb() -> bool:
+    """Android's own sleep key over ADB (the remote's power button doing standby)."""
+    try:
+        ok, out = _hal_mod.tv_adb("input keyevent KEYCODE_SLEEP", timeout=12)
+        return bool(ok) and "Error" not in (out or "")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def tv_off() -> dict:
+    """Puts the TV in standby if it's on. Sony's IP control first (or the remote's power-off code); when that says
+    the TV is off, or isn't set up, ADB is asked too, and the TV's own sleep key used if the screen is awake."""
+    settings = load_settings()
+    rest = tv_configured(settings)
+    state = "unknown"
+    if rest:
+        try:
+            state = tv_power_state(settings)
+        except UpstreamError:
+            state = "unknown"
+    if state == "on":
+        try:
+            sony_call("system", "setPowerStatus", [{"status": False}], settings=settings)
+            return {"ok": True, "already": False, "message": "Turning the TV off."}
+        except UpstreamError as exc:
+            log.info("tv off: setPowerStatus refused (%s), sending the remote's power-off", exc)
+            try:
+                sony_ircc(IRCC_POWER_OFF, settings=settings)
+                return {"ok": True, "already": False, "message": "Turning the TV off."}
+            except UpstreamError as exc2:
+                log.info("tv off: power-off code refused too (%s), trying ADB", exc2)
+    awake = _tv_awake()
+    log.info("tv off: IP control says %s, ADB says the screen is %s", state, {True: "awake", False: "asleep", None: "unknown"}[awake])
+    if awake or (state == "on" and awake is None):
+        if _tv_sleep_adb():
+            return {"ok": True, "already": False, "message": "Turning the TV off."}
+        raise UpstreamError("The TV didn't take the off command.")
+    if awake is False or state in ("off", "standby"):
+        return {"ok": True, "already": True, "message": "The TV is already off."}
+    if not rest:
+        raise ValueError("Set up TV control first.")
+    raise UpstreamError("Can't reach the TV.")
 
 
 def send_wol(mac: str) -> None:
