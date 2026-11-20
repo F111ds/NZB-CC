@@ -342,7 +342,8 @@ def call(path, body=None, tok=token):
 
 
 code, body, hdr = call("/", tok=None)
-assert code == 200 and b"HAL 9000" in body and b"__VERSION__" not in body and "frame-ancestors 'none'" in hdr["Content-Security-Policy"]
+assert code == 200 and b"HAL 9000" in body and b"__VERSION__" not in body and "frame-ancestors 'self'" in hdr["Content-Security-Policy"]
+assert hdr["X-Frame-Options"] == "SAMEORIGIN"   # the app (same address) may show HAL's pages inside it; other sites can't
 assert call("/manifest.webmanifest", tok=None)[0] == 200 and call("/icon-512.png", tok=None)[1][:4] == b"\x89PNG"
 assert call("/api/status", tok=None)[0] == 401
 code, body, _ = call("/api/status")
