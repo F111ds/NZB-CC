@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.19.2"
+VERSION = "1.20.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2365,22 +2365,54 @@ def tv_grids(hal, st: dict, sc: dict, hist: dict) -> dict:
     km = st.get("kuma") or {}
     mons = sorted(km.get("monitors") or [], key=lambda m: (m["status"] == "up", m["name"].lower()))
     kmons = [{"name": m["name"], "type": m.get("type") or "", "status": m["status"], "ms": m.get("ms"),
-              "hist": list(hal.kuma_hist.get(m["name"]) or [m["status"]])} for m in mons][:20]
+              "hist": list(hal.kuma_hist.get(m["name"]) or [m["status"]])[-30:]} for m in mons][:20]
     up_ms = [m["ms"] for m in mons if m["status"] == "up" and m.get("ms") is not None]
     downs = [m for m in mons if m["status"] != "up"]
     half = (len(kmons) + 1) // 2
     slow = max((m for m in mons if m.get("ms") is not None), key=lambda m: m["ms"], default=None)
-    kuma = [[
-        {"key": "UPTIME KUMA", "badge": sc["kuma"]["head"].upper(), "big": f"{km.get('up', 0)}/{len(mons)}" if km.get("ok") else "—",
-         "bigsub": "answering" if km.get("ok") else sc["kuma"]["head"],
-         "rows": ([[m["name"][:22], m["status"], "critical" if m["status"] == "down" else "warning"] for m in downs[:3]]
-                  or [["Everything's answering", "", "ok"]])
-                 + [["Answering", str(len(mons) - len(downs)), "ok"]]
-                 + ([["Average", f"{sum(up_ms) / len(up_ms):.0f} ms", "ok"]] if up_ms else [])
-                 + ([["Slowest", f"{slow['name'][:14]} · {slow['ms']:.0f} ms", "ok"]] if slow else [])},
-        {"key": "MONITORS", "weight": 1.6, "badge": "LAST 30 CHECKS", "monitors": kmons[:half]},
-        {"key": " ", "weight": 1.6, "monitors": kmons[half:]},
-    ]] if kmons else [[{"key": "UPTIME KUMA", "rows": [["Status", sc["kuma"]["head"], "warning"]]}]]
+    if 0 < len(mons) <= 5:
+        # A few monitors: a card each, with the last hour's response times and checks (TV app 3.5-nzbcc.42+).
+        colors = ["#60A5FA", "#34D399", "#22D3EE", "#A78BFA", "#FBBF24"]
+        down_hour = sum(1 for m in mons if m["status"] != "up" or "down" in list(hal.kuma_hist.get(m["name"]) or []))
+
+        def kcard(i, m):
+            g = [x for x in (hal.kuma_ms.get(m["name"]) or []) if x is not None]
+            chk = list(hal.kuma_hist.get(m["name"]) or [m["status"]])
+            up_pct = round(100 * sum(1 for x in chk if x == "up") / len(chk)) if chk else 0
+            is_down = m["status"] != "up"
+            since = hal.kuma_down_t.get(m["name"])
+            ty = str(m.get("type") or "").upper()
+            return {"key": m["name"].upper()[:24], "badge": ("DOWN" if m["status"] == "down" else "CHECK" if is_down else "UP") + (f" · {ty}" if ty else ""),
+                    "big": m["status"] if is_down else (f"{m['ms']:.0f} ms" if m.get("ms") is not None else "up"),
+                    "bigsub": (f"since {datetime.fromtimestamp(since).strftime('%I:%M %p').lstrip('0')} · {_dur(time.time() - since)}" if is_down and since
+                               else f"avg {sum(g) / len(g):.0f} · max {max(g):.0f}" if g else "measuring"),
+                    "graph": [round(x, 1) for x in g[-120:]] if len(g) > 1 else [], "graph_fit": True,
+                    "graph_color": "#FF6A4D" if is_down else colors[i % len(colors)],
+                    "checks": chk[-30:], "chips": [["up ", f"{up_pct}%", f" · last {len(chk) // 2 or 1} min" if len(chk) < 120 else " · last hour"]]}
+        fast = min((m for m in mons if m.get("ms") is not None and m["status"] == "up"), key=lambda m: m["ms"], default=None)
+        summ = {"key": "UPTIME KUMA", "badge": sc["kuma"]["head"].upper(), "big": f"{km.get('up', 0)}/{len(mons)}", "bigsub": "answering",
+                "rows": ([[m["name"][:22], m["status"], "critical" if m["status"] == "down" else "warning"] for m in downs[:2]]
+                         or [["Everything's answering", "", "ok"]])
+                        + ([["Average", f"{sum(up_ms) / len(up_ms):.0f} ms", "ok"]] if up_ms else [])
+                        + ([["Slowest", f"{slow['name'][:14]} · {slow['ms']:.0f} ms", "ok"]] if slow else [])
+                        + ([["Fastest", f"{fast['name'][:14]} · {fast['ms']:.0f} ms", "ok"]] if fast else [])
+                        + [["Down in the last hour", str(down_hour) if down_hour else "none", "warning" if down_hour else "ok"]]}
+        cards = [summ] + [kcard(i, m) for i, m in enumerate(mons)]
+        cut = (len(cards) + 1) // 2
+        kuma = [cards[:cut], cards[cut:]] if len(cards) > 2 else [cards]
+
+    else:
+        kuma = [[
+            {"key": "UPTIME KUMA", "badge": sc["kuma"]["head"].upper(), "big": f"{km.get('up', 0)}/{len(mons)}" if km.get("ok") else "—",
+             "bigsub": "answering" if km.get("ok") else sc["kuma"]["head"],
+             "rows": ([[m["name"][:22], m["status"], "critical" if m["status"] == "down" else "warning"] for m in downs[:3]]
+                      or [["Everything's answering", "", "ok"]])
+                     + [["Answering", str(len(mons) - len(downs)), "ok"]]
+                     + ([["Average", f"{sum(up_ms) / len(up_ms):.0f} ms", "ok"]] if up_ms else [])
+                     + ([["Slowest", f"{slow['name'][:14]} · {slow['ms']:.0f} ms", "ok"]] if slow else [])},
+            {"key": "MONITORS", "weight": 1.6, "badge": "LAST 30 CHECKS", "monitors": kmons[:half]},
+            {"key": " ", "weight": 1.6, "monitors": kmons[half:]},
+        ]] if kmons else [[{"key": "UPTIME KUMA", "rows": [["Status", sc["kuma"]["head"], "warning"]]}]]
 
     lists_age = f"{(time.time() - ph['gravity_t']) / 86400:.0f} days" if ph.get("gravity_t") else "—"
     temp = hw.get("temp")
@@ -2492,7 +2524,7 @@ def tv_details(hal) -> dict:
     km = st.get("kuma") or {}
     mons = sorted(km.get("monitors") or [], key=lambda m: (m["status"] == "up", m["name"].lower()))
     kmons = [{"name": m["name"], "type": m.get("type") or "", "status": m["status"], "ms": m.get("ms"),
-              "hist": list(hal.kuma_hist.get(m["name"]) or [m["status"]])} for m in mons][:16]
+              "hist": list(hal.kuma_hist.get(m["name"]) or [m["status"]])[-30:]} for m in mons][:16]
     half = (len(kmons) + 1) // 2
     kuma = {"title": "Uptime Kuma", "level": sc["kuma"]["level"], "head": sc["kuma"]["head"].upper(),
             "cols": [{"key": "MONITORS", "badge": "LAST 30 CHECKS", "monitors": kmons[:half]},
@@ -3284,7 +3316,9 @@ class Hal(FunMixin):
         self.kuma: dict = {}
         self._counters_init(st)
         self.tv_seen = 0.0                  # when HAL's TV screen last asked for readings
-        self.kuma_hist: dict[str, deque] = {}   # monitor -> its last 30 statuses (for the TV's details)
+        self.kuma_hist: dict[str, deque] = {}   # monitor -> its last statuses, an hour of them (for the TV's details)
+        self.kuma_ms: dict[str, deque] = {}     # monitor -> its last hour of response times (ms, None when down)
+        self.kuma_down_t: dict[str, float] = {}  # monitor -> when it went down
         self.pi_temp_hist: deque = deque(maxlen=120)
         self.pi_cpu_hist: deque = deque(maxlen=120)
         self.tv_phrases: list[str] = [str(x)[:120] for x in (st.get("tv_phrases") or []) if str(x).strip()][:TV_PHRASES_MAX]
@@ -3798,7 +3832,12 @@ class Hal(FunMixin):
             self.kuma = state
             if state.get("ok"):
                 for m in state["monitors"]:
-                    self.kuma_hist.setdefault(m["name"], deque(maxlen=30)).append(m["status"])
+                    self.kuma_hist.setdefault(m["name"], deque(maxlen=120)).append(m["status"])
+                    self.kuma_ms.setdefault(m["name"], deque(maxlen=120)).append(m.get("ms") if m["status"] == "up" else None)
+                    if m["status"] == "up":
+                        self.kuma_down_t.pop(m["name"], None)
+                    else:
+                        self.kuma_down_t.setdefault(m["name"], now)
         if state.get("ok"):
             was = {m["name"]: m["status"] for m in prev.get("monitors") or []} if prev.get("ok") else {}
             for m in state["monitors"]:

@@ -855,6 +855,12 @@ public class HalActivity extends Activity {
                 box.addView(lg, lgl);
             }
         }
+        JSONArray checks = col.optJSONArray("checks");
+        if (checks != null && checks.length() > 0) {
+            LinearLayout.LayoutParams kl = new LinearLayout.LayoutParams(-1, dp(6));
+            kl.topMargin = dp(6);
+            box.addView(new ChecksView(this, checks), kl);
+        }
         JSONArray cores = col.optJSONArray("cores");
         if (cores != null && cores.length() > 0) {
             LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(-1, dp(15));
@@ -993,7 +999,7 @@ public class HalActivity extends Activity {
             String up = badge.toUpperCase(Locale.US);
             b.setTextColor(up.startsWith("CHECK") || up.startsWith("PAUSED") || up.startsWith("NOT ") || up.startsWith("WARM") ? 0xFFFBBF24
                     : up.startsWith("DOWN") || up.startsWith("HOT") ? 0xFFFF6A4D
-                    : up.contains("HEALTHY") || up.startsWith("ALL") || up.startsWith("ONLINE") || up.startsWith("BLOCKING") || up.startsWith("COOL") ? 0xFF34D399
+                    : up.contains("HEALTHY") || up.startsWith("UP ") || up.startsWith("ALL") || up.startsWith("ONLINE") || up.startsWith("BLOCKING") || up.startsWith("COOL") ? 0xFF34D399
                     : 0xFF8B8B94);
             kh.addView(b);
         }
@@ -1436,6 +1442,31 @@ public class HalActivity extends Activity {
             p.setStrokeWidth(Math.max(2f, getResources().getDisplayMetrics().density * 1.5f));
             p.setColor(color);
             c.drawPath(path, p);
+        }
+    }
+
+    /** A monitor's last checks as small blocks: green up, red down, amber anything else, grey not checked yet. */
+    static class ChecksView extends View {
+        private final String[] vals;
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        ChecksView(Context c, JSONArray a) {
+            super(c);
+            vals = new String[a.length()];
+            for (int i = 0; i < vals.length; i++) vals[i] = a.optString(i, "");
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            int n = Math.max(30, vals.length);
+            float gap = getResources().getDisplayMetrics().density * 2, w = (getWidth() - gap * (n - 1)) / n, h = getHeight();
+            for (int i = 0; i < n; i++) {
+                int k = i - (n - vals.length);
+                String v = k >= 0 ? vals[k] : "";
+                p.setColor("up".equals(v) ? 0xFF34D399 : "down".equals(v) ? 0xFFFF6A4D : v.isEmpty() ? 0xFF1F1F25 : 0xFFFBBF24);
+                float x = i * (w + gap);
+                c.drawRoundRect(x, 0, x + w, h, gap / 2, gap / 2, p);
+            }
         }
     }
 
