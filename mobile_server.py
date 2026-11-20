@@ -83,7 +83,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.21.7"
+VERSION = "3.21.8"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -1098,6 +1098,33 @@ def kodi_all_movies() -> list[dict]:
     """The whole movie library, A-Z."""
     return kodi_paged("VideoLibrary.GetMovies", "movies", {
         "properties": KODI_MOVIE_PROPS, "sort": {"method": "sorttitle", "order": "ascending", "ignorearticle": True}})
+
+
+_library_cache: dict = {"t": 0.0, "v": {}}
+
+
+def library_summary() -> dict:
+    """Kodi's library in numbers, for the TV's Downloads page: movies, unwatched, added this week, the newest, shows
+    and episodes. Kept 10 minutes; while Kodi is off (the TV asleep) the last good answer stays, marked stale."""
+    if time.time() - _library_cache["t"] < 600 and _library_cache["v"]:
+        return _library_cache["v"]
+    try:
+        movies = kodi_paged("VideoLibrary.GetMovies", "movies", {"properties": ["title", "year", "playcount", "dateadded"]})
+        shows = kodi_paged("VideoLibrary.GetTVShows", "tvshows", {"properties": ["episode"]})
+    except (UpstreamError, OSError, ValueError) as exc:
+        old = dict(_library_cache["v"])
+        if old:
+            old["stale"] = True
+            return old
+        return {"ok": False, "error": str(exc)[:120]}
+    week_ago = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 7 * 86400))
+    newest = max(movies, key=lambda m: str(m.get("dateadded") or ""), default=None)
+    out = {"ok": True, "movies": len(movies), "unwatched": sum(1 for m in movies if not to_int(m.get("playcount"))),
+           "added_week": sum(1 for m in movies if str(m.get("dateadded") or "") >= week_ago),
+           "newest": (f"{newest.get('title')} ({newest['year']})" if to_int(newest.get("year")) else str(newest.get("title") or "")) if newest else "",
+           "shows": len(shows), "episodes": sum(to_int(x.get("episode")) for x in shows), "t": time.time()}
+    _library_cache.update(t=time.time(), v=out)
+    return out
 
 
 # ---- TV shows ------------------------------------------------------------------
@@ -6137,6 +6164,8 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             self.send_json(200, {"missing": kodi_missing_episodes()})
         elif path == "/api/stats":
             self.send_json(200, sab_stats())
+        elif path == "/api/library/summary":
+            self.send_json(200, library_summary())
         elif path == "/api/drives":
             self.send_json(200, self._drives_view())
         elif path == "/api/drives/io":
