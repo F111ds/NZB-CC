@@ -66,6 +66,17 @@ hs.tv_adb = boom
 hs._tv_front_refresh()
 assert hs.tv_front()["app"] == "Netflix" and hs.tv_front()["title"] == ""   # a broken title read keeps the app's name
 
+# newer Android's wording (mState=3(PLAYING), session headers) and a TITLE line
+ms = hs._tv_media_parse("""    YouTube com.google.android.youtube.tv/YouTube (userId=0)
+      package=com.google.android.youtube.tv
+      state=PlaybackState {mState=3(PLAYING), mPosition=12000}
+      metadata: size=9, description=Top 10 Robots in Movies, WatchMojo, null
+    Prime com.amazon.amazonvideo.livingroom/av (userId=0)
+      state=PlaybackState {mState=2(PAUSED)}
+      METADATA_KEY_TITLE: The Boys""")
+assert ms["com.google.android.youtube.tv"] == {"title": "Top 10 Robots in Movies", "sub": "WatchMojo", "state": 3}
+assert ms["com.amazon.amazonvideo.livingroom"]["title"] == "The Boys" and ms["com.amazon.amazonvideo.livingroom"]["state"] == 2
+
 # Kodi has Short Circuit paused in the background
 movie = {"playerid": 1, "title": "Short Circuit", "paused": True}
 m._kodi_now_playing = lambda: dict(movie)
