@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.10.0"
+VERSION = "1.10.1"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2093,7 +2093,7 @@ TV_APPS = {"org.xbmc.kodi": "Kodi", "com.google.android.youtube.tv": "YouTube", 
            "com.amazon.amazonvideo.livingroom": "Prime Video", "com.disney.disneyplus": "Disney+", "com.hbo.hbonow": "Max",
            "com.wbd.stream": "Max", "com.plexapp.android": "Plex", "com.spotify.tv.android": "Spotify", "com.apple.atve.androidtv.appletv": "Apple TV",
            "com.google.android.apps.tv.launcherx": "Home", "com.google.android.tvlauncher": "Home", "com.android.tv.settings": "Settings"}
-_tv_front = {"t": 0.0, "pkg": "", "activity": "", "busy": False}
+_tv_front = {"t": 0.0, "ok_t": 0.0, "pkg": "", "activity": "", "busy": False, "error": ""}
 
 
 def _tv_front_parse(out: str) -> tuple[str, str]:
@@ -2107,12 +2107,19 @@ def _tv_front_parse(out: str) -> tuple[str, str]:
 def _tv_front_refresh() -> None:
     try:
         # Two ways to ask, as TVs' Android versions word it differently: the resumed activity, else the focused window.
-        ok, out = tv_adb("dumpsys activity activities | grep -m1 -E 'mResumedActivity|ResumedActivity'; "
-                         "dumpsys window | grep -m1 -E 'mCurrentFocus|mFocusedApp'", timeout=15)
+        ok, out = tv_adb("f=$(dumpsys activity activities | grep -m1 -E 'mResumedActivity|ResumedActivity'); "
+                         "if [ -n \"$f\" ]; then echo \"$f\"; else dumpsys window | grep -m1 -E 'mCurrentFocus|mFocusedApp'; fi", timeout=25)
         pkg, act = _tv_front_parse(out) if ok else ("", "")
-        if pkg != _tv_front.get("pkg") or not pkg:
-            log.info("TV front app: %s", act or ("unknown: " + (out or "no answer").strip().splitlines()[-1][:200] if out or not ok else "unknown"))
-        _tv_front.update({"pkg": pkg, "activity": act, "t": time.time(), "error": "" if pkg else (out or "no answer").strip()[-300:]})
+        now = time.time()
+        if pkg:
+            if pkg != _tv_front.get("pkg"):
+                log.info("TV front app: %s", act)
+            _tv_front.update({"pkg": pkg, "activity": act, "t": now, "ok_t": now, "error": ""})
+        else:
+            # A failed check keeps the last answer (a busy TV answers slowly now and then); it only goes after 3 minutes.
+            why = (out or "no answer").strip()
+            log.info("TV front app: couldn't tell (%s)", why.splitlines()[-1][:200] if why else "no answer")
+            _tv_front.update({"t": now, "error": why[-300:]})
     except Exception as exc:  # noqa: BLE001 - a background check; never let it die quietly
         log.info("TV front app check failed: %s", exc)
         _tv_front.update({"t": time.time(), "error": str(exc)[:300]})
@@ -2126,7 +2133,7 @@ def tv_front(max_age: float = 15) -> dict | None:
     if not _tv_front["busy"] and time.time() - _tv_front["t"] > max_age:
         _tv_front["busy"] = True
         threading.Thread(target=_tv_front_refresh, daemon=True).start()
-    if not _tv_front["pkg"] or time.time() - _tv_front["t"] > 120:
+    if not _tv_front["pkg"] or time.time() - _tv_front["ok_t"] > 180:
         return None
     pkg, act = _tv_front["pkg"], _tv_front["activity"]
     hal = act.endswith("HalActivity")
@@ -4036,7 +4043,7 @@ class HalRoutes:
                                    "restart_methods": {sid: hal.restart_method(sid) for sid in SERVICE_IDS} if q.get("methods") else {}})
             elif path == "/api/tv/front":    # what's on the TV, and why not if it can't tell
                 self._h_json(200, {"front": tv_front(), "host": tv_host(), "error": _tv_front.get("error", ""),
-                                   "age": round(time.time() - _tv_front["t"]) if _tv_front["t"] else None})
+                                   "age": round(time.time() - _tv_front["ok_t"]) if _tv_front["ok_t"] else None})
             elif path == "/api/winevents":
                 if q.get("refresh"):
                     hal.refresh_winevents()
