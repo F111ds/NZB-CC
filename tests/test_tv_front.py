@@ -47,16 +47,24 @@ ms = hs._tv_media_parse("""    package=com.google.android.youtube.tv
 assert ms["com.google.android.youtube.tv"] == {"title": "How It's Made: Pencils", "sub": "Science Channel", "state": 3}
 assert ms["com.netflix.ninja"]["title"] == "Stranger Things" and ms["com.netflix.ninja"]["state"] == 2
 assert ms["com.amazon.amazonvideo.livingroom"]["title"] == ""
-hs.tv_adb = lambda cmd, timeout=30: (True, "  ResumedActivity: ActivityRecord{1 u0 com.netflix.ninja/.MainActivity t3}\n===MEDIA===\n"
+FRONT = "  ResumedActivity: ActivityRecord{1 u0 com.netflix.ninja/.MainActivity t3}"
+hs.tv_adb = lambda cmd, timeout=30: (True, FRONT if "activities" in cmd else
                                      "    package=com.netflix.ninja\n      state=PlaybackState {state=2, position=5}\n"
                                      "      metadata: size=4, description=Stranger Things, Chapter One, null")
 hs._tv_front_refresh()
 f = hs.tv_front()
 assert f["app"] == "Netflix" and f["title"] == "Stranger Things" and f["sub"] == "Chapter One" and f["paused"] is True
-hs.tv_adb = lambda cmd, timeout=30: (True, "  ResumedActivity: ActivityRecord{1 u0 com.netflix.ninja/.MainActivity t3}\n===MEDIA===\n"
+hs.tv_adb = lambda cmd, timeout=30: (True, FRONT if "activities" in cmd else
                                      "    package=com.netflix.ninja\n      metadata: size=1, description=Netflix, null, null")
 hs._tv_front_refresh()
 assert hs.tv_front()["title"] == ""                              # just the app's name: no title
+def boom(cmd, timeout=30):
+    if "activities" in cmd:
+        return True, FRONT
+    raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad")
+hs.tv_adb = boom
+hs._tv_front_refresh()
+assert hs.tv_front()["app"] == "Netflix" and hs.tv_front()["title"] == ""   # a broken title read keeps the app's name
 
 # Kodi has Short Circuit paused in the background
 movie = {"playerid": 1, "title": "Short Circuit", "paused": True}
