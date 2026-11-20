@@ -20,3 +20,7 @@ They use made-up demo data: no real passwords, API keys or access codes appear i
 | **HAL: vitals**<br><img src="25-hal-vitals.png" width="300"> | **HAL: services**<br><img src="26-hal-services.png" width="300"> |
 | **HAL: drives**<br><img src="27-hal-drives.png" width="300"> | **HAL: network, security and power**<br><img src="28-hal-shield.png" width="300"> |
 | **HAL: Windows events**<br><img src="29-hal-events.png" width="300"> | **HAL: log and controls**<br><img src="30-hal-log.png" width="300"> |
+| **Get: ▶ Stream next to + Add (Usenet streaming)**<br><img src="31-stream-button.png" width="300"> | **Stream: getting it ready (nothing downloads)**<br><img src="32-stream-getting-ready.png" width="300"> |
+| **Stream: ready, Play on TV or keep a copy**<br><img src="33-stream-ready.png" width="300"> | **Stream: can't stream this one, try another or download**<br><img src="34-stream-cant.png" width="300"> |
+| **Watch: a Usenet stream on the TV (blue USENET label)**<br><img src="35-watch-usenet.png" width="300"> | **Watch: streamed lately, and your own movies (ON YOUR PC)**<br><img src="36-watch-streamed-lately.png" width="300"> |
+| **Watch: a movie from the PC on the TV**<br><img src="37-watch-pc.png" width="300"> | **Connections: AltMount (Usenet streaming)**<br><img src="38-connections-altmount.png" width="300"> |

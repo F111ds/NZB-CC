@@ -48,6 +48,14 @@ movie comes from:
   normal download instead;
 - HAL knows too: *"You're watching Glass Meridian, streaming from Usenet."*
 
+<p align="center">
+  <img src="docs/app-screenshots/31-stream-button.png" alt="Stream next to Add on a search result" width="230">
+  <img src="docs/app-screenshots/33-stream-ready.png" alt="Ready to watch: Play on TV" width="230">
+  <img src="docs/app-screenshots/35-watch-usenet.png" alt="A Usenet stream on the TV, with the blue USENET label" width="230">
+</p>
+<p align="center"><em>▶ Stream on a search result, Ready to watch, and a Usenet stream on the TV (more in
+<a href="docs/app-screenshots/README.md">the screenshots</a>)</em></p>
+
 Nothing goes to a cloud service of its own: the phone talks to the PC over your Wi-Fi (or Tailscale when you're
 out), behind an access code.
 
