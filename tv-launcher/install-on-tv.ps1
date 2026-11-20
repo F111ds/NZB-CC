@@ -96,8 +96,11 @@ if ($UpdateOnly) {
     Step 'Updating the app on the TV (settings and screensaver choice stay as they are)'
     if (-not (Test-Path $Apk)) { throw "Missing $Apk" }
     # Never interrupt what's on: only update while the TV is on its home screen (or asleep / screensaver).
-    $front = (Tv 'dumpsys activity activities | grep -m1 -E "mResumedActivity|ResumedActivity"').Trim()
-    if ($front -and $front -notmatch [regex]::Escape($pkg) -and $front -notmatch 'Dream|dream') {
+    # Single quotes inside: Windows PowerShell drops inner double quotes when it starts Python, and the TV then
+    # got "grep ... mResumedActivity | ResumedActivity" (a second command), so it always looked busy.
+    $front = (Tv 'dumpsys activity activities | grep -m1 ResumedActivity').Trim()
+    # Busy only when the TV clearly names another app in front (not when the answer is unreadable).
+    if ($front -match 'ActivityRecord\{' -and $front -notmatch [regex]::Escape($pkg) -and $front -notmatch 'Dream|dream') {
         $app = if ($front -match '\{[^ ]+ [^ ]+ ([^/ ]+)/') { $Matches[1] } else { 'an app' }
         throw "The TV was busy ($app is open), so I left it alone. I'll update the TV app next time it's on the home screen."
     }
