@@ -7,6 +7,17 @@ from three screens: **HAL 9000** on your phone, **the TV**, and the original **d
 Find something, put it on the TV, turn it up, pause the ads, check the drives, restart a service, lock the PC: all
 from the couch, by tap or by voice ("Hey Siri, ask HAL, play Glass Meridian").
 
+<p align="center">
+  <img src="docs/hero/phone-home.png" alt="HAL 9000's main page on the phone" width="230">
+</p>
+<p align="center">
+  <img src="docs/hero/tv-hal-screen.png" alt="HAL 9000's screen on the TV" width="640">
+</p>
+<p align="center">
+  <img src="docs/hero/tv-home-screen.png" alt="The custom TV home screen" width="640">
+</p>
+<p align="center"><em>HAL 9000 on the phone, HAL's screen on the TV, and the TV's custom home screen</em></p>
+
 **The TV runs an interface of our own.** We replaced the Sony's stock home screen, with its ads and promos, with
 our own build of the open-source CleanYourTV launcher, then built on it:
 - a clean one-line header with the time, the weather and the dollar-to-peso rate;
@@ -20,10 +31,6 @@ The phone controls it: the volume, turning it on, putting HAL on screen, and kno
 
 Nothing goes to a cloud service of its own: the phone talks to the PC over your Wi-Fi (or Tailscale when you're
 out), behind an access code.
-
-| On the phone | On the TV | On the PC |
-|---|---|---|
-| ![HAL 9000 on the phone](docs/app-screenshots/01-home.png) | ![HAL on the TV](docs/tv-screenshots/1-hal-screen.png) | ![NZB Command Center](docs/desktop-screenshots/nzb-2-sabnzbd.png) |
 
 ## How it started: the NZB Command Center
 
