@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.12.2"
+VERSION = "1.13.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -446,6 +446,7 @@ DEFAULT_SETTINGS = {
     "ping_host": "1.1.1.1",
     "phone_port": 8765,
     "nut_host": "", "nut_port": 3493, "nut_ups": "",   # Network UPS Tools (blank host: not used)
+    "denon_host": "",               # the Denon/Marantz amp the consoles go through (blank: HAL finds it himself)
     "ups_shutdown": False,          # shut the PC down when the UPS battery runs low
     "ups_shutdown_pct": 25, "ups_shutdown_min": 5,
     "ignored_services": [],
@@ -511,7 +512,7 @@ def validate_settings(body: dict, current: dict) -> dict:
                 if p.scheme not in ("http", "https") or not p.hostname or not re.fullmatch(r"[\w\-]{1,64}", p.path.rstrip("/").rpartition("/")[2]):
                     raise ValueError("Use a full ntfy topic address, e.g. https://ntfy.sh/my-private-topic.")
                 v = urllib.parse.urlunsplit((p.scheme, p.netloc, p.path.rstrip("/"), "", ""))
-            elif k in ("nut_host", "ping_host") and v and not re.fullmatch(r"[A-Za-z0-9.\-:]{1,253}", v):
+            elif k in ("nut_host", "ping_host", "denon_host") and v and not re.fullmatch(r"[A-Za-z0-9.\-:]{1,253}", v):
                 raise ValueError("That address doesn't look right.")
             elif k == "brief_time":
                 v = parse_hhmm(v)
@@ -2218,6 +2219,158 @@ def _console_anywhere(*texts: str) -> str:
     return _cec_pretty(re.sub(r"\s+", " ", re.sub(r"\(R\)|®", " ", best)))
 
 
+# ---- The Denon (or Marantz) amp: the consoles go through it, so the TV only sees "the amp's input" ----
+DENON_INPUTS = {"GAME": "Game", "GAME2": "Game 2", "MPLAY": "Media Player", "BD": "Blu-ray", "DVD": "DVD", "SAT/CBL": "CBL/SAT",
+                "SAT": "SAT", "CBL/SAT": "CBL/SAT", "AUX1": "AUX1", "AUX2": "AUX2", "AUX": "AUX", "TV": "TV Audio", "NET": "HEOS Music",
+                "BT": "Bluetooth", "TUNER": "Tuner", "PHONO": "Phono", "CD": "CD", "USB/IPOD": "USB", "8K": "8K", "VCR": "VCR", "DOCK": "Dock"}
+_denon = {"host": "", "t": 0.0, "searching": False}
+
+
+def _denon_http(host: str, path: str, timeout: float = 2.5) -> str:
+    for port in (8080, 80):
+        try:
+            with urllib.request.urlopen(f"http://{host}:{port}{path}", timeout=timeout) as r:
+                return r.read(200_000).decode("utf-8", "replace")
+        except (OSError, ValueError):
+            continue
+    return ""
+
+
+def _denon_telnet(host: str, commands: list[str], timeout: float = 2.0) -> str:
+    try:
+        with socket.create_connection((host, 23), timeout=timeout) as s:
+            s.settimeout(0.8)
+            out = b""
+            for c in commands:
+                s.sendall(c.encode("ascii") + b"\r")
+                end = time.time() + 1.2
+                while time.time() < end:
+                    try:
+                        chunk = s.recv(4096)
+                    except socket.timeout:
+                        break
+                    if not chunk:
+                        break
+                    out += chunk
+            return out.decode("utf-8", "replace").replace("\r", "\n")
+    except OSError:
+        return ""
+
+
+def _denon_is(host: str) -> bool:
+    x = _denon_http(host, "/goform/formMainZone_MainZoneXmlStatusLite.xml", timeout=1.2)
+    return "InputFuncSelect" in x
+
+
+def _denon_find() -> str:
+    """The amp's address: the setting, else the last one found, else asked on the network (UPnP), else the home network tried."""
+    s = (HAL.settings.get("denon_host") if HAL else "") or ""
+    if s:
+        return s
+    if _denon["host"] or _denon["searching"] or time.time() - _denon["t"] < 3600:
+        return _denon["host"]
+    _denon.update(searching=True, t=time.time())
+    try:
+        found = ""
+        try:   # UPnP: Denon and Marantz amps answer, saying where their description is
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            sock.settimeout(2.5)
+            sock.sendto(b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\n\r\n", ("239.255.255.250", 1900))
+            seen = set()
+            end = time.time() + 3
+            while time.time() < end and not found:
+                try:
+                    data, (ip, _p) = sock.recvfrom(4096)
+                except socket.timeout:
+                    break
+                if ip in seen:
+                    continue
+                seen.add(ip)
+                txt = data.decode("utf-8", "replace").lower()
+                if ("denon" in txt or "marantz" in txt or "heos" in txt) and _denon_is(ip):
+                    found = ip
+            sock.close()
+        except OSError:
+            pass
+        if not found:   # try every address on the TV's network (a few seconds, at most once an hour)
+            base = tv_host()
+            try:
+                net = ipaddress.ip_network(base + "/24", strict=False) if base and re.fullmatch(r"[\d.]+", base) else None
+            except ValueError:
+                net = None
+            if net:
+                def probe(ip):
+                    try:
+                        with socket.create_connection((ip, 8080), timeout=0.4):
+                            return ip
+                    except OSError:
+                        try:
+                            with socket.create_connection((ip, 23), timeout=0.4):
+                                return ip
+                        except OSError:
+                            return ""
+                with ThreadPoolExecutor(max_workers=48) as ex:
+                    open_ = [ip for ip in ex.map(probe, [str(h) for h in net.hosts()]) if ip]
+                for ip in open_:
+                    if _denon_is(ip) or _denon_telnet(ip, ["SI?"]).strip().startswith("SI"):
+                        found = ip
+                        break
+        if found:
+            log.info("Found the Denon amp at %s", found)
+        _denon["host"] = found
+        return found
+    finally:
+        _denon["searching"] = False
+
+
+def _denon_parse_names(xml_text: str, telnet_text: str) -> dict:
+    """{input code: the name you gave it on the amp}, from the web page's lists or the SSFUN telnet answer."""
+    names = {}
+    try:
+        root = ET.fromstring(xml_text) if xml_text.strip().startswith("<") else None
+    except ET.ParseError:
+        root = None
+    if root is not None:
+        funcs = [v.text or "" for v in root.findall("./InputFuncList/value")]
+        renames = [v.text or "" for v in root.findall("./RenameSource/value")]
+        for f, r in zip(funcs, renames):
+            if f.strip() and r.strip():
+                names[f.strip().upper()] = r.strip()
+    for line in (telnet_text or "").splitlines():
+        m = re.match(r"SSFUN(\S+)\s+(.+)", line.strip())
+        if m and m.group(1) != "END":
+            names[m.group(1).strip().upper()] = m.group(2).strip()
+    return names
+
+
+def _denon_parse_input(xml_text: str, telnet_text: str) -> str:
+    m = re.search(r"<InputFuncSelect>\s*<value>([^<]+)</value>", xml_text or "")
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"^SI(\S.*)$", telnet_text or "", re.M)
+    return m.group(1).strip() if m else ""
+
+
+def denon_now() -> str:
+    """What the amp is showing: the name you gave its input (e.g. "PS5"), a console's name, or "Game (Denon)". "" if unknown."""
+    host = _denon_find()
+    if not host:
+        return ""
+    lite = _denon_http(host, "/goform/formMainZone_MainZoneXmlStatusLite.xml")
+    full = _denon_http(host, "/goform/formMainZone_MainZoneXml.xml") if lite else ""
+    tel = "" if lite else _denon_telnet(host, ["SI?", "SSFUN ?"])
+    code = _denon_parse_input(lite, tel)
+    if not code:
+        return ""
+    names = _denon_parse_names(full, tel)
+    key = code.upper()
+    shown = names.get(key, "") or code   # some models already give the renamed name ("PS5") as the selected input
+    default = DENON_INPUTS.get(key, "")
+    if shown.upper() == key and key in DENON_INPUTS or shown.lower() == default.lower():
+        return f"{default or shown.title()} (Denon)"   # an input you haven't renamed
+    return _cec_pretty(shown)
+
+
 def _tv_front_refresh() -> None:
     try:
         # Two ways to ask, as TVs' Android versions word it differently: the resumed activity, else the focused window.
@@ -2240,15 +2393,25 @@ def _tv_front_refresh() -> None:
                     log.info("TV front app: an HDMI input (%s), but no name found. HDMI-CEC said: %s", pkg, " | ".join(bits)[:1500] or "(nothing)")
             except Exception as exc:  # noqa: BLE001
                 log.info("TV front app: HDMI input, no name (%s)", exc)
+            if not inp or re.search(r"denon|marantz|avr|receiver", inp, re.I):
+                try:   # through the Denon: ask the amp which input it's on
+                    d = denon_now()
+                    if d:
+                        inp = d
+                except Exception as exc:  # noqa: BLE001
+                    log.info("Denon: %s", exc)
             inp = inp or "HDMI"
         elif pkg and pkg not in ("org.xbmc.kodi", TV_PACKAGE) and TV_APPS.get(pkg) != "Home":
             try:   # what it's playing: a bonus, so a problem here never loses the app's name
                 mok, mout = tv_adb("dumpsys media_session", timeout=20)
                 media_out = mout if mok else ""
-                if not mok:
+                if not mok and _tv_front.get("media_err") != pkg:
+                    _tv_front["media_err"] = pkg
                     log.info("TV front app: no title (%s)", (mout or "no answer").strip().splitlines()[-1][:200] if mout else "no answer")
             except Exception as exc:  # noqa: BLE001
-                log.info("TV front app: no title (%s)", exc)
+                if _tv_front.get("media_err") != pkg:
+                    _tv_front["media_err"] = pkg
+                    log.info("TV front app: no title (%s)", exc)
         now = time.time()
         if pkg:
             media = _tv_media_parse(media_out).get(pkg) or {}
@@ -2265,8 +2428,9 @@ def _tv_front_refresh() -> None:
         else:
             # A failed check keeps the last answer (a busy TV answers slowly now and then); it only goes after 3 minutes.
             why = (out or "no answer").strip()
-            log.info("TV front app: couldn't tell (%s)", why.splitlines()[-1][:200] if why else "no answer")
-            _tv_front.update({"t": now, "error": why[-300:]})
+            if not _tv_front.get("error"):   # once when it stops answering (e.g. the TV is off), not every 15 seconds
+                log.info("TV front app: couldn't tell (%s)", why.splitlines()[-1][:200] if why else "no answer")
+            _tv_front.update({"t": now, "error": why[-300:] or "no answer"})
     except Exception as exc:  # noqa: BLE001 - a background check; never let it die quietly
         log.info("TV front app check failed: %s", exc)
         _tv_front.update({"t": time.time(), "error": str(exc)[:300]})

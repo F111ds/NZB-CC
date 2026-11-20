@@ -108,6 +108,30 @@ hs.tv_adb = lambda cmd, timeout=30: (True, "  ResumedActivity: ActivityRecord{1 
 hs._tv_front_refresh()
 assert hs.tv_front()["app"] == "YouTube"                              # back to an app: the input's name goes
 
+# the consoles go through a Denon amp: the amp says which input it's on, and what you named it
+LITE = '<item><Power><value>ON</value></Power><InputFuncSelect><value>{}</value></InputFuncSelect></item>'
+FULL = ('<item><InputFuncList><value>SAT/CBL</value><value>GAME</value><value>MPLAY</value></InputFuncList>'
+        '<RenameSource><value>CBL/SAT</value><value>PS5</value><value>{}</value></RenameSource></item>')
+hs._denon_find = lambda: "192.0.2.61"
+def fake_http(sel, rename="Switch"):
+    return lambda host, path, timeout=2.5: LITE.format(sel) if "StatusLite" in path else FULL.format(rename)
+hs._denon_http = fake_http("GAME")
+assert hs.denon_now() == "PlayStation 5"
+hs._denon_http = fake_http("MPLAY")
+assert hs.denon_now() == "Nintendo Switch"
+hs._denon_http = fake_http("MPLAY", "Media Player")                  # not renamed
+assert hs.denon_now() == "Media Player (Denon)"
+hs._denon_http = lambda host, path, timeout=2.5: ""                  # no web page: telnet
+hs._denon_telnet = lambda host, cmds, timeout=2.0: "SIGAME\nSSFUNGAME PS5\nSSFUNMPLAY Switch\nSSFUNEND\n"
+assert hs.denon_now() == "PlayStation 5"
+hs._denon_find = lambda: ""
+assert hs.denon_now() == ""
+# the TV shows the amp's input and CEC names nobody (or just the amp): the amp is asked
+hs._denon_find = lambda: "192.0.2.61"
+hs.tv_adb = lambda cmd, timeout=30: (True, INPUT_FRONT if "activities" in cmd else "display_name: Denon AVR-X2700H" if "hdmi" in cmd else "")
+hs._tv_front_refresh()
+assert hs.tv_front()["app"] == "PlayStation 5"
+
 # Kodi has Short Circuit paused in the background
 movie = {"playerid": 1, "title": "Short Circuit", "paused": True}
 m._kodi_now_playing = lambda: dict(movie)
