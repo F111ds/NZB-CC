@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.11.0"
+VERSION = "1.11.1"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2075,8 +2075,9 @@ def tv_adb(command: str, timeout: float = 30) -> tuple[bool, str]:
     if not host:
         return False, "I don't know the TV's address yet: run tv-launcher\\install-on-tv.ps1 once."
     try:
-        r = subprocess.run([str(py), "-I", "tools/tv.py", command], cwd=str(folder), env=dict(os.environ, TV_HOST=host),
-                           capture_output=True, text=True, timeout=timeout,
+        r = subprocess.run([str(py), "-I", "tools/tv.py", command], cwd=str(folder),
+                           env=dict(os.environ, TV_HOST=host, PYTHONIOENCODING="utf-8:replace", PYTHONUTF8="1"),
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except subprocess.TimeoutExpired:
         return False, "The TV didn't answer in time. Is it on?"
@@ -2133,10 +2134,17 @@ def _tv_front_refresh() -> None:
     try:
         # Two ways to ask, as TVs' Android versions word it differently: the resumed activity, else the focused window.
         ok, out = tv_adb("f=$(dumpsys activity activities | grep -m1 -E 'mResumedActivity|ResumedActivity'); "
-                         "if [ -n \"$f\" ]; then echo \"$f\"; else dumpsys window | grep -m1 -E 'mCurrentFocus|mFocusedApp'; fi; "
-                         "echo ===MEDIA===; dumpsys media_session | grep -E 'package=|state=PlaybackState|metadata:'", timeout=25)
-        front_out, _, media_out = (out or "").partition("===MEDIA===")
-        pkg, act = _tv_front_parse(front_out) if ok else ("", "")
+                         "if [ -n \"$f\" ]; then echo \"$f\"; else dumpsys window | grep -m1 -E 'mCurrentFocus|mFocusedApp'; fi", timeout=25)
+        pkg, act = _tv_front_parse(out) if ok else ("", "")
+        media_out = ""
+        if pkg and pkg not in ("org.xbmc.kodi", TV_PACKAGE) and TV_APPS.get(pkg) != "Home":
+            try:   # what it's playing: a bonus, so a problem here never loses the app's name
+                mok, mout = tv_adb("dumpsys media_session | grep -E 'package=|state=PlaybackState|metadata:'", timeout=20)
+                media_out = mout if mok else ""
+                if not mok:
+                    log.info("TV front app: no title (%s)", (mout or "no answer").strip().splitlines()[-1][:200] if mout else "no answer")
+            except Exception as exc:  # noqa: BLE001
+                log.info("TV front app: no title (%s)", exc)
         now = time.time()
         if pkg:
             media = _tv_media_parse(media_out).get(pkg) or {}
