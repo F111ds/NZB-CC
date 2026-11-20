@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.10.1"
+VERSION = "1.11.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2093,7 +2093,32 @@ TV_APPS = {"org.xbmc.kodi": "Kodi", "com.google.android.youtube.tv": "YouTube", 
            "com.amazon.amazonvideo.livingroom": "Prime Video", "com.disney.disneyplus": "Disney+", "com.hbo.hbonow": "Max",
            "com.wbd.stream": "Max", "com.plexapp.android": "Plex", "com.spotify.tv.android": "Spotify", "com.apple.atve.androidtv.appletv": "Apple TV",
            "com.google.android.apps.tv.launcherx": "Home", "com.google.android.tvlauncher": "Home", "com.android.tv.settings": "Settings"}
-_tv_front = {"t": 0.0, "ok_t": 0.0, "pkg": "", "activity": "", "busy": False, "error": ""}
+_tv_front = {"t": 0.0, "ok_t": 0.0, "pkg": "", "activity": "", "busy": False, "error": "", "media": {}}
+
+
+def _tv_media_parse(out: str) -> dict:
+    """What each app says it's playing (Android's media sessions): {package: {"title", "sub", "state"}}.
+    From `dumpsys media_session` lines: package=..., state=PlaybackState {state=3, ...}, metadata: size=N, description=Title, Sub, Desc."""
+    found, pkg = {}, ""
+    for line in (out or "").splitlines():
+        s = line.strip()
+        if s.startswith("package="):
+            pkg = s[8:].strip()
+            found.setdefault(pkg, {"title": "", "sub": "", "state": 0})
+        elif pkg and s.startswith("state=PlaybackState"):
+            m = re.search(r"state=(\d+)", s[19:])
+            if m:
+                found[pkg]["state"] = int(m.group(1))
+        elif pkg and s.startswith("metadata:") and "description=" in s:
+            parts = s.split("description=", 1)[1].strip().split(", ")
+            while parts and parts[-1].strip() in ("null", ""):
+                parts.pop()
+            if not parts:
+                continue
+            title, sub = (parts[0], "") if len(parts) == 1 else (parts[0], parts[1]) if len(parts) == 2 else (", ".join(parts[:-2]), parts[-2])
+            if not found[pkg]["title"] or found[pkg]["state"] in (2, 3):
+                found[pkg].update(title=title.strip()[:120], sub=sub.strip()[:80])
+    return found
 
 
 def _tv_front_parse(out: str) -> tuple[str, str]:
@@ -2108,13 +2133,16 @@ def _tv_front_refresh() -> None:
     try:
         # Two ways to ask, as TVs' Android versions word it differently: the resumed activity, else the focused window.
         ok, out = tv_adb("f=$(dumpsys activity activities | grep -m1 -E 'mResumedActivity|ResumedActivity'); "
-                         "if [ -n \"$f\" ]; then echo \"$f\"; else dumpsys window | grep -m1 -E 'mCurrentFocus|mFocusedApp'; fi", timeout=25)
-        pkg, act = _tv_front_parse(out) if ok else ("", "")
+                         "if [ -n \"$f\" ]; then echo \"$f\"; else dumpsys window | grep -m1 -E 'mCurrentFocus|mFocusedApp'; fi; "
+                         "echo ===MEDIA===; dumpsys media_session | grep -E 'package=|state=PlaybackState|metadata:'", timeout=25)
+        front_out, _, media_out = (out or "").partition("===MEDIA===")
+        pkg, act = _tv_front_parse(front_out) if ok else ("", "")
         now = time.time()
         if pkg:
-            if pkg != _tv_front.get("pkg"):
-                log.info("TV front app: %s", act)
-            _tv_front.update({"pkg": pkg, "activity": act, "t": now, "ok_t": now, "error": ""})
+            media = _tv_media_parse(media_out).get(pkg) or {}
+            if pkg != _tv_front.get("pkg") or media.get("title") != (_tv_front.get("media") or {}).get("title"):
+                log.info("TV front app: %s%s", act, f" playing {media['title']!r} ({media.get('sub') or '-'}, state {media.get('state')})" if media.get("title") else "")
+            _tv_front.update({"pkg": pkg, "activity": act, "t": now, "ok_t": now, "error": "", "media": media})
         else:
             # A failed check keeps the last answer (a busy TV answers slowly now and then); it only goes after 3 minutes.
             why = (out or "no answer").strip()
@@ -2139,7 +2167,10 @@ def tv_front(max_age: float = 15) -> dict | None:
     hal = act.endswith("HalActivity")
     home = (pkg == TV_PACKAGE and not hal) or TV_APPS.get(pkg) == "Home" or "Dream" in act
     name = TV_APPS.get(pkg) or ("HAL" if hal else "Home" if home else pkg.rsplit(".", 1)[-1].replace("_", " ").title())
-    return {"pkg": pkg, "app": name, "kodi": pkg == "org.xbmc.kodi", "home": home, "hal": hal}
+    media = _tv_front.get("media") or {}
+    title = media.get("title", "") if media.get("title", "").strip().lower() not in ("", name.lower(), pkg.lower()) else ""
+    return {"pkg": pkg, "app": name, "kodi": pkg == "org.xbmc.kodi", "home": home, "hal": hal,
+            "title": title, "sub": media.get("sub", "") if title else "", "paused": bool(title) and media.get("state") == 2}
 
 
 TV_KEYS = {"vol_up": 24, "vol_down": 25, "mute": 164}

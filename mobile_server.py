@@ -82,7 +82,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.16.1"
+VERSION = "3.17.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -5794,8 +5794,10 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             return {"configured": False}
         try:
             playing, front = kodi_now_playing(), tv_front_app()
-            return {"configured": True, "online": True, "playing": playing,
-                    "front": front["app"] if front and not (front["kodi"] or front["home"] or front["hal"]) else ""}
+            other = bool(front) and not (front["kodi"] or front["home"] or front["hal"])
+            return {"configured": True, "online": True, "playing": playing, "front": front["app"] if other else "",
+                    "front_title": front.get("title", "") if other else "", "front_sub": front.get("sub", "") if other else "",
+                    "front_paused": bool(front.get("paused")) if other else False}
         except UpstreamError as exc:
             return {"configured": True, "online": False, "problem": str(exc)}  # not "error": see api() in the page
 

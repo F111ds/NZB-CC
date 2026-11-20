@@ -330,7 +330,7 @@ function greeting(){const h=new Date().getHours();return'Good '+(h>=5&&h<12?'mor
 function issues(){return S?S.issues.filter(i=>LV[i.level]>=2):[]}
 // What HAL says on Home: downloads, the TV, and anything that needs you, in one or two sentences.
 function homeLine(){if(!H&&!S)return'I\'m thinking…';const parts=[],iss=issues(),crit=iss.find(i=>i.level==='critical');
-  const kp=H&&H.kodi&&H.kodi.playing,fa=H&&H.kodi&&H.kodi.front,tvl=kp?'You\'re watching '+kp.title+'.':fa?fa+' is on the TV.':'';
+  const kp=H&&H.kodi&&H.kodi.playing,fa=H&&H.kodi&&H.kodi.front,ft=fa&&H.kodi.front_title,tvl=kp?'You\'re watching '+kp.title+'.':ft?'You\'re watching '+ft+' on '+fa+'.':fa?fa+' is on the TV.':'';
   if(crit)return'I\'m sorry, '+NAME()+'. '+crit.title+'.'+(tvl?' '+tvl:'');
   const cur=DESK&&H&&H.current,n=H?H.total||0:0;
   if(cur&&!H.paused){const s=secsOf(cur.eta);const at=s!=null&&s<86400?' by '+clock(Date.now()+s*1000):'';parts.push(n>1?n+' downloads are on their way'+(at?', the first one'+at:'')+'.':'One download finishes'+(at||' soon')+'.')}
@@ -356,7 +356,7 @@ function downloadsCard(){if(!H)return'';if(H.sab_ok===false)return'<div class="c
     '<button class="btn" data-q="'+(H.paused?'resume':'pause')+'">'+(H.paused?'▶':'❚❚')+'</button></span></h3><div class="tt">'+esc(c.name)+'</div>'+
     '<div class="sub">'+f0(c.pct,'%')+' · '+esc(c.sizeleft||'')+' left'+(s!=null&&!H.paused?' · ready ~'+clock(Date.now()+s*1000):'')+'</div><div class="bar"><i style="width:'+(c.pct||0)+'%"></i></div></div>'}
 function tvCard(full){const k=H&&H.kodi;const p=k&&k.playing;
-  if(!p&&k&&k.front){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span><span class="mono" style="color:#e8a598">● ON</span></h3><div class="tt">'+esc(k.front)+' is on, '+esc(NAME())+'.</div><div class="sub">Kodi\'s there when you want it.</div>'+tvVol()+'</div>'}
+  if(!p&&k&&k.front){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span><span class="mono" style="color:#e8a598">● ON</span></h3>'+(k.front_title?'<div class="tt" style="font-size:17px">'+esc(k.front_title)+'</div><div class="sub">'+esc([k.front_sub,'on '+k.front,k.front_paused?'paused':''].filter(Boolean).join(' · '))+'</div>':'<div class="tt">'+esc(k.front)+' is on, '+esc(NAME())+'.</div><div class="sub">Kodi\'s there when you want it.</div>')+tvVol()+'</div>'}
   if(!p){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span></h3><div class="tt">Nothing\'s playing, '+esc(NAME())+'.</div><div class="sub">'+(k&&k.configured===false?'Kodi isn\'t set up yet.':k&&k.online===false?'Kodi isn\'t answering (the TV may be off).':'Kodi is ready when you are.')+'</div>'+
     (H&&H.tv_ready?'<button class="btn r wide" style="margin-top:12px" data-tvon>Turn the TV on and open Kodi</button>':'')+tvVol()+'</div>'}
   return'<div class="card tvcard"><h3><span class="k">NOW ON THE TV</span>'+(full?'':'<button class="btn" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'▶ Play':'❚❚ Pause')+'</button>')+'</h3>'+
