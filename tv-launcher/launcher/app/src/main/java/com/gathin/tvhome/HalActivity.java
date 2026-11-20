@@ -833,7 +833,27 @@ public class HalActivity extends Activity {
         if (flexGraph) {
             LinearLayout.LayoutParams gl = new LinearLayout.LayoutParams(-1, 0, 1f);
             gl.topMargin = dp(7);
-            box.addView(new GraphView(this, graph, colorOf(col.optString("graph_color"), 0xFFFF6A4D)), gl);
+            box.addView(new GraphView(this, graph, colorOf(col.optString("graph_color"), 0xFFFF6A4D))
+                    .second(col.optJSONArray("graph2"), colorOf(col.optString("graph2_color"), 0xFFA78BFA))
+                    .fit(col.optBoolean("graph_fit")), gl);
+            JSONArray legend = col.optJSONArray("legend");
+            if (legend != null && legend.length() > 0) {
+                LinearLayout lg = new LinearLayout(this);
+                lg.setOrientation(LinearLayout.HORIZONTAL);
+                for (int i = 0; i < legend.length(); i++) {
+                    JSONArray it = legend.optJSONArray(i);
+                    if (it == null) continue;
+                    TextView sw = text(9.5f, colorOf(it.optString(1), 0xFF8B8B94), Typeface.MONOSPACE);
+                    sw.setText("\u25A0 ");
+                    lg.addView(sw);
+                    TextView lt = text(9.5f, 0xFF8B8B94, Typeface.MONOSPACE);
+                    lt.setText(it.optString(0) + "    ");
+                    lg.addView(lt);
+                }
+                LinearLayout.LayoutParams lgl = new LinearLayout.LayoutParams(-2, -2);
+                lgl.topMargin = dp(3);
+                box.addView(lg, lgl);
+            }
         }
         JSONArray cores = col.optJSONArray("cores");
         if (cores != null && cores.length() > 0) {
@@ -890,7 +910,30 @@ public class HalActivity extends Activity {
             int color = colorOf(col.optString("hourly_color"), 0xFF2A9D74);
             LinearLayout.LayoutParams hl = flexHourly ? new LinearLayout.LayoutParams(-1, 0, 1f) : new LinearLayout.LayoutParams(-1, dp(46));
             hl.topMargin = dp(8);
-            box.addView(new HourBars(this, hourly, color), hl);
+            box.addView(new HourBars(this, hourly, color)
+                    .part(col.optJSONArray("hourly2"), colorOf(col.optString("hourly2_color"), 0xFFFF6A4D)), hl);
+            JSONArray labels = col.optJSONArray("hourly_labels");
+            if (labels != null && labels.length() > 0) {
+                // One label under each bar (days), or a few spread across (24 h ago ... now).
+                boolean each = labels.length() == hourly.length();
+                LinearLayout lr = new LinearLayout(this);
+                lr.setOrientation(LinearLayout.HORIZONTAL);
+                for (int i = 0; i < labels.length(); i++) {
+                    TextView t = text(9.5f, 0xFF8B8B94, Typeface.MONOSPACE);
+                    t.setText(labels.optString(i));
+                    t.setSingleLine(true);
+                    if (each) {
+                        t.setGravity(Gravity.CENTER_HORIZONTAL);
+                        lr.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+                    } else {
+                        if (i > 0) lr.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+                        lr.addView(t, new LinearLayout.LayoutParams(-2, -2));
+                    }
+                }
+                LinearLayout.LayoutParams lrl = new LinearLayout.LayoutParams(-1, -2);
+                lrl.topMargin = dp(3);
+                box.addView(lr, lrl);
+            }
             if (!col.optString("hourly_label").isEmpty()) {
                 TextView lab = text(9.5f, 0xFF8B8B94, Typeface.MONOSPACE);
                 lab.setText(col.optString("hourly_label"));
@@ -1068,11 +1111,24 @@ public class HalActivity extends Activity {
         private final int color;
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
 
+        private float[] part;
+        private int partColor;
+
         HourBars(Context c, JSONArray a, int color) {
             super(c);
             vals = new float[a.length()];
             for (int i = 0; i < vals.length; i++) vals[i] = (float) a.optDouble(i, 0);
             this.color = color;
+        }
+
+        /** The part of each bar drawn in a second color from the bottom (blocked out of all queries). */
+        HourBars part(JSONArray a, int color) {
+            if (a != null && a.length() == vals.length) {
+                part = new float[a.length()];
+                for (int i = 0; i < part.length; i++) part[i] = (float) a.optDouble(i, 0);
+                partColor = color;
+            }
+            return this;
         }
 
         @Override
@@ -1085,7 +1141,12 @@ public class HalActivity extends Activity {
             p.setColor(color);
             for (int i = 0; i < n; i++) {
                 float bh = Math.max(h * 0.04f, h * vals[i] / max), x = i * (w + gap);
+                p.setColor(color);
                 c.drawRoundRect(x, h - bh, x + w, h, gap / 2, gap / 2, p);
+                if (part != null && vals[i] > 0 && part[i] > 0) {
+                    p.setColor(partColor);
+                    c.drawRect(x, h - bh * Math.min(1f, part[i] / vals[i]), x + w, h, p);
+                }
             }
         }
     }
@@ -1311,6 +1372,10 @@ public class HalActivity extends Activity {
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final android.graphics.Path path = new android.graphics.Path();
 
+        private float[] vals2;
+        private int color2;
+        private boolean fit;
+
         GraphView(Context c, JSONArray a, int color) {
             super(c);
             vals = new float[a.length()];
@@ -1318,14 +1383,45 @@ public class HalActivity extends Activity {
             this.color = color;
         }
 
+        /** A second line drawn over the first (upload over download), on the same scale. */
+        GraphView second(JSONArray a, int color) {
+            if (a != null && a.length() > 1) {
+                vals2 = new float[a.length()];
+                for (int i = 0; i < vals2.length; i++) vals2[i] = (float) a.optDouble(i, 0);
+                color2 = color;
+            }
+            return this;
+        }
+
+        /** Scale to the values' own range (ping 9-16 ms) instead of from zero, so small changes show. */
+        GraphView fit(boolean on) {
+            fit = on;
+            return this;
+        }
+
         @Override
         protected void onDraw(Canvas c) {
-            float w = getWidth(), h = getHeight(), max = 1;
-            for (float v : vals) max = Math.max(max, v);
-            max *= 1.15f;
+            float lo = Float.MAX_VALUE, hi = 0;
+            for (float v : vals) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+            if (vals2 != null) for (float v : vals2) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+            if (fit) {
+                if (hi - lo < 1) hi = lo + 1;
+                float pad = (hi - lo) * 0.25f;
+                lo = Math.max(0, lo - pad);
+                hi += pad;
+            } else {
+                lo = 0;
+                hi = Math.max(1, hi) * 1.15f;
+            }
+            draw(c, vals, color, lo, hi);
+            if (vals2 != null) draw(c, vals2, color2, lo, hi);
+        }
+
+        private void draw(Canvas c, float[] vals, int color, float lo, float hi) {
+            float w = getWidth(), h = getHeight();
             path.reset();
             for (int i = 0; i < vals.length; i++) {
-                float x = w * i / (vals.length - 1), y = h - h * vals[i] / max;
+                float x = w * i / (vals.length - 1), y = h - h * (vals[i] - lo) / (hi - lo);
                 if (i == 0) path.moveTo(x, y);
                 else path.lineTo(x, y);
             }
