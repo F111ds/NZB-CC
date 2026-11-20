@@ -83,7 +83,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.21.0"
+VERSION = "3.21.1"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -1231,31 +1231,25 @@ def _kodi_wait(seconds: float) -> bool:
     return False
 
 
-def voice_play(query: str, from_start: bool = False, tv_on: bool = False) -> dict:
-    """'Play Glass Meridian': finds it in Kodi's library and plays it on the TV (resuming, unless from_start).
-    A show plays its next episode. When Kodi doesn't answer (the TV is off) and TV control is set up, the TV is turned
-    on and Kodi opened first."""
-    if not kodi_configured():
-        return {"ok": False, "message": "Kodi isn't set up yet."}
-    started_tv = False
-    awake = False
-    if not tv_on:
-        try:
-            kodi_call("JSONRPC.Ping", timeout=4)
-            awake = True
-        except (UpstreamError, ConfigError):
-            awake = False
-    if not awake:
-        if not tv_configured():
-            return {"ok": False, "message": "Kodi isn't answering. Is the TV on?"}
-        if tv_power_state() != "on" or tv_on:
-            started_tv = tv_start(launch_kodi=True)
-        if not _kodi_wait(60):
-            return {"ok": False, "message": "I turned the TV on, but Kodi isn't answering yet. Try again in a moment."}
-    movies = [{"id": to_int(m.get("movieid")), "title": str(m.get("title") or m.get("label") or ""), "year": to_int(m.get("year")),
-               "resume": int(to_float(_kdict(m.get("resume")).get("position")))} for m in kodi_all_movies()]
-    shows = kodi_all_shows()
+_voice_lib: dict = {"t": 0.0, "movies": [], "shows": []}
+
+
+def _voice_library(fresh: bool = False) -> tuple[list, list]:
+    """Kodi's movies and shows for matching a spoken title, kept for 10 minutes (a big library takes seconds to read)."""
+    if fresh or not _voice_lib["t"] or time.time() - _voice_lib["t"] > 600:
+        movies = [{"id": to_int(m.get("movieid")), "title": str(m.get("title") or m.get("label") or ""), "year": to_int(m.get("year")),
+                   "resume": int(to_float(_kdict(m.get("resume")).get("position")))} for m in kodi_all_movies()]
+        _voice_lib.update(t=time.time(), movies=movies, shows=kodi_all_shows())
+    return _voice_lib["movies"], _voice_lib["shows"]
+
+
+def _voice_play_now(query: str, from_start: bool) -> dict:
+    """Finds the title (Kodi is answering) and plays it."""
+    movies, shows = _voice_library()
     hit = voice_match(query, movies, shows)
+    if not hit and _voice_lib["t"] and time.time() - _voice_lib["t"] > 30:
+        movies, shows = _voice_library(fresh=True)        # maybe it's new: read the library again once
+        hit = voice_match(query, movies, shows)
     if not hit:
         return {"ok": False, "message": f"I couldn't find {query.strip()} in your library."}
     kind, it, score = hit
@@ -1263,7 +1257,7 @@ def voice_play(query: str, from_start: bool = False, tv_on: bool = False) -> dic
         resume = it["resume"] > 0 and not from_start
         kodi_call("Player.Open", {"item": {"movieid": it["id"]}, "options": {"resume": resume}})
         log.info("voice play movie %s (%s, score %.2f, resume=%s)", it["id"], it["title"], score, resume)
-        return {"ok": True, "kind": "movie", "title": it["title"], "year": it["year"], "resumed": resume, "started_tv": started_tv}
+        return {"ok": True, "kind": "movie", "title": it["title"], "year": it["year"], "resumed": resume}
     nxt = next_episode(kodi_show_episodes(it["id"]))
     if not nxt:
         return {"ok": False, "message": f"You've watched every episode of {it['title']} in your library."}
@@ -1271,7 +1265,53 @@ def voice_play(query: str, from_start: bool = False, tv_on: bool = False) -> dic
     kodi_call("Player.Open", {"item": {"episodeid": nxt["id"]}, "options": {"resume": resume}})
     log.info("voice play episode %s (%s S%02dE%02d, score %.2f)", nxt["id"], it["title"], nxt["season"], nxt["episode"], score)
     return {"ok": True, "kind": "episode", "title": it["title"], "season": nxt["season"], "episode": nxt["episode"],
-            "episode_title": nxt["title"], "resumed": resume, "started_tv": started_tv}
+            "episode_title": nxt["title"], "resumed": resume}
+
+
+def voice_play(query: str, from_start: bool = False, tv_on: bool = False, wait: bool = False) -> dict:
+    """'Play Glass Meridian': finds it in Kodi's library and plays it on the TV (resuming, unless from_start).
+    A show plays its next episode. When Kodi isn't answering (the TV is off, or Kodi isn't open), the TV is turned on
+    or Kodi opened, and the title plays as soon as Kodi answers; the answer comes back at once ("pending"), so Siri
+    doesn't time out waiting for the TV."""
+    if not kodi_configured():
+        return {"ok": False, "message": "Kodi isn't set up yet."}
+    awake = False
+    try:
+        kodi_call("JSONRPC.Ping", timeout=3)
+        awake = True
+    except (UpstreamError, ConfigError):
+        awake = False
+    if awake:
+        return {**_voice_play_now(query, from_start), "started_tv": False}
+    if not tv_configured():
+        return {"ok": False, "message": "Kodi isn't answering. Is the TV on?"}
+    tv_was_on = tv_power_state() == "on"
+    try:
+        if tv_was_on:
+            tv_open_kodi()
+        else:
+            tv_start(launch_kodi=True)
+    except (UpstreamError, ConfigError) as exc:
+        return {"ok": False, "message": f"I couldn't reach the TV: {str(exc)[:80]}"}
+    guess = voice_match(query, _voice_lib["movies"], _voice_lib["shows"]) if _voice_lib["t"] else None
+    title = guess[1]["title"] if guess else query.strip()
+
+    def later():
+        if not _kodi_wait(90):
+            log.info("voice play %r: Kodi didn't answer in time", query)
+            return
+        try:
+            _voice_play_now(query, from_start)
+        except Exception as exc:  # noqa: BLE001 - a background job: log it
+            log.info("voice play %r failed: %s", query, exc)
+
+    if wait:
+        if not _kodi_wait(90):
+            return {"ok": False, "message": "Kodi isn't answering yet. Try again in a moment."}
+        return {**_voice_play_now(query, from_start), "started_tv": not tv_was_on, "opened_kodi": tv_was_on}
+    threading.Thread(target=later, daemon=True, name="voice-play").start()
+    log.info("voice play %r: %s, playing when Kodi answers", query, "opening Kodi" if tv_was_on else "turning the TV on")
+    return {"ok": True, "pending": True, "title": title, "started_tv": not tv_was_on, "opened_kodi": tv_was_on}
 
 
 def voice_control(action: str) -> dict:

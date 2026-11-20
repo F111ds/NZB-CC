@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.15.0"
+VERSION = "1.15.1"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1907,9 +1907,12 @@ class FunMixin:
             from_start = bool(re.search(r"from the (start|beginning|top)", low))
             if demo:
                 return {"say": f"Demo mode: I'd play {title} on the TV, {name}.", "intent": intent}
-            r = _phone_post(self, "/api/voice/play", {"q": title, "tv_on": tv_on, "from_start": from_start}, timeout=90)
+            r = _phone_post(self, "/api/voice/play", {"q": title, "tv_on": tv_on, "from_start": from_start}, timeout=25)
             if not r.get("ok"):
                 return {"say": f"{r.get('message') or 'I could not do that.'}", "intent": intent}
+            if r.get("pending"):
+                lead = "Turning the TV on" if r.get("started_tv") else "Opening Kodi"
+                return {"say": spoken(f"{lead}, {name}. {r.get('title') or title} will start in a moment."), "intent": intent, "played": r}
             what = (f"{r['title']}, season {r['season']}, episode {r['episode']}" + (f", {r['episode_title']}" if r.get("episode_title") else "")
                     if r.get("kind") == "episode" else r["title"])
             lead = "Turning the TV on. " if r.get("started_tv") else ""
@@ -4704,7 +4707,11 @@ class HalRoutes:
                 self._h_json(200, {"ok": True, "phrases": list(hal.tv_phrases)})
             elif path == "/api/siri":
                 q_text = str(body.get("q") or body.get("text") or "")[:300]
-                res = hal.siri(q_text)
+                try:
+                    res = hal.siri(q_text)
+                except Exception as exc:  # noqa: BLE001 - Siri needs something to say, not an error page
+                    log.warning("Siri %r failed: %s", q_text[:80], exc)
+                    res = {"say": f"Something went wrong on the PC, {hal.settings['name']}: {str(exc)[:80]}", "intent": "error"}
                 res["say"] = spoken(res.get("say") or "")
                 log.info("Siri: %r -> %s", q_text[:80], res.get("intent"))
                 self._h_json(200, res)
