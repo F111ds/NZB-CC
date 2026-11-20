@@ -235,7 +235,7 @@ public class HalActivity extends Activity {
     }
 
     private TextView key(String s) {
-        TextView k = text(9, 0xFF71717A, Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
+        TextView k = text(10, 0xFF8B8B94, Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
         k.setLetterSpacing(0.18f);
         k.setText(s);
         return k;
@@ -354,7 +354,7 @@ public class HalActivity extends Activity {
         dlInfo.setSingleLine(true);
         dlStrip.addView(dlInfo);
         dlBar.setVisibility(View.GONE);
-        TextView hint = text(8.5f, 0xFF52525B, mono);
+        TextView hint = text(11, 0xFF8B8B94, mono);
         hint.setGravity(Gravity.CENTER);
         hint.setText("\u25BC  details     OK  HAL talks     BACK  close");
         LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-1, -2);
@@ -450,12 +450,29 @@ public class HalActivity extends Activity {
         return (bytes >= 100 || i == 0 ? String.valueOf(Math.round(bytes)) : String.format(Locale.US, "%.1f", bytes)) + " " + u[i];
     }
 
+    private long lastOk;   // when the PC last answered
+
     private void show(JSONObject j) {
         if (j == null) {
             eye.setLevel("");
             if (!speaking) quote.setText("“I can't reach the PC right now. I'll keep trying.”");
+            if (lastOk > 0) {
+                long min = Math.max(1, (System.currentTimeMillis() - lastOk) / 60_000L);
+                String seen = "LAST SEEN " + (min < 60 ? min + " MIN" : (min / 60) + " H") + " AGO";
+                for (Box b : new Box[]{pcBox, netBox, kumaBox, piBox}) b.stale(seen);
+                dlStrip.setAlpha(0.38f);
+                dlKey.setText("DOWNLOADS");
+                dlTitle.setText("Waiting for the PC");
+                dlTitle.setTextColor(0xFFE4E4E7);
+                dlInfo.setText(seen.toLowerCase(Locale.US));
+                dlBar.setVisibility(View.GONE);
+            }
+            alertBar.setVisibility(View.GONE);
             return;
         }
+        lastOk = System.currentTimeMillis();
+        for (Box b : new Box[]{pcBox, netBox, kumaBox, piBox}) b.root.setAlpha(1f);
+        dlStrip.setAlpha(1f);
         eye.setLevel(j.optString("level", ""));
         lines = j.optJSONArray("lines");
         if (lineAt == 0 || shownQuote.isEmpty()) setLine(j.optString("say", ""), j.optString("greeting", "") + " " + j.optString("quote", ""));
@@ -640,7 +657,11 @@ public class HalActivity extends Activity {
     // ---- details: four pages of everything ------------------------------------------------------
 
     private static final long DETAILS_REFRESH_MS = 15_000L;
-    private static final String[] TABS = {"THE PC", "NETWORK", "UPTIME KUMA", "RASPBERRY PI"};
+    private static final String[] TABS = {"THE PC", "NETWORK", "UPTIME KUMA", "RASPBERRY PI", "DOWNLOADS"};
+
+    private int pageCount() {
+        return detailPages != null && detailPages.length() > 0 ? Math.min(TABS.length, detailPages.length()) : TABS.length - 1;
+    }
 
     private boolean detailsOpen() {
         return details != null && details.getVisibility() == View.VISIBLE;
@@ -685,7 +706,7 @@ public class HalActivity extends Activity {
     }
 
     private void showDetail(int index) {
-        int n = TABS.length;
+        int n = pageCount();
         detailAt = ((index % n) + n) % n;
         details.removeAllViews();
         Typeface light = UiFont.get(this, R.string.font_light), regular = UiFont.get(this, R.string.font_regular);
@@ -713,7 +734,7 @@ public class HalActivity extends Activity {
         head.addView(spring, new LinearLayout.LayoutParams(0, 1, 1f));
         for (int i = 0; i < n; i++) {
             TextView tab = key(TABS[i]);
-            tab.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9);
+            tab.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
             tab.setPadding(dp(9), dp(5), dp(9), dp(5));
             if (i == detailAt) {
                 tab.setTextColor(Color.WHITE);
@@ -740,7 +761,7 @@ public class HalActivity extends Activity {
             for (int c = 0; c < cols.length(); c++) body.addView(detailColumn(cols.optJSONObject(c)), colParams(c));
         }
 
-        TextView hint = text(9, 0xFF71717A, Typeface.MONOSPACE);
+        TextView hint = text(11, 0xFF8B8B94, Typeface.MONOSPACE);
         hint.setGravity(Gravity.CENTER);
         hint.setText("\u25C0 \u25B6  other pages      OK  HAL talks      BACK  return to HAL");
         LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-1, -2);
@@ -853,6 +874,55 @@ public class HalActivity extends Activity {
             addDivider(box, i > 0);
             box.addView(dv, new LinearLayout.LayoutParams(-1, 0, 1f));
         }
+        JSONArray queue = col.optJSONArray("queue");
+        for (int i = 0; queue != null && i < queue.length(); i++) {
+            JSONObject q = queue.optJSONObject(i);
+            if (q == null) continue;
+            boolean paused = q.optBoolean("paused");
+            final int pct = Math.max(0, Math.min(100, q.optInt("pct")));
+            LinearLayout qv = new LinearLayout(this);
+            qv.setOrientation(LinearLayout.VERTICAL);
+            qv.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout top = new LinearLayout(this);
+            top.setOrientation(LinearLayout.HORIZONTAL);
+            TextView name = text(13, 0xFFF4F4F5, regular);
+            name.setSingleLine(true);
+            name.setEllipsize(TextUtils.TruncateAt.END);
+            name.setText(q.optString("name"));
+            top.addView(name, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView val = text(10.5f, 0xFFD4D4D8, Typeface.MONOSPACE);
+            val.setText(pct + "%");
+            top.addView(val);
+            qv.addView(top);
+            FrameLayout bar = new FrameLayout(this);
+            GradientDrawable track = new GradientDrawable();
+            track.setColor(0xFF1F1F25);
+            track.setCornerRadius(dp(3));
+            bar.setBackground(track);
+            View fill = new View(this);
+            GradientDrawable fd = new GradientDrawable();
+            fd.setColor(paused ? 0xFFFBBF24 : 0xFFFF6A4D);
+            fd.setCornerRadius(dp(3));
+            fill.setBackground(fd);
+            bar.addView(fill, new FrameLayout.LayoutParams(0, -1));
+            bar.post(() -> {
+                FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) fill.getLayoutParams();
+                lp.width = Math.round(bar.getWidth() * pct / 100f);
+                fill.setLayoutParams(lp);
+            });
+            LinearLayout.LayoutParams qbl = new LinearLayout.LayoutParams(-1, dp(5));
+            qbl.topMargin = dp(6);
+            qv.addView(bar, qbl);
+            TextView info = text(9.5f, 0xFF8B8B94, Typeface.MONOSPACE);
+            info.setSingleLine(true);
+            info.setEllipsize(TextUtils.TruncateAt.END);
+            info.setText(q.optString("info"));
+            LinearLayout.LayoutParams qil = new LinearLayout.LayoutParams(-1, -2);
+            qil.topMargin = dp(5);
+            qv.addView(info, qil);
+            addDivider(box, i > 0);
+            box.addView(qv, new LinearLayout.LayoutParams(-1, 0, 1f));
+        }
         JSONArray mons = col.optJSONArray("monitors");
         for (int i = 0; mons != null && i < mons.length(); i++) {
             JSONObject m = mons.optJSONObject(i);
@@ -880,7 +950,7 @@ public class HalActivity extends Activity {
             box.addView(r, new LinearLayout.LayoutParams(-1, 0, 1f));
         }
         JSONArray rows = col.optJSONArray("rows");
-        boolean first = (drives == null || drives.length() == 0) && (mons == null || mons.length() == 0);
+        boolean first = (drives == null || drives.length() == 0) && (mons == null || mons.length() == 0) && (queue == null || queue.length() == 0);
         for (int i = 0; rows != null && i < rows.length(); i++) {
             JSONArray row = rows.optJSONArray(i);
             if (row == null) continue;
@@ -1008,11 +1078,11 @@ public class HalActivity extends Activity {
         return "critical".equals(level) ? 0xFFFF6A4D : "warning".equals(level) ? 0xFFFBBF24 : "info".equals(level) ? 0xFF60A5FA : 0xFF34D399;
     }
 
-    /** One box: a title with a status in the corner, and six rows sharing the height evenly. */
+    /** One box: a title with a status in the corner, and five rows sharing the height evenly. */
     private static final int ROWS = 5;
 
     private class Box {
-        final LinearLayout body;
+        final LinearLayout body, root;
         final TextView status;
         final LinearLayout[] rows = new LinearLayout[ROWS];
         final TextView[] labels = new TextView[ROWS], values = new TextView[ROWS];
@@ -1021,6 +1091,7 @@ public class HalActivity extends Activity {
         Box(String title, LinearLayout parent, boolean gap) {
             okWord = "OK";
             LinearLayout box = new LinearLayout(HalActivity.this);
+            root = box;
             box.setOrientation(LinearLayout.VERTICAL);
             box.setPadding(dp(15), dp(13), dp(15), dp(10));
             GradientDrawable bg = card();
@@ -1065,6 +1136,13 @@ public class HalActivity extends Activity {
                 labels[i] = l;
                 values[i] = v;
             }
+        }
+
+        /** The PC isn't answering: dim, and say how old the numbers are. */
+        void stale(String seen) {
+            root.setAlpha(0.38f);
+            status.setText("\u25CF " + seen);
+            status.setTextColor(0xFF8B8B94);
         }
 
         void setStatus(String level, String okText, String problemText) {

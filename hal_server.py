@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.13.0"
+VERSION = "1.14.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1473,6 +1473,92 @@ def sab_today() -> int:
     return sum(1 for s in _sab_h_cache["v"].get("slots", []) if s["ok"] and s["t"] >= start)
 
 
+def nice_release(name: str) -> str:
+    """'The.Long.Orbit.2025.2160p.UHD.BluRay-X' -> 'The Long Orbit (2025)'; 'Show.S02E06.1080p' -> 'Show S02E06'."""
+    title = re.sub(r"[._]+", " ", re.sub(r"\.(nzb|mkv|mp4|avi)$", "", name or "", flags=re.I)).strip()
+    title = re.sub(r"\s+(2160p|1080p|720p|480p|WEB|BluRay|HDTV|x26[45]|HEVC|H\s?26[45]).*$", "", title, flags=re.I).strip() or (name or "")
+    return re.sub(r"\s((?:19|20)\d\d)$", r" (\1)", title)
+
+
+def _phone_api(hal, path: str):
+    """A GET from the NZB phone server HAL lives in (Sonarr/Radarr's calendar, saved searches). None if it can't."""
+    port = int(hal.settings.get("phone_port") or 8765)
+    try:
+        return http_json(f"http://127.0.0.1:{port}{path}", timeout=6, headers={"X-Mobile-Token": _token_bytes.decode()})
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def tv_downloads_page(hal, demo: bool = False) -> dict:
+    """The TV's Downloads details page: the queue, today, what's coming and saved searches."""
+    now = datetime.now()
+    clock = lambda dt: dt.strftime("%I:%M %p").lstrip("0")
+    if demo:
+        q = [{"name": "The Long Orbit (2025)", "pct": 59, "info": "38.2 MB/s · 12.8 GB to go · done " + clock(now + timedelta(minutes=12)) + " · movies"},
+             {"name": "Night Harbor S02E06", "pct": 0, "info": "queued · 2.1 GB · tv"},
+             {"name": "Halcyon Road (2024)", "pct": 12, "info": "paused · 25.0 GB to go · movies", "paused": True}]
+        return {"title": "Downloads", "level": "ok", "head": "DOWNLOADING · 3 IN QUEUE", "cols": [
+            {"key": "QUEUE", "badge": "38.2 MB/s", "queue": q},
+            {"key": "TODAY", "big": "6 done", "bigsub": "0 failed · 312 GB free on Z:",
+             "rows": [["Last finished", "", "ok"], ["The Long Orbit (2025)", clock(now - timedelta(minutes=50)), "ok"],
+                      ["Coldwater S04E02", clock(now - timedelta(hours=3)), "ok"], ["Night Harbor S02E05", "repair failed", "warning"]]},
+            {"key": "COMING UP", "rows": [["Night Harbor S02E06", "tomorrow 2 AM", "ok"], ["Glass Meridian II (2026)", "Sun", "ok"], ["The Quiet Sun S01E09", "Mon 1 AM", "ok"],
+                                          ["Saved searches", "", "ok"], ["glass meridian 2160p", "1 new", "info"], ["night harbor s03", "nothing new", "ok"]]}]}
+    cfg = nzb_config()
+    key = dpapi_unprotect(str(cfg.get("sab_api_key") or ""))
+    queue, head, level, badge = [], "SABNZBD ISN'T SET UP", "ok", ""
+    if key:
+        base = str(cfg.get("sab_url") or "http://127.0.0.1:8080").strip().rstrip("/")
+        try:
+            raw = http_json(f"{base}/api?mode=queue&output=json&limit=6&apikey={urllib.parse.quote(key)}")
+            if raw is None:
+                raise OSError("no answer")
+            qd = raw.get("queue") or {}
+            count = to_int(qd.get("noofslots_total") or qd.get("noofslots"))
+            badge = "" if qd.get("paused") else str(qd.get("speed") or "").strip().replace(" M", " MB/s").replace(" K", " KB/s")
+            for s in (qd.get("slots") or [])[:5]:
+                st_ = str(s.get("status") or "").lower()
+                bits = [st_ if st_ in ("queued", "paused") else "", f"{s.get('sizeleft')} to go" if s.get("sizeleft") else "",
+                        f"{s.get('timeleft')} left" if st_ == "downloading" and s.get("timeleft") else "", str(s.get("cat") or "")]
+                queue.append({"name": nice_release(str(s.get("filename") or "")), "pct": to_int(s.get("percentage")),
+                              "info": " · ".join(b for b in bits if b and b != "*"), "paused": st_ == "paused"})
+            head = ("PAUSED · " if qd.get("paused") else "DOWNLOADING · " if count else "") + (f"{count} IN QUEUE" if count else "NOTHING DOWNLOADING")
+        except Exception:  # noqa: BLE001
+            head, level = "SABNZBD ISN'T ANSWERING", "warning"
+    if time.time() - _sab_h_cache["t"] > 300:
+        _sab_h_cache.update(t=time.time(), v=sab_history())
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    hist = _sab_h_cache["v"].get("slots", [])
+    done = sum(1 for s in hist if s["ok"] and s["t"] >= start)
+    failed = sum(1 for s in hist if not s["ok"] and s["t"] >= start)
+    if failed:
+        level = "warning"
+    last = [[nice_release(s["name"])[:40], clock(datetime.fromtimestamp(s["t"])) if s["ok"] else "failed", "ok" if s["ok"] else "warning"]
+            for s in hist[:4] if s["t"]]
+    coming = []
+    up = (_phone_api(hal, "/api/arr/upcoming") or {}).get("items") or []
+    for x in [x for x in up if not x.get("has_file")][:4]:
+        name = f"{x['title']} S{to_int(x.get('season')):02d}E{to_int(x.get('episode')):02d}" if x.get("kind") == "episode" else f"{x['title']}" + (f" ({x['year']})" if x.get("year") else "")
+        when = ""
+        try:
+            dt = datetime.fromisoformat(str(x.get("when") or "").replace("Z", "+00:00")).astimezone()
+            days = (dt.date() - now.date()).days
+            when = ("today " if days == 0 else "tomorrow " if days == 1 else dt.strftime("%a ")) + dt.strftime("%I %p").lstrip("0") if x.get("kind") == "episode" else dt.strftime("%a" if days < 7 else "%b %d")
+        except ValueError:
+            pass
+        coming.append([name[:40], when.strip(), "ok"])
+    saved = ((_phone_api(hal, "/api/saved") or {}).get("searches") or [])[:3]
+    if saved:
+        coming.append(["Saved searches", "", "ok"])
+        coming += [[s.get("query", "")[:36], f"{len(s.get('new') or [])} new" if s.get("new") else "nothing new", "info" if s.get("new") else "ok"] for s in saved]
+    if not coming:
+        coming = [["Nothing coming up in the next two weeks", "", "ok"]]
+    return {"title": "Downloads", "level": level, "head": head, "cols": [
+        {"key": "QUEUE", "badge": badge, "queue": queue} if queue else {"key": "QUEUE", "rows": [["Nothing in the queue", "", "ok"]]},
+        {"key": "TODAY", "big": f"{done} done", "bigsub": f"{failed} failed today", "rows": ([["Last finished", "", "ok"]] + last) if last else [["Nothing finished yet", "", "ok"]]},
+        {"key": "COMING UP", "rows": coming}]}
+
+
 def tv_downloads(demo: bool = False) -> dict:
     """One line for the TV: what's downloading, or that nothing is."""
     if demo:
@@ -1489,9 +1575,7 @@ def tv_downloads(demo: bool = False) -> dict:
         return {"state": "idle", "title": "Nothing downloading", "info": " · ".join(x for x in (done_txt, "SABnzbd ready") if x)}
     if q["paused"]:
         return {"state": "paused", "title": "Downloads paused", "info": f"{q['count']} in the queue"}
-    title = re.sub(r"[._]+", " ", re.sub(r"\.(nzb|mkv|mp4|avi)$", "", q["name"], flags=re.I)).strip()
-    title = re.sub(r"\s+(2160p|1080p|720p|480p|WEB|BluRay|HDTV|x26[45]|HEVC|H\s?26[45]).*$", "", title, flags=re.I).strip() or q["name"]
-    title = re.sub(r"\s((?:19|20)\d\d)$", r" (\1)", title)
+    title = nice_release(q["name"])
     bits = [f"{q['pct']}%"]
     if q["kbps"] > 0:
         bits.append(sm.fmt_bytes(q["kbps"] * 1024) + "/s")
@@ -1878,7 +1962,8 @@ def tv_screen(st: dict) -> dict:
                     ["Ads blocked", (f"{int(ph.get('blocked') or 0):,} · {ph.get('percent') or 0:.0f}%" if ph.get("ok") else
                                      "paused" if ph.get("found") and ph.get("blocking") is False else "—") if ph.get("found") else "no Pi-hole",
                      lvl("pihole", "pihole_off")],
-                    ["Tailscale", "on" if n.get("tailscale") else "off", "ok"],
+                    (["New device", next((i.get("detail", "").split(" · ")[0] for i in issues if i["key"].startswith("newdev:")), "") or "joined", lvl("newdev")]
+                     if keys.get("newdev") else ["Tailscale", "on" if n.get("tailscale") else "off", "ok"]),
                     ["Security", "all on" if dfd.get("rtp") and fw_on else ("Defender off" if dfd and not dfd.get("rtp") else "firewall off" if not fw_on else "checking"),
                      lvl("defender", "firewall")]]}
     km = st.get("kuma") or {}
@@ -1904,7 +1989,7 @@ def tv_screen(st: dict) -> dict:
     except ValueError:
         pass
     record = " · ".join(x for x in (f"{ads_txt} ads blocked" + (f" since {since}" if since else ""),
-                                     f"{rec.get('days', 1)} days watching",
+                                     f"{rec.get('days', 1)} days on duty",
                                      f"{rec.get('power_cuts', 0)} power cut{'s' if rec.get('power_cuts') != 1 else ''} survived",
                                      f"longest uptime {(rec.get('longest_up') or 0) // 86400} days" if rec.get("longest_up") else "") if x)
     full_alerts = [{"level": i["level"], "title": i["title"], "detail": i.get("detail", "")} for i in issues if i["level"] != "info"]
@@ -2013,7 +2098,12 @@ def tv_details(hal) -> dict:
                                     ["Block lists", f"{(time.time() - ph['gravity_t']) / 86400:.0f} days old" if ph.get("gravity_t") else "—", "ok"],
                                     ["Sites blocked", f"{int(ph.get('domains') or 0):,}" if ph.get("domains") else "—", "ok"],
                                     ["Devices", str(ph.get("clients") or "—"), "ok"]]}]}
-    return {"pages": [pc, net, kuma, pi]}
+    try:
+        dl = tv_downloads_page(hal, bool(st.get("demo")))
+    except Exception as exc:  # noqa: BLE001 - the other pages still show
+        log.info("TV downloads page: %s", exc)
+        dl = {"title": "Downloads", "level": "warning", "head": "CAN'T READ IT", "cols": [{"key": "QUEUE", "rows": [["Couldn't read SABnzbd", ""]]}]}
+    return {"pages": [pc, net, kuma, pi, dl]}
 
 
 def tv_brief(st: dict) -> dict:
@@ -2023,11 +2113,14 @@ def tv_brief(st: dict) -> dict:
     det = (sab or {}).get("detail") or ""
     alerts = [{"level": i["level"], "title": i["title"]} for i in st["issues"] if i["level"] != "info"][:3]
     down = any(i["key"] in ("internet", "router") for i in st["issues"])
-    say = st["hal"]["greeting"] + " " + st["hal"]["quote"]
+    name = st["hal"]["name"]
+    quote = st["hal"]["quote"]
+    if name and name in st["hal"]["greeting"]:
+        quote = re.sub(r",\s*" + re.escape(name) + r"([.!?])$", r"\1", quote)   # "...attention, Dave." after "Good evening, Dave."
+    say = st["hal"]["greeting"] + " " + quote
     if alerts and alerts[0]["title"] not in say:
         say += " " + alerts[0]["title"] + "."
-    name = st["hal"]["name"]
-    lines = [{"text": st["hal"]["greeting"] + " " + st["hal"]["quote"], "say": spoken(say)}]
+    lines = [{"text": st["hal"]["greeting"] + " " + quote, "say": spoken(say)}]
     if not alerts:
         for q in random.sample(QUOTES_OK, min(4, len(QUOTES_OK))):
             q = q.format(name=name)
@@ -2038,7 +2131,7 @@ def tv_brief(st: dict) -> dict:
         lines.append({"text": q, "say": spoken(q)})
     for a in alerts[1:]:
         lines.append({"text": a["title"] + ".", "say": spoken(a["title"] + ".")})
-    return {"greeting": st["hal"]["greeting"], "say": spoken(say), "alerts": alerts, "voice": dict(TV_VOICE), "lines": lines[:8],
+    return {"greeting": st["hal"]["greeting"], "quote": quote, "say": spoken(say), "alerts": alerts, "voice": dict(TV_VOICE), "lines": lines[:8],
             "screen": tv_screen(st),
             "cpu_temp": v["cpu"].get("temp"), "mem_used": v["mem"].get("used"), "mem_total": v["mem"].get("total"),
             "ping": n.get("ping_ms"), "net_down": n.get("down"), "internet_down": down,
@@ -4598,7 +4691,7 @@ details.ev summary span.sub2{white-space:normal;overflow-wrap:anywhere}
 .alert.info{background:var(--card);border-color:#1f2a3a}
 .alert b{font-size:14px;display:block}.alert p{margin:3px 0 0;font-size:13px;color:var(--text)}
 div.alert{cursor:pointer}.alert .grow{flex:1;min-width:0}
-.snz{flex:none;align-self:center;border:0;border-radius:9px;background:rgba(255,255,255,.08);color:var(--soft);font:600 11px var(--mono);padding:7px 9px;margin-left:6px}
+.snz{flex:none;align-self:center;border:0;border-radius:9px;background:rgba(255,255,255,.08);color:var(--soft);font:600 11px var(--mono);padding:10px 11px;margin-left:6px;min-height:36px}
 .hidline{display:flex;align-items:center;justify-content:space-between;gap:10px;font:12px var(--mono);color:var(--muted);margin:-2px 2px 12px}
 .hidline button{background:none;border:0;color:var(--red2);font:700 11px var(--mono);letter-spacing:.06em;padding:4px 0}
 .alert .s{margin-top:5px}
@@ -5071,7 +5164,7 @@ async function loadEv(refresh){try{evData=await api('/api/winevents'+(refresh?'?
 
 /* ---------- navigation, refresh ---------- */
 function show(t){tab=t;['status','vitals','services','drives','shield','log','events'].forEach(k=>$('t-'+k).classList.toggle('hidden',k!==t));
-  document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.tab===(t==='log'?'status':t==='events'?'shield':t)));if(t==='events')loadEv(false);
+  document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.tab===(t==='log'&&!document.querySelector('#tabs [data-tab="log"]')?'status':t==='events'?'shield':t)));if(t==='events')loadEv(false);
   window.scrollTo(0,0);if(t==='log'){events=null;loadEvents()}if(t==='vitals')loadHist(true);if(t==='drives')loadCleanup();render()}
 // Don't redraw under a finger: a refresh that swaps a button between touch-down and touch-up loses the tap.
 let pressing=false,renderLater=false;
@@ -5093,6 +5186,7 @@ async function refresh(){if(busy)return;busy=true;try{const first=!S;S=await api
 // "App" button at the left of the tab bar goes back.
 const QP=new URLSearchParams(location.search);
 async function start(){$('app').classList.remove('hidden');$('tabs').classList.remove('hidden');
+  if(QP.get('embed')==='1'){const st=document.querySelector('#tabs [data-tab="status"]');if(st){st.dataset.tab='log';st.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Log'}}
   if(QP.get('from')==='app'&&!$('toapp'))$('tabs').insertAdjacentHTML('afterbegin','<button id="toapp" aria-label="Back to the app"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>App</button>');
   const want=QP.get('tab');if(want&&['status','vitals','services','drives','shield','log','events'].includes(want)&&!start.done)show(want);
   await refresh();
