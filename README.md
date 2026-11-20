@@ -3,10 +3,23 @@
 > "Good evening, Dave. Everything's running smoothly."
 
 NZB-CC runs on a Windows PC at home and pulls the house's downloads, media, PC and network into one place. You use it
-from three screens: **HAL 9000** on your phone, **HAL on the TV**, and the original **desktop command centers** on
-the PC. Find something, put it on the TV, turn it up, pause the ads, check the drives, restart a service, lock the
-PC: all from the couch, by tap or by voice ("Hey Siri, ask HAL, play Glass Meridian"). Nothing goes to a cloud service of its own: the phone talks to the PC over your Wi-Fi (or Tailscale when
-you're out), behind an access code.
+from three screens: **HAL 9000** on your phone, **the TV**, and the original **desktop command centers** on the PC.
+Find something, put it on the TV, turn it up, pause the ads, check the drives, restart a service, lock the PC: all
+from the couch, by tap or by voice ("Hey Siri, ask HAL, play Glass Meridian").
+
+**The TV runs an interface of our own.** We replaced the Sony's stock home screen, with its ads and promos, with
+our own build of the open-source CleanYourTV launcher, then built on it:
+- a clean one-line header with the time, the weather and the dollar-to-peso rate;
+- Kodi's recently watched shelf, which resumes with one press of OK;
+- "Ready to watch" cards when a download finishes;
+- a glass dock with just the apps we use;
+- **HAL 9000's own screen**: his eye, his voice, live boxes for the PC, the network, Uptime Kuma and the Raspberry
+  Pi, and five pages of details on the remote.
+
+The phone controls it: the volume, turning it on, putting HAL on screen, and knowing what's playing.
+
+Nothing goes to a cloud service of its own: the phone talks to the PC over your Wi-Fi (or Tailscale when you're
+out), behind an access code.
 
 | On the phone | On the TV | On the PC |
 |---|---|---|
