@@ -31,6 +31,38 @@ your Wi-Fi (or Tailscale when you're out), behind an access code.
 - **For fun**: chess against HAL, a full-screen wall display for a spare tablet, Siri ("Hey Siri, ask HAL"),
   a home-screen widget, and a song.
 
+## HAL on the TV
+
+The TV runs the NZB-CC launcher (in `tv-launcher/`), and it has a **HAL 9000 tile** on its home screen. Open it, or
+tap **Show HAL on the TV** in the phone app's Watch tab, and HAL's screen comes up over whatever is on:
+
+![HAL's screen on the TV](docs/tv-screenshots/1-hal-screen.png)
+
+- **HAL's eye** in the middle, with his line under it. The eye gets an amber or red ring when something needs you,
+  and the first alert shows under his line, with how many more there are.
+- **Four boxes**:
+  - **The PC**: CPU, graphics card, memory, how full each drive is, power and the UPS.
+  - **Network**: internet speed and ping, the router, ads blocked, Tailscale, security.
+  - **Uptime Kuma**: monitors that are down come first.
+  - **Raspberry Pi**: its temperature, load and memory, and Pi-hole's version.
+- **Along the bottom**: what SABnzbd is downloading, with a progress bar and when it'll be done.
+- **HAL talks**: he says his line when the screen opens, in a low, slow voice (tunable from the PC), and the eye
+  flares on every word. **OK** on the remote makes him talk again. From the phone you can make him say anything
+  (**Talk on the TV…**, with your own saved phrases).
+- **Details pages**: press **Down** for a full page each on the PC, the network, Uptime Kuma and the Raspberry Pi.
+  **Left** and **Right** move between them, and **Back** returns to HAL. They refresh every 15 seconds.
+
+| The PC | Network |
+|---|---|
+| ![The PC](docs/tv-screenshots/2-details-pc.png) | ![Network](docs/tv-screenshots/3-details-network.png) |
+| **Uptime Kuma** | **Raspberry Pi** |
+| ![Uptime Kuma](docs/tv-screenshots/4-details-uptime-kuma.png) | ![Raspberry Pi](docs/tv-screenshots/5-details-raspberry-pi.png) |
+
+(These pictures are drawn from HAL's demo data, so the numbers aren't real.)
+
+The screen drifts a little every few minutes so nothing burns in. **Update everything** puts new versions of
+the TV app on the TV by itself, and never while you're watching something.
+
 ## How it fits together
 
 ```
