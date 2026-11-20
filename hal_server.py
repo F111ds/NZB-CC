@@ -1934,7 +1934,8 @@ class FunMixin:
             k = (_phone_api(self, "/api/home") or {}).get("kodi") or {}
             p = k.get("playing") or {}
             if p:
-                say = f"You're watching {p.get('title')}" + (f", {p['sub']}" if p.get("sub") else "") + (", paused" if p.get("paused") else "") + "."
+                say = (f"You're watching {p.get('title')}" + (f", {p['sub']}" if p.get("sub") else "")
+                       + (", streaming from Usenet" if p.get("source") == "usenet" else "") + (", paused" if p.get("paused") else "") + ".")
             elif k.get("front_title"):
                 say = f"You're watching {k['front_title']} on {k['front']}."
             elif k.get("front"):

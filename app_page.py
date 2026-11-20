@@ -183,6 +183,11 @@ body.noscroll{overflow:hidden}
 .qb{border:0;border-radius:14px;background:var(--card);color:var(--text);padding:10px 4px;font-size:12px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:4px}.qb span{font-size:20px}.qb.warn{color:var(--amber)}
 .cardbtn{display:block;width:100%;text-align:left;border:0;color:inherit;font:inherit}
 .drow{display:flex;align-items:center;gap:10px;margin-top:10px}.drow b{font:700 13px var(--mono);width:26px}.dbar{flex:1;height:6px;border-radius:3px;background:#222227;overflow:hidden}.dbar i{display:block;height:100%;border-radius:3px}
+/* Usenet streaming: where something plays from (blue = Usenet, grey = the PC) */
+.srcchip{display:inline-block!important;width:auto!important;font:700 11px var(--mono)!important;letter-spacing:.12em!important;border-radius:6px;padding:3px 7px!important;margin:0 0 0 8px!important;vertical-align:middle!important;position:relative;top:-2px;white-space:nowrap}
+.srcchip.u{color:var(--sky)!important;background:rgba(96,165,250,.14)}.srcchip.p{color:var(--soft)!important;background:rgba(255,255,255,.07)}
+.stbtns{display:flex;flex-direction:column;gap:8px;flex:none}.stbtns .btn{white-space:nowrap}
+.stbusy i{width:35%;background:var(--amber);animation:stbusy 1.4s ease-in-out infinite}@keyframes stbusy{0%{margin-left:-35%}100%{margin-left:100%}}
 .dfree{font:12px var(--mono);color:var(--soft);min-width:96px;text-align:right}
 .linkish{background:none;border:0;padding:0;cursor:pointer}
 .tvvol{display:grid;grid-template-columns:auto 1fr 1.4fr 1fr;gap:8px;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.07)}
@@ -330,7 +335,7 @@ function greeting(){const h=new Date().getHours();return'Good '+(h>=5&&h<12?'mor
 function issues(){return S?S.issues.filter(i=>LV[i.level]>=2):[]}
 // What HAL says on Home: downloads, the TV, and anything that needs you, in one or two sentences.
 function homeLine(){if(!H&&!S)return'I\'m thinking…';const parts=[],iss=issues(),crit=iss.find(i=>i.level==='critical');
-  const kp=H&&H.kodi&&H.kodi.playing,fa=H&&H.kodi&&H.kodi.front,ft=fa&&H.kodi.front_title,tvl=kp?'You\'re watching '+kp.title+'.':ft?'You\'re watching '+ft+' on '+fa+'.':fa?fa+' is on the TV.':'';
+  const kp=H&&H.kodi&&H.kodi.playing,fa=H&&H.kodi&&H.kodi.front,ft=fa&&H.kodi.front_title,tvl=kp?'You\'re watching '+kp.title+(kp.source==='usenet'?', streaming from Usenet':'')+'.':ft?'You\'re watching '+ft+' on '+fa+'.':fa?fa+' is on the TV.':'';
   if(crit)return'I\'m sorry, '+NAME()+'. '+crit.title+'.'+(tvl?' '+tvl:'');
   const cur=DESK&&H&&H.current,n=H?H.total||0:0;
   if(cur&&!H.paused){const s=secsOf(cur.eta);const at=s!=null&&s<86400?' by '+clock(Date.now()+s*1000):'';parts.push(n>1?n+' downloads are on their way'+(at?', the first one'+at:'')+'.':'One download finishes'+(at||' soon')+'.')}
@@ -359,8 +364,9 @@ function tvCard(full){const k=H&&H.kodi;const p=k&&k.playing;
   if(!p&&k&&k.front){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span><span class="mono" style="color:#e8a598">● ON</span></h3>'+(k.front_title?'<div class="tt" style="font-size:17px">'+esc(k.front_title)+'</div><div class="sub">'+esc([k.front_sub,'on '+k.front,k.front_paused?'paused':''].filter(Boolean).join(' · '))+'</div>':'<div class="tt">'+esc(k.front)+' is on, '+esc(NAME())+'.</div><div class="sub">Kodi\'s there when you want it.</div>')+tvVol()+'</div>'}
   if(!p){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span></h3><div class="tt">Nothing\'s playing, '+esc(NAME())+'.</div><div class="sub">'+(k&&k.configured===false?'Kodi isn\'t set up yet.':k&&k.online===false?'Kodi isn\'t answering (the TV may be off).':'Kodi is ready when you are.')+'</div>'+
     (H&&H.tv_ready?'<button class="btn r wide" style="margin-top:12px" data-tvon>Turn the TV on and open Kodi</button>':'')+tvVol()+'</div>'}
-  return'<div class="card tvcard"><h3><span class="k">NOW ON THE TV</span>'+(full?'':'<button class="btn" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'▶ Play':'❚❚ Pause')+'</button>')+'</h3>'+
-    '<div class="tt" style="font-size:'+(full?17:14)+'px">'+esc(p.title)+'</div><div class="sub">'+esc((p.sub?p.sub+' · ':'')+mmss(p.time)+' / '+mmss(p.total))+'</div><div class="bar"><i style="width:'+(p.pct||0)+'%;background:#ffb4a8"></i></div>'+
+  const us=p.source==='usenet',chip=H&&H.stream_ready||us?srcChip(p.source):'';
+  return'<div class="card tvcard"><h3>'+(chip?'<span style="display:flex;align-items:center"><span class="k">NOW ON THE TV</span>'+chip+'</span>':'<span class="k">NOW ON THE TV</span>')+(full?'':'<button class="btn" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'▶ Play':'❚❚ Pause')+'</button>')+'</h3>'+
+    '<div class="tt" style="font-size:'+(full?17:14)+'px">'+esc(p.title)+'</div><div class="sub">'+esc((p.sub?p.sub+' · ':'')+mmss(p.time)+' / '+mmss(p.total)+(chip&&full?(us?' · streaming from Usenet':' · from your movie folders'):''))+'</div><div class="bar"><i style="width:'+(p.pct||0)+'%;background:'+(us?'var(--sky)':'#ffb4a8')+'"></i></div>'+
     (full?'<div class="remote"><button data-kc="seek_back" data-pid="'+p.playerid+'">⏪</button><button class="on" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'▶':'❚❚')+'</button><button data-kc="seek_fwd" data-pid="'+p.playerid+'">⏩</button><button data-kc="stop" data-pid="'+p.playerid+'">■</button><button data-kc="next" data-pid="'+p.playerid+'">⏭</button></div>'+
       tvVol():'')+'</div>'}
 // The TV's own volume (any app, not just Kodi). Quick taps add up and go as one.
@@ -496,7 +502,7 @@ function rGet(){let x='<div class="narrow">'+topbar('Get')+queueTop()+'<form cla
   if(results&&!searching){const list=shownResults(),sz=sortBy==='size_desc'?'Size ↓':sortBy==='size_asc'?'Size ↑':'Size';
     x+='<div class="chiprow"><span>SORT</span>'+SORTS.map(o=>{const on=o[0]==='size'?sortBy.startsWith('size'):sortBy===o[0];return'<button data-sort="'+o[0]+'" class="'+(on?'on':'')+'">'+(o[0]==='size'?sz:o[1])+'</button>'}).join('')+'</div>';
     results.shown=list;
-    x+='<div class="sec"><span>'+list.length+' RESULT'+(list.length===1?'':'S')+(getCat?' · '+(getCat==='2000'?'MOVIES':'TV'):'')+'</span><button data-clear>CLEAR</button></div><div class="list">'+(list.length?list.slice(0,80).map(r=>'<div class="row"><span class="t"><b class="rname">'+brk(r.title)+'</b>'+resBadges(r)+(r.indexer?'<span>'+esc(r.indexer)+'</span>':'')+'</span>'+(r.added?'<span class="pill">ADDED</span>':'<button class="btn g" data-add="'+esc(r.id)+'">+ Add</button>')+'</div>').join(''):'<div class="empty">Nothing found, '+esc(NAME())+'. Try fewer words.</div>')+'</div>'}
+    x+='<div class="sec"><span>'+list.length+' RESULT'+(list.length===1?'':'S')+(getCat?' · '+(getCat==='2000'?'MOVIES':'TV'):'')+'</span><button data-clear>CLEAR</button></div><div class="list">'+(list.length?list.slice(0,80).map(r=>'<div class="row"><span class="t"><b class="rname">'+brk(r.title)+'</b>'+resBadges(r)+(r.indexer?'<span>'+esc(r.indexer)+'</span>':'')+'</span>'+(r.added?'<span class="pill">ADDED</span>':H&&H.stream_ready?'<span class="stbtns"><button class="btn r" data-stream="'+esc(r.id)+'">▶ Stream</button><button class="btn g" data-add="'+esc(r.id)+'">+ Add</button></span>':'<button class="btn g" data-add="'+esc(r.id)+'">+ Add</button>')+'</div>').join(''):'<div class="empty">Nothing found, '+esc(NAME())+'. Try fewer words.</div>')+'</div>'}
   if(results&&!searching&&lastQuery)x+='<button class="btn wide" data-savesearch style="margin:-2px 0 12px">☆ Save this search: tell me when something new turns up</button>';
   x+='<div class="seg">'+[['upcoming','Coming up'],['history','History'],['saved','Saved']].map(s=>'<button data-seg="'+s[0]+'" class="'+(getSeg===s[0]?'on':'')+'">'+s[1]+'</button>').join('')+'</div>';
   if(getSeg==='history')x+=historyList();
@@ -795,11 +801,14 @@ function renderTalk(){const on=TVP.open||tvOpen(),chips=(a,saved)=>'<div class="
 
 const mins=s=>s>=3600?Math.floor(s/3600)+' h '+String(Math.round(s%3600/60)).padStart(2,'0'):Math.round(s/60)+' min';
 function movieRow(m,finish){const meta=[m.year,m.runtime?mins(m.runtime):'',m.imdb?'IMDb '+Number(m.imdb).toFixed(1):'',finish&&m.runtime?mins(Math.max(0,m.runtime-m.resume))+' left':'',!finish&&m.watched?'watched':''].filter(Boolean).join(' · ');
-  return'<div class="row"><span class="s'+(m.watched?' off':'')+'"></span><button class="t" data-item="movie:'+m.id+'"><b>'+esc(m.title)+'</b><span>'+esc(meta)+'</span></button><button class="btn r" data-movie="'+m.id+'">▶ TV</button></div>'}
+  return'<div class="row"><span class="s'+(m.watched?' off':'')+'"></span><button class="t" data-item="movie:'+m.id+'"><b>'+esc(m.title)+(K&&K.streams&&K.streams.configured?srcChip('pc'):'')+'</b><span>'+esc(meta)+'</span></button><button class="btn r" data-movie="'+m.id+'">▶ TV</button></div>'}
 function rWatch(){if(libView)return rLibrary();let x='<div class="narrow">'+topbar('Watch')+tvCard(true)+halTvCard();
   if(K===null)x+='<div class="list"><div class="empty">I\'m asking Kodi…</div></div>';
   else if(K.online===false&&K.configured!==false)x+='<div class="list"><div class="empty">Kodi isn\'t answering, '+esc(NAME())+'. '+(H&&H.tv_ready?'Turn the TV on above.':'Turn the TV on and open Kodi.')+'</div></div>';
   const c=K&&K.continue||[];if(c.length)x+='<div class="sec"><span>CONTINUE WATCHING</span></div><div class="list">'+c.map(it=>'<div class="row"><span class="s"></span><span class="t"><b>'+esc(it.show.title+' · S'+it.episode.season+' E'+it.episode.episode)+'</b><span>'+esc(it.episode.title+' · '+it.show.watched+' of '+it.show.episodes+' watched')+'</span></span><button class="btn r" data-ep="'+it.episode.id+'">▶ TV</button></div>').join('')+'</div>';
+  const st=K&&K.streams&&K.streams.items||[];
+  if(st.length)x+='<div class="sec"><span>STREAMED LATELY</span></div><div class="list">'+st.slice(0,6).map(it=>'<div class="row"><span class="s'+(it.played?' off':'')+'"></span><span class="t"><b>'+esc(it.title)+srcChip('usenet')+'</b><span>'+esc([it.year,it.res,it.played?'watched '+ago(it.played):'streamed '+ago(it.t)].filter(Boolean).join(' · '))+'</span></span><button class="btn r" data-sttv="'+esc(it.id)+'">▶ TV</button></div>').join('')+'</div>'+
+    '<p class="hint" style="text-align:left;margin-top:-4px">Streamed movies aren\'t on your PC. They play while AltMount is running.</p>';
   const rec=K&&K.recent||[],part=rec.filter(m=>m.resume>60&&!m.watched);
   if(part.length)x+='<div class="sec"><span>FINISH WATCHING</span></div><div class="list">'+part.slice(0,4).map(m=>movieRow(m,true)).join('')+'</div>';
   const fresh=rec.filter(m=>!part.includes(m));
@@ -879,6 +888,50 @@ async function loadUpcoming(){if(UP&&Date.now()-loadUpcoming.t<600000)return;try
 async function loadKodi(){try{K=await api('/api/kodi');if(tab==='watch')render()}catch(e){K={continue:[]};if(tab==='watch')render()}}
 async function act(fn,ok){try{const r=await fn();if(ok)toast(typeof ok==='function'?ok(r):ok);setTimeout(()=>{refresh();if(tab==='get')loadQueue()},600)}catch(e){toast(e.message,true)}}
 
+/* ---------- Usenet streaming (AltMount): Stream on a result, then play on the TV or the phone ---------- */
+let STJ=null,STT=null;const STFAILED=new Set();
+const ICO_CLOUD='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" style="vertical-align:-1px;margin-right:5px"><path d="M7 18h10a4 4 0 0 0 .5-8 6 6 0 0 0-11.4 1.6A3.3 3.3 0 0 0 7 18z"/></svg>';
+const ICO_PC='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" style="vertical-align:-1px;margin-right:5px"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>';
+function srcChip(src){return src==='usenet'?'<span class="srcchip u">'+ICO_CLOUD+'USENET</span>':src==='pc'?'<span class="srcchip p">'+ICO_PC+'ON YOUR PC</span>':''}
+function stStep(state,text,sub){const col=state==='done'?'var(--green)':state==='now'?'var(--amber)':'var(--muted)',mark=state==='done'?'✓':state==='now'?'●':'○';
+  return'<div class="row"><span style="width:22px;flex:none;color:'+col+';font-weight:700;text-align:center">'+mark+'</span><span class="t"><b style="color:'+(state==='next'?'var(--muted)':'var(--white)')+'">'+esc(text)+'</b>'+(sub?'<span>'+esc(sub)+'</span>':'')+'</span></div>'}
+function nextStreamable(rid){const list=(results&&results.shown)||results||[];const i=list.findIndex(x=>x.id===rid);return list.slice(i+1).find(x=>!x.added&&!STFAILED.has(x.id))||list.find(x=>x.id!==rid&&!x.added&&!STFAILED.has(x.id))||null}
+async function openStream(id){const r=(results||[]).find(x=>x.id===id);clearTimeout(STT);
+  STJ={id:null,rid:id,title:r?r.title:'',release:r?r.title:'',res:r?r.res:'',size:r?r.size:'',state:'working',stage:'nzb',elapsed:0};renderStream(true);
+  try{Object.assign(STJ,await api('/api/stream',{id}),{rid:id});renderStream();pollStream()}catch(e){Object.assign(STJ,{state:'failed',kind:/set up|Connections/.test(e.message)?'setup':'other',message:e.message});renderStream()}}
+function pollStream(){clearTimeout(STT);if(!STJ||STJ.state!=='working'||!STJ.id)return;const job=STJ.id;
+  STT=setTimeout(async()=>{if(!STJ||STJ.id!==job)return;try{Object.assign(STJ,await api('/api/stream/status?job='+encodeURIComponent(job)))}catch(e){Object.assign(STJ,{state:'failed',kind:'other',message:e.message})}
+    if(STJ.state==='failed')STFAILED.add(STJ.rid);
+    if($('stsheet')&&!$('sheet').classList.contains('hidden'))renderStream();
+    else if(STJ.state==='ready')toast(STJ.title+' is ready to stream, '+NAME()+'. It\'s in Watch › Streamed lately.');
+    pollStream()},1500)}
+function renderStream(open){const j=STJ;if(!j)return;const n=esc(NAME());let x='<div id="stsheet">';
+  const name=j.title?(j.year?j.title+' ('+j.year+')':j.title):'This release';
+  if(j.state==='working'){x+='<h2 style="margin:0 0 4px">'+esc(name)+'</h2><p class="hint" style="text-align:left;margin:0 0 12px">'+esc([j.res,j.size].filter(Boolean).join(' · ')||j.release||'')+'</p>'+
+      '<div class="card"><h3><span class="k">GETTING IT READY</span><span class="mono" style="color:var(--amber)">● '+mmss(j.elapsed||0)+'</span></h3><div class="drow" style="margin-top:12px"><span class="dbar stbusy" style="flex:1"><i></i></span></div></div>'+
+      '<div class="list">'+stStep(j.stage==='nzb'?'now':'done','Getting the NZB','From your indexer')+stStep(j.stage==='check'?'now':'next','Checking it\'s all there','AltMount asks your provider for a sample of the pieces')+stStep('next','Ready to play')+'</div>'+
+      '<p class="hint" style="text-align:left">Nothing downloads, '+n+'. This usually takes under a minute.</p><button class="btn wide" data-stcancel>Cancel</button>'}
+  else if(j.state==='ready'){x+='<h2 style="margin:0 0 4px">Ready to watch</h2><p class="hint" style="text-align:left;margin:0 0 14px">'+esc([name,j.res].filter(Boolean).join(' · '))+'</p>'+
+      '<div class="card"><h3><span class="k" style="color:var(--sky)">'+ICO_CLOUD+'STREAMING FROM USENET</span><span class="mono" style="color:var(--green)">● READY</span></h3><div class="sub" style="margin-top:8px;color:var(--soft);font-size:13px">Takes no disk space · plays as long as AltMount is running on the PC</div></div>'+
+      '<button class="btn r wide big" data-sttv="'+esc(j.stream_id)+'" style="margin-top:4px">📺 Play on TV</button><button class="btn wide" data-stphone="'+esc(j.stream_id)+'" style="margin-top:10px">Watch on phone</button>'+
+      (j.rid?'<div class="sec"><span>WANT TO KEEP IT?</span></div><button class="btn g wide" data-stkeep="'+esc(j.rid)+'">+ Download a copy too</button><p class="hint" style="text-align:left">Sends it to SABnzbd as usual, so it stays in your library even when the stream is gone.</p>':'')+
+      '<button class="btn wide" data-stclose style="margin-top:6px">Close</button>'}
+  else if(j.state==='failed'){const setup=j.kind==='setup'||j.kind==='offline',next=setup?null:nextStreamable(j.rid);
+    x+='<h2 style="margin:0 0 4px">'+(setup?'Streaming needs a hand':'Can\'t stream this one')+'</h2><p class="hint" style="text-align:left;margin:0 0 12px">'+esc(j.release||'')+'</p><div class="warnbox">'+esc(j.message||'Something went wrong.')+'</div>';
+    if(next)x+='<div class="sec"><span>TRY ANOTHER RELEASE</span></div><div class="list"><div class="row"><span class="t"><b class="rname">'+brk(next.title)+'</b>'+resBadges(next)+'</span><button class="btn r" style="flex:none" data-stream="'+esc(next.id)+'">▶ Stream</button></div></div>';
+    if(j.rid&&!setup)x+='<div class="sec"><span>'+(next?'OR':'DOWNLOAD IT INSTEAD')+'</span></div><button class="btn g wide big" data-stkeep="'+esc(j.rid)+'">+ Download it instead</button>';
+    if(setup)x+='<button class="btn wide" data-conn style="margin-top:6px">Open Connections</button>';
+    x+='<button class="btn wide" data-stclose style="margin-top:8px">Close</button>'}
+  else{$('sheet').classList.add('hidden');return}
+  $('panel').innerHTML=x+'</div>';if(open)$('sheet').classList.remove('hidden')}
+async function streamTv(id){try{const r=await api('/api/stream/tv',{stream:id});$('sheet').classList.add('hidden');
+    toast(r.started_tv?'Turning the TV on. '+r.title+' starts in a moment, '+NAME()+'.':'On the TV now, '+NAME()+'. Streaming from Usenet.');setTimeout(()=>{refresh();loadKodi()},2500)}catch(e){toast(e.message,true)}}
+async function streamPhone(id){try{const r=await api('/api/stream/phone',{stream:id});const ios=/iPhone|iPad|iPod/.test(navigator.userAgent),android=/Android/.test(navigator.userAgent);
+    toast('Opening it in VLC. If nothing happens, install VLC from the '+(android?'Play Store':'App Store')+'.');
+    if(ios)location.href='vlc-x-callback://x-callback-url/stream?url='+encodeURIComponent(r.url);
+    else if(android)location.href='intent:'+r.url.replace(/^https?:/,'')+'#Intent;scheme=http;type=video/*;package=org.videolan.vlc;end';
+    else window.open(r.url,'_blank')}catch(e){toast(e.message,true)}}
+
 /* ---------- settings ---------- */
 /* ---------- Connections: SABnzbd, indexers, Kodi (the desktop app's settings, edited here) ---------- */
 let CONN=null;
@@ -923,19 +976,26 @@ function renderConn(){const c=CONN;
   if(c.km)x+='<div class="cbox" style="margin-top:14px"><h3>Uptime Kuma <button class="btn" data-ctest="kuma">Test</button></h3>'+
      '<label class="fld">Address</label><input class="inp" id="c_km_url" value="'+esc(c.km.url)+'" placeholder="192.168.68.63:3001" autocapitalize="off" autocorrect="off" inputmode="url">'+
      '<label class="fld">API key (Uptime Kuma › Settings › API Keys)</label><input class="inp" id="c_km_key" type="password" placeholder="'+keyPh(c.km.key_set,'key')+'" autocomplete="off"></div>';
+  const am=c.altmount||{url:'',key_set:false};
+  x+='<div class="cbox" style="margin-top:14px"><h3>AltMount (Usenet streaming) <button class="btn" data-ctest="altmount">Test</button></h3>'+
+     '<label class="fld">Address</label><input class="inp" id="c_am_url" value="'+esc(am.url)+'" placeholder="http://localhost:8090" autocapitalize="off" autocorrect="off" inputmode="url">'+
+     '<label class="fld">API key (AltMount › Configuration › System)</label><input class="inp" id="c_am_key" type="password" placeholder="'+keyPh(am.key_set,'key')+'" autocomplete="off"></div>'+
+     '<p class="hint" style="text-align:left">Leave AltMount\'s address blank to hide the Stream buttons.</p>';
   x+='<p class="hint" style="text-align:left">Jellyfin and the TV\'s power settings are in the classic app (Jellyfin and Kodi tabs).</p>';
   x+='<button class="btn r wide" id="csave" style="margin-top:6px">Save</button><button class="btn wide" id="cclose" style="margin-top:8px">Close</button>';
   $('panel').innerHTML=x;$('cclose').onclick=()=>$('sheet').classList.add('hidden');$('csave').onclick=saveConn}
-function readConn(){const c=CONN;if(c.km&&$('c_km_url')){c.km.newurl=$('c_km_url').value.trim();c.km.key=$('c_km_key').value.trim()}if(c.ph&&$('c_ph_url')){c.ph.newurl=$('c_ph_url').value.trim();c.ph.pw=$('c_ph_pw').value}c.sab.url=$('c_sab_url').value;c.sab.key=$('c_sab_key').value;c.kodi.url=$('c_kodi_url').value;c.kodi.username=$('c_kodi_user').value;c.kodi.pw=$('c_kodi_pw').value;
+function readConn(){const c=CONN;if(c.km&&$('c_km_url')){c.km.newurl=$('c_km_url').value.trim();c.km.key=$('c_km_key').value.trim()}if(c.ph&&$('c_ph_url')){c.ph.newurl=$('c_ph_url').value.trim();c.ph.pw=$('c_ph_pw').value}c.sab.url=$('c_sab_url').value;c.sab.key=$('c_sab_key').value;if($('c_am_url')){c.am_url=$('c_am_url').value.trim();c.am_key=$('c_am_key').value.trim()}c.kodi.url=$('c_kodi_url').value;c.kodi.username=$('c_kodi_user').value;c.kodi.pw=$('c_kodi_pw').value;
   document.querySelectorAll('[data-ix]').forEach(el=>{const ix=c.indexers[Number(el.dataset.ix)];ix[el.dataset.f]=el.type==='checkbox'?el.checked:el.value})}
 async function saveConn(){readConn();const c=CONN;const body={sab_url:c.sab.url,sab_api_key:(c.sab.key||'').trim(),kodi_url:c.kodi.url,kodi_username:c.kodi.username,kodi_password:c.kodi.pw||'',
     indexers:c.indexers.map(ix=>({index:ix.orig,name:ix.name,url:ix.url,enabled:!!ix.enabled,api_key:(ix.api_key||'').trim()}))};
+  if(c.am_url!==undefined){body.altmount_url=c.am_url;body.altmount_key=c.am_key||''}
   if(c.km&&(c.km.key||c.km.newurl!==(c.km.url||''))){try{await api('/hal/api/kuma',{url:c.km.newurl,key:c.km.key||''})}catch(e){toast('Uptime Kuma: '+e.message,true);return}}
   if(c.ph&&(c.ph.pw||c.ph.newurl!==(c.ph.url||''))){try{await api('/hal/api/pihole',{url:c.ph.newurl,password:c.ph.pw||''})}catch(e){toast('Pi-hole: '+e.message,true);return}}
   try{const r=await api('/api/connections',body);toast(r.warning?'Saved, but: '+r.warning:'Saved. I\'ll use the new settings from now on, '+NAME()+'.',!!r.warning);$('sheet').classList.add('hidden');CONN=null;refresh()}catch(e){toast(e.message,true)}}
 async function testConn(what,i){readConn();const c=CONN;let body={what};
   if(what==='sab')body={what,url:c.sab.url,key:(c.sab.key||'').trim()};
   if(what==='kodi')body={what,url:c.kodi.url,username:c.kodi.username,password:c.kodi.pw||''};
+  if(what==='altmount')body={what,url:c.am_url||'',key:c.am_key||''};
   if(what==='indexer'){const ix=c.indexers[i];body={what,index:ix.orig,url:ix.url,key:(ix.api_key||'').trim()}}
   if(what==='kuma'){toast('Asking Uptime Kuma…');try{const r=await api('/hal/api/kuma',{action:'test',url:c.km.newurl,key:c.km.key||''});toast(r.message,!r.ok)}catch(e){toast(e.message,true)}return}
   if(what==='pihole'){toast('Looking for the Pi-hole…');try{const r=await api('/hal/api/pihole',{action:'test',url:c.ph.newurl,password:c.ph.pw||''});toast(r.message,!r.ok)}catch(e){toast(e.message,true)}return}
@@ -981,6 +1041,12 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if(c.id==='heye'){if(voiceOn){speechSynthesis.cancel();voiceOn=false;return}unlocked=true;talk(c,$('hquote'),greeting()+' '+lastQuote,CAN_SPEAK);return}
   if(d.q){act(()=>api('/api/queue/'+d.q,{}),d.q==='pause'?'Downloads paused.':'Downloads resumed.');return}
   if(d.qi){if(d.qi==='delete'&&!confirm('Remove '+(d.name||'this download')+' from the queue?'))return;act(()=>api('/api/queue/item',{id:d.id,action:d.qi}),d.qi==='delete'?'Removed.':null);return}
+  if(d.stream){openStream(d.stream);return}
+  if(d.sttv){c.disabled=true;c.textContent='Starting…';streamTv(d.sttv).finally(()=>{c.disabled=false;c.textContent=c.closest('.row')?'▶ TV':'📺 Play on TV'});return}
+  if(d.stphone){streamPhone(d.stphone);return}
+  if(d.stkeep){c.disabled=true;c.textContent='Adding…';api('/api/add',{id:d.stkeep,category:'',priority:''}).then(r=>{const it=(results||[]).find(x=>x.id===d.stkeep);if(it)it.added=true;c.textContent='Added ✓';toast('Added'+(r.category?' to '+r.category:'')+'. I\'ll let you know when it\'s ready, '+NAME()+'.');render();loadQueue()}).catch(err=>{c.disabled=false;c.textContent='+ Download';toast(err.message,true)});return}
+  if('stcancel' in d){if(STJ&&STJ.id)api('/api/stream/cancel',{job:STJ.id}).catch(()=>{});STJ=null;clearTimeout(STT);$('sheet').classList.add('hidden');return}
+  if('stclose' in d){$('sheet').classList.add('hidden');return}
   if(d.add){c.disabled=true;c.textContent='Adding…';api('/api/add',{id:d.add,category:'',priority:''}).then(r=>{const it=(results||[]).find(x=>x.id===d.add);if(it)it.added=true;toast('Added'+(r.category?' to '+r.category:'')+'. I\'ll let you know when it\'s ready, '+NAME()+'.');render();loadQueue()}).catch(err=>{c.disabled=false;c.textContent='+ Add';toast(err.message,true)});return}
   if('clear' in d){results=null;lastQuery='';render();return}
   if(d.cat!==undefined){getCat=d.cat;LS.set('app_cat',getCat);const q=($('sq')&&$('sq').value.trim())||lastQuery;if(q&&(results||searching))doSearch(q);else render();return}
