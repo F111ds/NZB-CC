@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.11.1"
+VERSION = "1.11.2"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2099,18 +2099,33 @@ _tv_front = {"t": 0.0, "ok_t": 0.0, "pkg": "", "activity": "", "busy": False, "e
 
 def _tv_media_parse(out: str) -> dict:
     """What each app says it's playing (Android's media sessions): {package: {"title", "sub", "state"}}.
-    From `dumpsys media_session` lines: package=..., state=PlaybackState {state=3, ...}, metadata: size=N, description=Title, Sub, Desc."""
+    Reads the whole `dumpsys media_session`: a session starts at a "package=" line (or an "pkg/tag (userId=" header);
+    its state is "state=PlaybackState {state=3" (older Android) or "{mState=3(PLAYING)" (newer); its title is in
+    "metadata: size=N, description=Title, Sub, Desc", or a "METADATA_KEY_TITLE"/"android.media.metadata.TITLE" line."""
     found, pkg = {}, ""
+
+    def put(p):
+        return found.setdefault(p, {"title": "", "sub": "", "state": 0})
+
     for line in (out or "").splitlines():
         s = line.strip()
+        head = re.match(r"(?:\S+\s+)?([A-Za-z][\w.]+\.[\w.]+)/\S*\s+\(userId=", s)
         if s.startswith("package="):
-            pkg = s[8:].strip()
-            found.setdefault(pkg, {"title": "", "sub": "", "state": 0})
-        elif pkg and s.startswith("state=PlaybackState"):
-            m = re.search(r"state=(\d+)", s[19:])
+            pkg = s[8:].split()[0].strip() if s[8:].strip() else ""
+            if pkg:
+                put(pkg)
+            continue
+        if head:
+            pkg = head.group(1)
+            put(pkg)
+            continue
+        if not pkg:
+            continue
+        if "PlaybackState" in s:
+            m = re.search(r"\bm?[Ss]tate=(\d+)", s.split("PlaybackState", 1)[1])
             if m:
                 found[pkg]["state"] = int(m.group(1))
-        elif pkg and s.startswith("metadata:") and "description=" in s:
+        elif "description=" in s and ("metadata" in s.lower()):
             parts = s.split("description=", 1)[1].strip().split(", ")
             while parts and parts[-1].strip() in ("null", ""):
                 parts.pop()
@@ -2119,6 +2134,10 @@ def _tv_media_parse(out: str) -> dict:
             title, sub = (parts[0], "") if len(parts) == 1 else (parts[0], parts[1]) if len(parts) == 2 else (", ".join(parts[:-2]), parts[-2])
             if not found[pkg]["title"] or found[pkg]["state"] in (2, 3):
                 found[pkg].update(title=title.strip()[:120], sub=sub.strip()[:80])
+        elif not found[pkg]["title"]:
+            m = re.search(r"(?:METADATA_KEY_TITLE|android\.media\.metadata\.(?:DISPLAY_)?TITLE)\W+(.+)", s)
+            if m and m.group(1).strip() not in ("null", ""):
+                found[pkg]["title"] = m.group(1).strip().strip(",")[:120]
     return found
 
 
@@ -2139,7 +2158,7 @@ def _tv_front_refresh() -> None:
         media_out = ""
         if pkg and pkg not in ("org.xbmc.kodi", TV_PACKAGE) and TV_APPS.get(pkg) != "Home":
             try:   # what it's playing: a bonus, so a problem here never loses the app's name
-                mok, mout = tv_adb("dumpsys media_session | grep -E 'package=|state=PlaybackState|metadata:'", timeout=20)
+                mok, mout = tv_adb("dumpsys media_session", timeout=20)
                 media_out = mout if mok else ""
                 if not mok:
                     log.info("TV front app: no title (%s)", (mout or "no answer").strip().splitlines()[-1][:200] if mout else "no answer")
@@ -2148,6 +2167,12 @@ def _tv_front_refresh() -> None:
         now = time.time()
         if pkg:
             media = _tv_media_parse(media_out).get(pkg) or {}
+            if media_out and not media.get("title") and _tv_front.get("raw_logged") != pkg:
+                # Once per app: what the TV said, so the reading can be fixed for this app if it reports a title some other way.
+                _tv_front["raw_logged"] = pkg
+                bits = [l.strip() for l in media_out.splitlines() if pkg in l or "metadata" in l.lower() or "description" in l
+                        or "PlaybackState" in l or "TITLE" in l][:25]
+                log.info("TV front app: no title found for %s. The TV's media sessions said: %s", pkg, " | ".join(bits)[:1500] or "(nothing)")
             if pkg != _tv_front.get("pkg") or media.get("title") != (_tv_front.get("media") or {}).get("title"):
                 log.info("TV front app: %s%s", act, f" playing {media['title']!r} ({media.get('sub') or '-'}, state {media.get('state')})" if media.get("title") else "")
             _tv_front.update({"pkg": pkg, "activity": act, "t": now, "ok_t": now, "error": "", "media": media})
