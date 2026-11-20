@@ -58,6 +58,7 @@ script = re.search(r"<script>(.*)</script>", app_page.APP_PAGE, re.S).group(1)
 # review fixes: the queue card is the queue (no Queue tab), HAL's pages open inside the app, TV volume
 assert "['queue','Queue']" not in script and "getSeg='upcoming'" in script
 assert "function openHal(" in script and "location.href='/hal/" not in script and "hal:'close'" not in script.replace("hal==='close'", "")
+assert "fa+' is on the TV.'" in script and "k.front" in script   # YouTube (or another app) on the TV
 assert "'/hal/api/tv/key'" in script and 'data-tvkey="mute"' in script
 node = shutil.which("node")
 if node:
