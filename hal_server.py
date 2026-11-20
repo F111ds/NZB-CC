@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.21.0"
+VERSION = "1.21.1"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1503,11 +1503,14 @@ def sab_today() -> int:
     return sum(1 for s in _sab_h_cache["v"].get("slots", []) if s["ok"] and s["t"] >= start)
 
 
+_RELEASE_TAGS = r"(?i:multi|multi\w*|dv|dovi|hdr\w*|imax|remux|repack|proper|extended|uncut|remastered|dual|subs?|vostfr|truefrench|french|german|ita|spanish|latino)"
+
+
 def nice_release(name: str) -> str:
     """'The.Long.Orbit.2025.2160p.UHD.BluRay-X' -> 'The Long Orbit (2025)'; 'Show.S02E06.1080p' -> 'Show S02E06'."""
     title = re.sub(r"[._]+", " ", re.sub(r"\.(nzb|mkv|mp4|avi)$", "", name or "", flags=re.I)).strip()
     title = re.sub(r"\s+(2160p|1080p|720p|480p|WEB|BluRay|HDTV|x26[45]|HEVC|H\s?26[45]).*$", "", title, flags=re.I).strip() or (name or "")
-    title = re.sub(r"\s((?:19|20)\d\d)(?:\s+(?=[A-Z0-9-]*[A-Z])[A-Z0-9][A-Z0-9-]*)+$", r" \1", title)   # "2022 MULTI DV IMAX": release tags after the year
+    title = re.sub(r"\s((?:19|20)\d\d)(?:\s+(?:(?=[A-Z0-9-]*[A-Z])[A-Z0-9][A-Z0-9-]*|" + _RELEASE_TAGS + r"))+$", r" \1", title, flags=0)   # "2022 MULTi DV IMAX"
     return re.sub(r"\s((?:19|20)\d\d)$", r" (\1)", title)
 
 
@@ -1573,7 +1576,7 @@ def _dl_grid(hal, now: datetime, queue: list, badge: str, hist: list, qd: dict |
     lim = str((qd or {}).get("speedlimit") or "").strip()
     paused = bool((qd or {}).get("paused"))
     q_rows = ([["Speed limit", f"{lim}%" if lim and lim not in ("0", "100") else "none", "ok"]] if qd is not None else []) \
-        + ([["Last download", f"{nice_release(last['name'])[:18]} · {_when(last['t'], now)}", "ok"]] if last else []) \
+        + ([["Latest", f"{nice_release(last['name'])[:20]} · {_when(last['t'], now)}", "ok"]] if last else []) \
         + ([["Average download", sm.fmt_bytes(avg), "ok"]] if avg else []) \
         + ([["Failed this week", str(week_failed), "warning" if week_failed else "ok"]] if days else [])
     idle = {"key": "QUEUE", "badge": "SABNZBD " + ("PAUSED" if paused else "READY") if qd is not None else "",
