@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.18.0"
+VERSION = "1.18.1"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1526,7 +1526,7 @@ def tv_downloads_page(hal, demo: bool = False) -> dict:
              {"name": "Halcyon Road (2024)", "pct": 12, "info": "paused · 25.0 GB to go · movies", "paused": True}]
         return {"title": "Downloads", "level": "ok", "head": "DOWNLOADING · 3 IN QUEUE", "cols": [
             {"key": "QUEUE", "badge": "38.2 MB/s", "queue": q},
-            {"key": "TODAY", "big": "6 done", "bigsub": "0 failed · 312 GB free on Z:",
+            {"key": "TODAY", "big": "6 done", "bigsub": "0 failed today",
              "rows": [["Last finished", "", "ok"], ["The Long Orbit (2025)", clock(now - timedelta(minutes=50)), "ok"],
                       ["Coldwater S04E02", clock(now - timedelta(hours=3)), "ok"], ["Night Harbor S02E05", "repair failed", "warning"]]},
             {"key": "COMING UP", "rows": [["Night Harbor S02E06", "tomorrow 2 AM", "ok"], ["Glass Meridian II (2026)", "Sun", "ok"], ["The Quiet Sun S01E09", "Mon 1 AM", "ok"],
@@ -2247,10 +2247,11 @@ def tv_grids(hal, st: dict, sc: dict, hist: dict) -> dict:
     kuma = [[
         {"key": "UPTIME KUMA", "badge": sc["kuma"]["head"].upper(), "big": f"{km.get('up', 0)}/{len(mons)}" if km.get("ok") else "—",
          "bigsub": "answering" if km.get("ok") else sc["kuma"]["head"],
-         "rows": ([[m["name"][:22], m["status"], "critical" if m["status"] == "down" else "warning"] for m in downs[:5]]
-                  or [["Everything's answering", "", "ok"]]),
-         "chips": ([["average ", f"{sum(up_ms) / len(up_ms):.0f} ms", ""]] if up_ms else [])
-                  + ([["slowest ", f"{slow['name'][:14]} {slow['ms']:.0f} ms", ""]] if slow else [])},
+         "rows": ([[m["name"][:22], m["status"], "critical" if m["status"] == "down" else "warning"] for m in downs[:3]]
+                  or [["Everything's answering", "", "ok"]])
+                 + [["Answering", str(len(mons) - len(downs)), "ok"]]
+                 + ([["Average", f"{sum(up_ms) / len(up_ms):.0f} ms", "ok"]] if up_ms else [])
+                 + ([["Slowest", f"{slow['name'][:14]} · {slow['ms']:.0f} ms", "ok"]] if slow else [])},
         {"key": "MONITORS", "weight": 1.6, "badge": "LAST 30 CHECKS", "monitors": kmons[:half]},
         {"key": " ", "weight": 1.6, "monitors": kmons[half:]},
     ]] if kmons else [[{"key": "UPTIME KUMA", "rows": [["Status", sc["kuma"]["head"], "warning"]]}]]
