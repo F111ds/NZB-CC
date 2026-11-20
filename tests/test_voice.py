@@ -188,7 +188,10 @@ calls_ = []
 m.load_settings = lambda: {}
 m.tv_configured = lambda s=None: True
 m.tv_power_state = lambda s=None: "standby"
+_aw0 = m._tv_awake
+m._tv_awake = lambda: None
 assert m.tv_off()["already"]
+m._tv_awake = _aw0
 m.tv_power_state = lambda s=None: "on"
 m.sony_call = lambda *a, **k: calls_.append(("rest", a))
 assert not m.tv_off()["already"] and calls_[-1] == ("rest", ("system", "setPowerStatus", [{"status": False}]))
@@ -197,11 +200,26 @@ def _refuse(*a, **k):
 m.sony_call = _refuse
 m.sony_ircc = lambda code, settings=None, timeout=3: calls_.append(("ircc", code))
 assert m.tv_off()["ok"] and calls_[-1] == ("ircc", m.IRCC_POWER_OFF)
+# IP control says off but YouTube is on screen (ADB says awake): the TV's own sleep key
+_saved_a = (m._tv_awake, m._tv_sleep_adb)
+m.tv_configured = lambda s=None: True
+m.tv_power_state = lambda s=None: "off"
+m._tv_awake = lambda: True
+m._tv_sleep_adb = lambda: (calls_.append(("adb", "sleep")), True)[1]
+r_ = m.tv_off()
+assert not r_["already"] and calls_[-1] == ("adb", "sleep")
+m._tv_awake = lambda: False
+assert m.tv_off()["already"]
+# no Sony IP control at all: ADB alone decides
 m.tv_configured = lambda s=None: False
+m._tv_awake = lambda: True
+assert not m.tv_off()["already"]
+m._tv_awake = lambda: None
 try:
     m.tv_off(); raise AssertionError("no TV set up")
 except ValueError:
     pass
 m.load_settings, m.tv_configured, m.tv_power_state, m.sony_call, m.sony_ircc = _saved_m
+m._tv_awake, m._tv_sleep_adb = _saved_a
 print("tv off ok")
 print("\nALL VOICE TESTS PASSED")
