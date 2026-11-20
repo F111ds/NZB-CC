@@ -1,39 +1,62 @@
-# NZB-CC: a home media command center with HAL 9000 in charge
+# NZB-CC: a home media command center, with HAL 9000 in charge
 
 > "Good evening, Dave. Everything's running smoothly."
 
-NZB-CC runs on a Windows PC at home and pulls the house's media and network gear into one place. The centre of it
-is **HAL 9000**, a phone app (add it to your home screen) styled after the computer in *2001: A Space Odyssey*.
-HAL watches over the PC and everything on it, talks in one calm sentence about your evening, and lets you act from
-the sofa: find and download something, put it on the TV, pause the ads, restart a service, lock the PC.
+NZB-CC runs on a Windows PC at home and pulls the house's downloads, media, PC and network into one place. You use it
+from three screens: **HAL 9000** on your phone, **HAL on the TV**, and the original **desktop command centers** on
+the PC. Nothing goes to a cloud service of its own: the phone talks to the PC over your Wi-Fi (or Tailscale when
+you're out), behind an access code.
 
-It's a personal project for one home. Nothing goes to a cloud service of its own: the phone talks to the PC over
-your Wi-Fi (or Tailscale when you're out), behind an access code.
+| On the phone | On the TV | On the PC |
+|---|---|---|
+| ![HAL 9000 on the phone](docs/app-screenshots/01-home.png) | ![HAL on the TV](docs/tv-screenshots/1-hal-screen.png) | ![NZB Command Center](docs/desktop-screenshots/nzb-2-sabnzbd.png) |
 
-![HAL 9000 Home screen](docs/app-screenshots/01-home.png)
+## How it started: the NZB Command Center
 
-## What it does
+It all began with one Windows desktop app, the **NZB Command Center**: a single window to search Usenet indexers,
+pick the best release and send it to SABnzbd, then watch it download. It worked well, and the ideas kept coming:
 
-- **Downloads**: search your Usenet indexers, add to SABnzbd, see the queue and history, and what Sonarr/Radarr
-  will fetch next. Saved searches run on their own and tell your phone when something new turns up.
-- **Watching**: your Kodi library, continue watching, play on the TV, a remote, TV volume and mute. Movies and
-  shows also play **on the phone** at home through Jellyfin. HAL knows what's on the TV: the movie in Kodi, the
-  video in YouTube, Netflix or Prime, or the games console (PS5, Switch, also through a Denon amp).
-- **The PC**: live CPU, memory, GPU and temperatures with history graphs, drives and their health, services
-  (restart from the phone, or let HAL restart them), Windows Defender, firewall, updates, worth-knowing Windows
-  events, the UPS (battery, power cuts, safe shutdown).
-- **The network**: internet speed and ping, devices that join your Wi-Fi, **Pi-hole** (ads blocked, pause blocking,
-  the Raspberry Pi's health) and **Uptime Kuma** (every monitor, certificates about to expire).
-- **Alerts** to your phone (ntfy) when something needs you, and when it's fine again. A morning briefing and a
-  weekly summary, if you want them.
-- **HAL on the TV**: an Android TV launcher with a HAL screen showing the house at a glance, which can pop up
-  over whatever is on and speak a message you send from the phone.
-- **For fun**: chess against HAL, a full-screen wall display for a spare tablet, Siri ("Hey Siri, ask HAL"),
-  a home-screen widget, and a song.
+1. **The desktop app grew tabs.** Local NZB files, the SABnzbd queue and history, a Media Inspector for the library,
+   Kodi, and Jellyfin/Plex.
+2. **A phone version** (the "mobile NZB command center") let you search and add from the sofa. It soon had
+   Home, Kodi, posters, TV shows, a remote, alerts and saved searches.
+3. **The System Command Center** came next: a second desktop app, this time for the PC itself (CPU, GPU, drives,
+   Windows, processes).
+4. **HAL 9000** brought the phone side together: one calm voice that watches over the PC, the network, Pi-hole,
+   Uptime Kuma and the UPS, and tells you about your evening in a sentence.
+5. **HAL on the TV** came last: a TV launcher with HAL's screen, and HAL's voice in the living room.
+
+The desktop apps are still here, still work, and still share their settings with everything else. The
+phone app's **Settings › Connections** edits the same SABnzbd and indexer settings the NZB Command Center uses.
+What follows is the whole thing, from the newest screen back to where it started.
+
+## HAL 9000 on the phone
+
+The app is one page (`/app`), added to the phone's home screen like an app. HAL's eye sits at the top, with one line
+about your evening.
+
+- **Home**:
+  - what needs you (alerts you can hide for a day);
+  - internet speed with an hour's graph;
+  - Pi-hole and Uptime Kuma;
+  - rings for CPU, memory, GPU and temperature;
+  - drives, the last restart, and what's on the TV: the movie in Kodi, the video on YouTube, Netflix or Prime, or
+    the games console;
+  - quick buttons.
+- **Get**: the download queue at the top, search across your indexers (with quality, size, age and grab badges),
+  what Sonarr and Radarr will fetch next, the history, and saved searches that tell your phone when something new
+  turns up.
+- **Watch**: the TV (play, pause, volume, mute), HAL on the TV, continue watching, and your Kodi library. Movies and
+  shows also play **on the phone** at home, through Jellyfin.
+- **System**: every system at a glance, with HAL's own pages for vitals, services, drives, network, security,
+  power and the log. There's also HAL's record, chess against HAL, a wall display for a spare tablet, and a song.
+
+Every screen is in [docs/app-screenshots](docs/app-screenshots/README.md). HAL also answers Siri and has a
+home-screen widget ([docs/siri-and-widget.md](docs/siri-and-widget.md)).
 
 ## HAL on the TV
 
-The TV runs the NZB-CC launcher (in `tv-launcher/`), and it has a **HAL 9000 tile** on its home screen. Open it, or
+The TV runs the NZB-CC launcher (in `tv-launcher/`), which has a **HAL 9000 tile** on its home screen. Open it, or
 tap **Show HAL on the TV** in the phone app's Watch tab, and HAL's screen comes up over whatever is on:
 
 ![HAL's screen on the TV](docs/tv-screenshots/1-hal-screen.png)
@@ -58,10 +81,70 @@ tap **Show HAL on the TV** in the phone app's Watch tab, and HAL's screen comes 
 | **Uptime Kuma** | **Raspberry Pi** |
 | ![Uptime Kuma](docs/tv-screenshots/4-details-uptime-kuma.png) | ![Raspberry Pi](docs/tv-screenshots/5-details-raspberry-pi.png) |
 
-(These pictures are drawn from HAL's demo data, so the numbers aren't real.)
+The screen drifts a little every few minutes so nothing burns in. **Update everything** puts new versions of the
+TV app on the TV by itself, and never while you're watching something. (These pictures are drawn from HAL's demo
+data, so the numbers aren't real.)
 
-The screen drifts a little every few minutes so nothing burns in. **Update everything** puts new versions of
-the TV app on the TV by itself, and never while you're watching something.
+## The desktop command centers (where it started)
+
+### NZB Command Center
+
+`nzb_command_center.py`: the original. One window, with a live header (download speed, totals, drive space,
+today's NZBs, the active download and a bandwidth graph) and seven tabs:
+
+- **Indexer Search**: searches every indexer at once and scores each release.
+  - A ★ Best pick, plus badges for 4K, HDR, Dolby Vision, REMUX and codec, and a "size looks wrong" check.
+  - Hides duplicates and checks against your library ("you have it").
+  - Filters for quality, size and language, and auto-picks the SABnzbd category.
+  - **Send to SAB**, Save, or **Grab Best**.
+- **Local NZB Files**: a watch folder you can auto-send from, with an inspector for any .nzb.
+- **SABnzbd Queue & History**: pause, delete, priority, reorder, a speed limit, retry failed downloads, and
+  notifications when downloads finish.
+- **Media Inspector**: scans your movie and TV folders (codec, HDR, audio, size, duplicates).
+- **Kodi**: what's playing, play/pause/stop, the movie library, recently added, and what's on disk but missing
+  from Kodi.
+- **Media Server**: Jellyfin or Plex streams, library syncs, and audits for what's missing or orphaned.
+- **Activity Log**.
+
+| Indexer search | SABnzbd queue and history |
+|---|---|
+| ![Indexer search](docs/desktop-screenshots/nzb-1-indexer-search.png) | ![SABnzbd](docs/desktop-screenshots/nzb-2-sabnzbd.png) |
+| **Local NZB files** | **Kodi** |
+| ![Local NZB files](docs/desktop-screenshots/nzb-3-local-nzb-files.png) | ![Kodi](docs/desktop-screenshots/nzb-5-kodi.png) |
+
+```powershell
+pip install customtkinter pillow
+python nzb_command_center.py
+```
+
+### System Command Center
+
+`system_command_center.py`: a live dashboard for the PC itself, and the part that grew into HAL.
+
+- **Dashboard**: CPU, memory, GPU and network gauges with graphs, drives, the system, top processes, alerts.
+- **CPU & Memory**: per-core load, clock speeds, temperatures and fans, memory modules.
+- **GPU**: load, video memory, temperature, power, clocks, the video engines, and which apps are using it.
+- **Drives**: space, a space analyzer, health, temperatures and wear, live activity, cleanup.
+- **Network**: throughput, ping and packet loss, Wi-Fi, adapters, Flush DNS.
+- **Processes**: sortable and filterable, grouped by app, End task.
+- **Windows**: edition and build, Defender and firewall, pending restart, Windows Update, power plans, startup
+  apps.
+- **Tools, Alerts, Settings**: one-click Windows tools and maintenance, thresholds and notifications.
+
+| Dashboard | CPU & Memory |
+|---|---|
+| ![Dashboard](docs/desktop-screenshots/system-1-dashboard.png) | ![CPU and memory](docs/desktop-screenshots/system-2-cpu.png) |
+| **Drives** | **Windows** |
+| ![Drives](docs/desktop-screenshots/system-4-drives.png) | ![Windows](docs/desktop-screenshots/system-7-windows.png) |
+
+More: [GPU](docs/desktop-screenshots/system-3-gpu.png) · [Processes](docs/desktop-screenshots/system-6-processes.png) ·
+[Tools](docs/desktop-screenshots/system-8-tools.png) · [Media Inspector](docs/desktop-screenshots/nzb-4-media-inspector.png) ·
+[Media Server](docs/desktop-screenshots/nzb-6-media-server.png). (Taken with demo data.)
+
+```powershell
+pip install customtkinter psutil pillow
+python system_command_center.py
+```
 
 ## How it fits together
 
@@ -73,6 +156,7 @@ the TV app on the TV by itself, and never while you're watching something.
                                                   ├─ Pi-hole · Uptime Kuma · the UPS (NUT)
                                                   └─ the TV over ADB (tv-launcher/tools): HAL's screen, volume, what's on
  Android TV  ◀── tv-launcher (NZB-CC TV Launcher APK, with HAL's screen)
+ Windows desktop: nzb_command_center.py and system_command_center.py (same settings files)
 ```
 
 | Part | What it is |
@@ -80,11 +164,12 @@ the TV app on the TV by itself, and never while you're watching something.
 | `mobile_server.py` | The phone server: the HAL app at `/app`, the classic NZB app at `/`, and HAL at `/hal` |
 | `app_page.py` | The HAL 9000 all-in-one app (one page: Home, Get, Watch, System) |
 | `hal_server.py` | HAL: watches the PC, services, network, Pi-hole, Uptime Kuma, UPS; alerts, briefings, history |
-| `system_monitor.py` | Reads the PC's hardware, drives, security and Windows details |
-| `nzb_command_center.py`, `system_command_center.py`, `kodi_client.py`, `media_server.py` | The original Windows desktop apps (still work) |
+| `system_monitor.py` | Reads the PC's hardware, drives, security and Windows details (HAL and the System Command Center) |
+| `nzb_command_center.py` + `kodi_client.py`, `media_inspector.py`, `media_server.py` | The NZB Command Center desktop app and its tabs |
+| `system_command_center.py` | The System Command Center desktop app |
 | `tv-launcher/` | The Android TV launcher (with HAL's screen) and the scripts that install it |
 | `setup.ps1`, `update_all.ps1`, `backup_settings.ps1` | Set up once, update everything, back up your settings |
-| `tests/` | Tests for the servers and the app (`python tests/test_hal.py` etc.) |
+| `tests/` | Tests for the servers, the apps and the desktop apps (`python tests/test_hal.py` etc.) |
 
 ## Getting started
 
@@ -93,18 +178,18 @@ the TV app on the TV by itself, and never while you're watching something.
 2. On your phone, open `http://<your-pc>:8765/app/`, pair with the 6-digit PIN from
    `http://localhost:8765/hal/pair` on the PC, and add the page to your home screen.
 3. In the app: **Settings › Connections** for SABnzbd, your indexers, Kodi, Pi-hole and Uptime Kuma (keys are
-   stored encrypted for your Windows user and never sent to the phone).
+   stored encrypted for your Windows user and never sent to the phone). Or set them in the NZB Command Center.
 4. Optional: install the TV launcher with `tv-launcher/install-on-tv.ps1`.
 
-Updating: **Update everything** in the app (Settings), or `update_all.ps1`. It downloads the newest files from
+**Updating**: **Update everything** in the app (Settings), or `update_all.ps1`. It downloads the newest files from
 GitHub, checks them, restarts what's needed and updates the TV app, without stopping a movie that's playing.
+**Backups**: `backup_settings.ps1` backs your settings up to GitHub with every key and password removed.
 
 ## Privacy and security
 
 - Every request needs the access code; wrong codes are rate-limited. The server only answers your home network
   and Tailscale unless you allow more.
 - API keys and passwords are encrypted with Windows DPAPI in the settings files, and never shown again.
-- `backup_settings.ps1` backs settings up to GitHub with every key and password removed.
 - Nothing is sent anywhere else, apart from what you set up yourself (ntfy alerts, your indexers, the weather on
   the TV).
 
@@ -115,11 +200,11 @@ GitHub, checks them, restarts what's needed and updates the TV app, without stop
 
 ---
 
-The rest of this page goes into each part in detail.
+# Reference
 
-Screenshots of every page of the HAL 9000 phone app: [docs/app-screenshots](docs/app-screenshots/README.md).
+Everything below goes into each part in detail: setup steps, settings and how things work.
 
-## Phone app home-screen icons
+### Phone app home-screen icons
 
 Open the phone app's address in your phone's browser and add it to your home screen
 (iPhone: Safari > Share > **Add to Home Screen**; Android: Chrome > ⋮ > **Add to Home screen** / **Install app**):
@@ -128,7 +213,7 @@ Open the phone app's address in your phone's browser and add it to your home scr
 - `http://<your-pc>:<port>/kodi` gives a separate **Kodi** icon (a TV with a play button) that opens straight on the Kodi tab.
   Pair once in either; the other uses the same pairing code. On Android you can also long-press the NZB Center icon and pick **Kodi**.
 
-## System Command Center (Windows desktop)
+### System Command Center (Windows desktop)
 
 A live dashboard for your PC: Windows, CPU, memory, GPU, drives, network and processes.
 
@@ -155,7 +240,7 @@ run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardware
 **Options > Remote Web Server > Run** (port 8085; the app also reads its WMI feed when that's available).
 Run as administrator to see drive temperatures and wear.
 
-## Fun with HAL
+### Fun with HAL
 
 - **Siri and a home-screen widget**: see [docs/siri-and-widget.md](docs/siri-and-widget.md)
   ("Hey Siri, ask HAL: pause the ads / how hot is it / what's my record...", and `extras/hal_widget.js` for Scriptable).
@@ -166,14 +251,14 @@ Run as administrator to see drive temperatures and wear.
   spare tablet), and **Ask HAL to sing**. He also sings when you restart the PC from the app.
 - Try typing "open the pod bay doors" in the search box.
 
-## Uptime Kuma in HAL
+### Uptime Kuma in HAL
 
 HAL reads Uptime Kuma's monitors (its `/metrics` page). In the app: **Settings › Connections › Uptime Kuma**,
 address like `192.168.68.63:3001` and an API key from Uptime Kuma › **Settings › API Keys** (stored encrypted).
 Home shows a card (all up, or which are down); tap it for every monitor with its response time. HAL alerts
 (and pushes) when a monitor goes down and when it's back, and when a certificate has a week or less left.
 
-## Home screen (phone)
+### Home screen (phone)
 
 Alerts · quick buttons (Lock PC, Sleep, TV on, pause ads 5 min) · UPS card during a power cut · CPU/RAM/GPU/ping ·
 internet (online, down/up now, ping, loss) · drives · Pi-hole · Uptime Kuma · last restart (Restart when Windows
@@ -181,7 +266,7 @@ is waiting) · what's on the TV · every system. Downloads are on **Get**.
 New devices: Pi-hole sees every device on the network; HAL alerts (and pushes) when one it hasn't seen before
 shows up (**It's mine** clears it). The first check just learns what's already there.
 
-## Pi-hole in HAL
+### Pi-hole in HAL
 
 HAL watches the Pi-hole (Pi-hole 6 or 5, worked out on its own) and, on Pi-hole 6, the Raspberry Pi itself:
 model, temperature, CPU, memory, uptime and whether a Pi-hole update is available (alerts at 75°C and 92% memory). With no address set it looks for it
@@ -193,7 +278,7 @@ when blocking is left off, or when the block lists are over two weeks old.
 Address and password: **Settings › Connections › Pi-hole** (the password you sign in to Pi-hole with,
 or a Pi-hole 6 app password; on Pi-hole 5 the API token). It's stored encrypted in `hal_settings.json`.
 
-## Watch on the phone (home Wi-Fi only)
+### Watch on the phone (home Wi-Fi only)
 
 In the app, **Watch › Your library**: tap a movie (or an episode) for its page, then **Watch on phone**.
 The phone server finds the same film in Jellyfin (same file name, else title and year) and relays
@@ -207,7 +292,7 @@ Jellyfin's stream, so the phone never sees Jellyfin's key and Safari plays it na
 - Uses the Jellyfin connection the phone server already has (desktop app's Jellyfin settings, or
   Connect in the classic phone app's Jellyfin tab).
 
-## Scripts: one setup, one update, one backup
+### Scripts: one setup, one update, one backup
 
 Right-click > Run with PowerShell, from your NZB Command Center folder:
 
@@ -220,7 +305,7 @@ Right-click > Run with PowerShell, from your NZB Command Center folder:
   `update_phone_app.ps1` now just runs it.
 - **backup_settings.ps1** - backs up your settings to GitHub.
 
-## HAL 9000 all-in-one app (/app)
+### HAL 9000 all-in-one app (/app)
 
 One app for everything, on the phone and the PC: open `http://<your-pc>:8765/app/` and add it to the home screen
 (on the PC: Edge/Chrome > Install this site as an app). It opens already signed in if the NZB app is paired on that
@@ -242,7 +327,7 @@ previous file is kept as `nzb_manager_config.json.bak`), so the desktop app isn'
 desktop window before saving there: its next save would put the old settings back (the page warns when it's open).
 The page is `app_page.py`.
 
-## HAL 9000 (phone app that watches over this PC)
+### HAL 9000 (phone app that watches over this PC)
 
 > "I am putting myself to the fullest possible use, which is all I think that any conscious entity can ever hope to do."
 
@@ -296,7 +381,7 @@ choose, and cancels it if the power comes back in time.
 `python hal_server.py --demo` shows the app with made-up data (`--demo-ups battery` for a power cut), on any PC.
 HAL's own files: `hal_settings.json`, `hal_state.json` (history and log), `hal_server.log`.
 
-## Update from the phone
+### Update from the phone
 
 The app's **System › Update everything** (and HAL's **Log & controls › Update**) runs `update_all.ps1 -Unattended` on
 the PC as its own Windows task: it downloads the newest files, restarts the phone server, and the app reloads with
@@ -304,7 +389,7 @@ the new version once HAL reports back ("Updated to version 3.14.0", "Already up 
 HAL's log). Open desktop apps aren't closed: they use the new version next time you open them. The run is logged in
 `update_all.log`, the outcome in `update_result.json`.
 
-## Start everything when the PC turns on (no login needed)
+### Start everything when the PC turns on (no login needed)
 
 Right-click **setup_autologon.ps1** > Run with PowerShell. It downloads Microsoft's free Sysinternals **Autologon**
 (checked to be signed by Microsoft), opens its window so you can type your Windows password there (a Microsoft
@@ -313,14 +398,14 @@ After that, when the PC turns on or restarts, Windows logs you in by itself, SAB
 Jellyfin, the phone server and HAL all start as usual, and the screen locks 8 seconds later (your PIN is still
 needed to use the PC). Undo: run it with `-Undo`.
 
-## Phone server files
+### Phone server files
 
 `mobile_server.py` keeps its web page in `mobile_page.py`, its icons in `mobile_icons.py` and the all-in-one app in
 `app_page.py`: keep them all in the
 same folder (`update_all.ps1` and `update_phone_app.ps1` fetch them together). If one is missing the server still
 starts, shows a page saying which file to get back, and logs it.
 
-## TV home row (phone server)
+### TV home row (phone server)
 
 `mobile_server.py` also serves the newest movies to a TV home screen, so a launcher can show them with their
 posters and start one in Kodi in one press, even when Kodi wasn't running:
