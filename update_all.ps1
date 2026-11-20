@@ -140,6 +140,13 @@ try {
 
     # --- Which files: the program files on GitHub (never tests, sources of the TV app, or settings) ---
     $paths = $null
+    # Download from the exact newest commit: raw.githubusercontent.com caches a branch's files for about 5 minutes,
+    # so an update run right after a change could fetch the old files and say "already up to date".
+    $Ref = $Branch
+    try {
+        $c = Invoke-RestMethod "https://api.github.com/repos/$Repo/commits/$Branch" -Headers @{ "User-Agent" = "nzbcc-updater" }
+        if ("$($c.sha)" -match '^[0-9a-f]{40}$') { $Ref = $c.sha }
+    } catch { }
     try {
         $tree = Invoke-RestMethod "https://api.github.com/repos/$Repo/git/trees/${Branch}?recursive=1" -Headers @{ "User-Agent" = "nzbcc-updater" }
         $paths = @($tree.tree | Where-Object { $_.type -eq "blob" } | ForEach-Object { $_.path })
@@ -165,7 +172,7 @@ try {
     foreach ($p in $wanted) {
         $dest = Join-Path $stage ($p -replace '/', '\')
         New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
-        try { Invoke-WebRequest "https://raw.githubusercontent.com/$Repo/$Branch/$p" -OutFile $dest -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache" } }
+        try { Invoke-WebRequest "https://raw.githubusercontent.com/$Repo/$Ref/$p" -OutFile $dest -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache" } }
         catch { throw "Download of $p failed ($($_.Exception.Message)). Nothing was changed." }
         if ((Get-Item $dest).Length -eq 0) { throw "$p downloaded empty. Nothing was changed." }
     }
