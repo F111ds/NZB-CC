@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.12.1"
+VERSION = "1.12.2"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2166,6 +2166,9 @@ def _cec_pretty(name: str) -> str:
     m = re.fullmatch(r"PS\s?([2-5])", n, re.I)
     if m:
         return f"PlayStation {m.group(1)}"
+    m = re.fullmatch(r"playstation\s*([2-5]?)", n, re.I)
+    if m:
+        return "PlayStation" + (" " + m.group(1) if m.group(1) else "")
     if re.fullmatch(r"(nintendo\s*)?switch(\s*2)?", n, re.I):
         return "Nintendo Switch" + (" 2" if n.rstrip().endswith("2") else "")
     if re.fullmatch(r"xbox", n, re.I):
@@ -2201,6 +2204,20 @@ def _tv_hdmi_parse(out: str) -> str:
     return _cec_pretty(on[0]["name"]) if len(on) == 1 else ""
 
 
+CONSOLE_RE = re.compile(r"PlayStation(?:\s*(?:\(R\)|®))?\s*[2-5]?|\bPS\s?[2-5]\b|Nintendo\s*Switch(?:\s*2)?|\bSwitch\b|\bXbox(?:\s+(?:One|Series\s+[XS]))?", re.I)
+
+
+def _console_anywhere(*texts: str) -> str:
+    """A games console's name anywhere in the TV's answers (any wording: CEC lists, input labels), or ""."""
+    names = []
+    for text in texts:
+        names += [m.group(0) for m in CONSOLE_RE.finditer(text or "")]
+    if not names:
+        return ""
+    best = max(set(names), key=lambda n: (names.count(n), len(n)))
+    return _cec_pretty(re.sub(r"\s+", " ", re.sub(r"\(R\)|®", " ", best)))
+
+
 def _tv_front_refresh() -> None:
     try:
         # Two ways to ask, as TVs' Android versions word it differently: the resumed activity, else the focused window.
@@ -2212,6 +2229,11 @@ def _tv_front_refresh() -> None:
             try:   # an HDMI input: who's on it (the PlayStation says its name over HDMI-CEC)
                 hok, hout = tv_adb("dumpsys hdmi_control", timeout=20)
                 inp = _tv_hdmi_parse(hout) if hok else ""
+                iout = ""
+                if not inp:   # other wordings, and the TV's input list (Sony and others label an input with the device's name)
+                    iok, iout = tv_adb("dumpsys tv_input | grep -i -E 'label|name|hdmi|title'", timeout=20)
+                    inp = _console_anywhere(hout if hok else "", iout if iok else "")
+                hout = (hout or "") + "\n--- tv_input ---\n" + (iout or "")
                 if not inp and _tv_front.get("raw_logged") != "hdmi:" + pkg:
                     _tv_front["raw_logged"] = "hdmi:" + pkg
                     bits = [l.strip() for l in (hout or "").splitlines() if re.search(r"active|display|name|device|0x", l, re.I)][:30]

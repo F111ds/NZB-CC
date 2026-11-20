@@ -87,6 +87,9 @@ assert hs._tv_hdmi_parse("") == ""
 SW = "      HdmiDeviceInfo: CEC: logical_address: 0x04 device_type: 4 display_name: NintendoSwitch power_status: 0 physical_address: 0x3000"
 assert hs._tv_hdmi_parse("  mActiveSource: ActiveSource(logicalAddress: 0x04, physicalAddress: 0x3000)\n" + SW) == "Nintendo Switch"
 assert hs._tv_hdmi_parse(SW.replace("NintendoSwitch", "Switch") + "\n" + SW.replace("NintendoSwitch", "Sonos Arc").replace("device_type: 4", "device_type: 5")) == "Nintendo Switch"
+assert hs._console_anywhere("mDeviceInfos=[{id: 0x2004, name: \"PS5\", vendor 0x104}]") == "PlayStation 5"
+assert hs._console_anywhere("", "  TvInputInfo{id=com.sony.dtv.tvinput.external/.ExternalTvInputService/HDMI200004, label=PlayStation(R)5}") == "PlayStation 5"
+assert hs._console_anywhere("nothing here", "HDMI 2") == ""
 assert hs._cec_pretty("Xbox") == "Xbox" and hs._cec_pretty("PS4") == "PlayStation 4" and hs._cec_pretty("Apple TV") == "Apple TV"
 assert hs._tv_is_input("com.mediatek.wwtv.tvcenter", "com.mediatek.wwtv.tvcenter.nav.TurnkeyUiMainActivity")
 assert not hs._tv_is_input("com.google.android.youtube.tv", "com.google.android.apps.youtube.tv.activity.ShellActivity")
@@ -95,6 +98,9 @@ hs.tv_adb = lambda cmd, timeout=30: (True, INPUT_FRONT if "activities" in cmd el
 hs._tv_front_refresh()
 f = hs.tv_front()
 assert f["app"] == "PlayStation 5" and not f["home"] and not f["kodi"]
+hs.tv_adb = lambda cmd, timeout=30: (True, INPUT_FRONT if "activities" in cmd else "label=HDMI 3 (PS4)" if "tv_input" in cmd else "")
+hs._tv_front_refresh()
+assert hs.tv_front()["app"] == "PlayStation 4"                       # from the TV's input list
 hs.tv_adb = lambda cmd, timeout=30: (True, INPUT_FRONT if "activities" in cmd else "")
 hs._tv_front_refresh()
 assert hs.tv_front()["app"] == "HDMI"                                 # an input, nobody named on it
