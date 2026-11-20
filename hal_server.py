@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.19.0"
+VERSION = "1.19.1"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1782,6 +1782,8 @@ def siri_intent(q: str) -> str:
         if has("pause", "off", "stop", "disable", "turn off"):
             return "ads_off"
         return "ads"
+    if has("tv", "television", "telly") and has("off", "shut off", "switch off", "power off", "to sleep", "standby"):
+        return "tv_off"
     if voice_app(q):
         return "app"
     if voice_title(q):
@@ -2085,6 +2087,16 @@ class FunMixin:
                     "intent": intent}
         if intent == "tv_on":
             return {"say": tv_on_via_phone_server(self) if not demo else "Demo mode: nothing was changed.", "intent": intent}
+        if intent == "tv_off":
+            if demo:
+                return {"say": "Demo mode: nothing was changed.", "intent": intent}
+            r = _phone_post(self, "/api/tv/off", {}, timeout=15)
+            if r.get("ok"):
+                return {"say": f"The TV is already off, {name}." if r.get("already") else f"Turning the TV off. Good night, {name}.", "intent": intent}
+            ok, out = tv_adb("input keyevent KEYCODE_SLEEP", timeout=15)   # no Sony IP control: Android's own sleep key
+            if ok and "Error" not in out:
+                return {"say": f"Turning the TV off. Good night, {name}.", "intent": intent}
+            return {"say": f"I couldn't turn the TV off: {str(r.get('message') or out)[:80]}", "intent": intent}
         if intent in ("morning", "week"):
             return {"say": self.brief_text("weekly" if intent == "week" else "morning"), "intent": intent}
         if intent == "record":

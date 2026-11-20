@@ -83,7 +83,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.21.2"
+VERSION = "3.21.3"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -1516,6 +1516,24 @@ def tv_power_state(settings: dict | None = None) -> str:
             raise
         return "off"
     return "on" if _kdict(res).get("status") == "active" else "standby"
+
+
+IRCC_POWER_OFF = "AAAAAQAAAAEAAAAvAw=="   # the remote's "power off" code (discrete, not a toggle)
+
+
+def tv_off() -> dict:
+    """Puts the TV in standby if it's on (Sony's IP control; the remote's power-off code if that's refused)."""
+    settings = load_settings()
+    if not tv_configured(settings):
+        raise ValueError("Set up TV control first.")
+    if tv_power_state(settings) != "on":
+        return {"ok": True, "already": True, "message": "The TV is already off."}
+    try:
+        sony_call("system", "setPowerStatus", [{"status": False}], settings=settings)
+    except UpstreamError as exc:
+        log.info("tv off: setPowerStatus refused (%s), sending the remote's power-off", exc)
+        sony_ircc(IRCC_POWER_OFF, settings=settings)
+    return {"ok": True, "already": False, "message": "Turning the TV off."}
 
 
 def send_wol(mac: str) -> None:
@@ -6320,6 +6338,10 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             started = tv_start(launch_kodi=body.get("kodi", True) is not False)
             log.info("tv on (kodi=%s) ip=%s", body.get("kodi", True) is not False, self.ip)
             self.send_json(200, {"ok": True, "started": started, "job": tv_job_view()})
+        elif path == "/api/tv/off":
+            res = tv_off()
+            log.info("tv off (%s) ip=%s", "already off" if res.get("already") else "sent", self.ip)
+            self.send_json(200, res)
         elif path == "/api/tv/kodi":
             if not tv_configured():
                 raise ValueError("Set up TV control first.")

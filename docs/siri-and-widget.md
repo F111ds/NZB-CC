@@ -34,6 +34,7 @@ Things you can say after "Hey Siri, ask HAL":
 | "Pause" / "Resume" / "Stop" | What's playing in Kodi |
 | "Skip back" / "Skip ahead" | 15 seconds back, 30 forward |
 | "Turn it up" / "Turn it down" / "Turn it up by 5" / "Mute" | The TV's own volume, in any app |
+| "Turn the TV off" / "TV off" / "Put the TV to sleep" | Puts the TV in standby if it's on (says so if it's already off) |
 | "Open YouTube" / "Open Netflix" / "Open Prime" | Opens the app on the TV (turning the TV on first if it's off) |
 | "Play cat videos on YouTube" / "Search YouTube for …" | YouTube with the search results |
 | "Watch Stranger Things on Netflix" / "Play The Office on Prime" | Searches Netflix or Prime for it, the way `try-tv-search.ps1` found works on your TV (run it once, see below). Pick it with the remote |

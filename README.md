@@ -157,7 +157,7 @@ experience on top of it, piece by piece, checking each change on the real TV.
 
 - **The TV's own volume and mute**, in any app, from the Watch tab or "Hey Siri, ask HAL, turn it up".
 - **Turn the TV on and open Kodi**, and **play anything by name**: "Hey Siri, ask HAL, play Glass Meridian" turns
-  the TV on if needed and resumes where you stopped.
+  the TV on if needed and resumes where you stopped. "Hey Siri, ask HAL, turn the TV off" puts it back in standby.
 - **HAL knows what's on**:
   - the movie in Kodi;
   - the video on YouTube, or the show on Netflix or Prime;
