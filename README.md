@@ -50,41 +50,90 @@ What follows is the whole thing, from the newest screen back to where it started
 ## Taking over the TV
 
 The TV is a Sony BRAVIA running Android TV. Its own home screen was rows of ads, promoted shows and apps nobody
-asked for. So we replaced it completely. We started from **CleanYourTV**, an open-source TV launcher
-(MIT licence), and rebuilt it into our own: the **NZB-CC TV Launcher** in `tv-launcher/`. The PC installs and
-updates it over the network, with no USB stick and no app store.
+asked for, so we replaced it completely. We started from **CleanYourTV**, an open-source TV launcher (MIT
+licence), and turned it into our own: the **NZB-CC TV Launcher** in `tv-launcher/`. Then we built a whole TV
+experience on top of it, piece by piece, checking each change on the real TV.
 
-What we added on top of CleanYourTV:
+### The launcher: installed and kept up to date from the PC
 
-- **A cleaner home screen**:
-  - one line at the top with the time, the date, the weather and the **dollar-to-peso rate** (live, with the
-    day's change);
-  - small round buttons;
-  - a **VPN lock** that's green while NordVPN is on;
-  - the Sora font;
-  - a time-of-day sky instead of a wallpaper;
-  - a single glass dock with just the apps we use: Netflix, Prime Video, YouTube, Kodi, and HAL.
-- **Kodi's recently watched** on the home screen: five posters with how far in you are. OK picks up where you
-  left off, even if Kodi wasn't running, and holding OK opens a menu. The list comes from the PC, so it's there
-  the moment the TV turns on.
-- **"Ready to watch"**: when SABnzbd finishes a download, a card with its poster slides in on the home screen.
-- **HAL 9000 on the TV**: a HAL tile in the dock, and HAL's own screen with his eye, his line, four boxes, the
-  downloads, and five pages of details on the remote.
-  - He talks in a low, slow voice tuned from the PC.
-  - The phone can put him on screen over whatever's playing and make him say anything.
-- **Run from the phone**: TV volume and mute in any app, turning the TV on and opening Kodi, and HAL knowing
-  what's on screen:
+- **No USB stick, no app store.** `install-on-tv.ps1` needs nothing on the TV first. It talks to the TV over
+  the network (ADB), installs our signed launcher, makes it the home screen, and pushes its settings: wallpaper off,
+  the glass dock, the Kodi row, the apps on Home.
+- **Updates by themselves.** **Update everything**, on the PC or from the phone, checks whether the TV has the
+  newest version and installs it.
+  - It keeps your settings and screensaver choice.
+  - It never interrupts what you're watching: if a movie, YouTube or anything else is on screen, it waits for
+    next time.
+  - When it's run from the phone, the TV step runs in your Windows session, so it uses the key the TV already
+    trusts.
+- **TV clean-up tools**:
+  - `switch-off-tv-junk.ps1` switches off the leftover tracking and promo apps. It lists them first, asks, and
+    `-Undo` puts them back.
+  - `remove-tv-apps.ps1` removes the apps you tick in a checklist.
+  - `list-tv-apps.ps1` is a read-only look at what's installed, the sound output, and HDMI-CEC.
+  - `do-everything.ps1` runs all the pending steps in one go.
+
+### A home screen of our own
+
+- **One clean line at the top**:
+  - the time, the date and the **dollar-to-peso rate**, with the day's change ("US$1 = 18.42 MXN ▲ 0.06"); it's
+    live from AllRatesToday with a key, otherwise the European Central Bank's daily rate;
+  - the **weather**, from Open-Meteo, with no account;
+  - small round buttons for Inputs, the app library and Settings;
+  - a **VPN lock** that's closed and green while NordVPN is on, and open and red when it's off.
+- **Kodi's recently watched**, in the middle: five posters on a glass shelf, each with a bar showing how far in you
+  are.
+  - The poster you're on shows the time left, and a tick marks ones you've finished.
+  - **OK** resumes it, even when Kodi wasn't running. **Holding OK** opens a menu.
+  - The list comes from the PC and is saved on the TV, so it's there the moment the TV turns on. It catches up
+    within seconds when you come back to Home, and includes a movie you left open in Kodi.
+- **"Ready to watch"**: when SABnzbd finishes a download, a card with the poster slides in under the top line.
+- **A calm dock**: one glass band along the bottom with just the apps we use, each as its own icon: Netflix, Prime
+  Video, YouTube, Kodi, and **HAL 9000**. Everything else is behind the library button, and the dock keeps the order
+  you set.
+- **The look**: the Sora font, and a time-of-day sky in place of a wallpaper (night blues, a warm sunset glow).
+  There's a news ticker too (with Mexico News Daily), off by default because it was too busy.
+
+### The screensaver
+
+- **Your photos**, from a folder on the PC.
+- A slow zoom and a cross-fade between them, with the clock, date and weather in the corner.
+- Tall photos are shown whole over a blurred fill, and sideways photos are turned upright.
+- No file names or dates over the pictures.
+
+### HAL 9000 on the TV
+
+- **The HAL tile** in the dock, or **Show HAL on the TV** from the phone, brings up HAL's screen over whatever is on.
+- **The screen**:
+  - his eye in the middle, with his line and the first alert under it;
+  - live boxes for **the PC**, **the network**, **Uptime Kuma** and **the Raspberry Pi**;
+  - what's downloading along the bottom.
+- **Five details pages** on the remote: Down opens them, Left and Right move between the PC, the network,
+  Uptime Kuma, the Pi and the downloads, and Back returns.
+- **His voice**: a low, slow man's voice, tuned from the PC. The eye flares on every word, and OK makes him talk
+  again. From the phone you can make him say anything, and keep your own phrases.
+- **Looked after**: the screen drifts a little so nothing burns in. If the PC can't be reached, the boxes dim and
+  say when they were last seen, instead of showing old numbers as live.
+
+### Run from the phone and by voice
+
+- **The TV's own volume and mute**, in any app, from the Watch tab or "Hey Siri, ask HAL, turn it up".
+- **Turn the TV on and open Kodi**, and **play anything by name**: "Hey Siri, ask HAL, play Glass Meridian" turns
+  the TV on if needed and resumes where you stopped.
+- **HAL knows what's on**:
   - the movie in Kodi;
   - the video on YouTube, or the show on Netflix or Prime;
   - the PlayStation or Switch through the Denon amp.
-- **A photo screensaver** with pictures from a folder on the PC.
-- **Clean-up scripts**: one switches off the TV's tracking and promo apps (and can switch them back on), and
-  another removes the apps you pick. Both list what they'll do and ask first.
-- **Updates that never interrupt you**: **Update everything** puts the new TV app on the TV by itself, and waits
-  if something's playing.
-- A **Continue watching** button for Netflix and Prime Video, as an optional extra you can try and remove again.
 
-All of it was built here, step by step, from the TV in the living room and a lot of photos of it.
+  Home on the phone says it in a line ("You're watching How It's Made on YouTube.").
+
+### Things we tried
+
+- A **Continue watching** button for Netflix and Prime Video: a separate little app beside the launcher, which you
+  can install or remove with one script.
+- A "cinema" preview that came before it.
+
+All of it was built here, a step at a time, with a lot of photos of the TV in the living room along the way.
 
 ## Everything HAL does, without getting up off the couch
 
@@ -169,20 +218,7 @@ home-screen widget ([docs/siri-and-widget.md](docs/siri-and-widget.md)).
 
 ## HAL on the TV
 
-### The TV's home screen
-
-The TV runs the NZB-CC launcher (in `tv-launcher/`, built on CleanYourTV) instead of the stock home screen:
-
-- **One line at the top**: the time, the date, and the **dollar-to-peso rate** ("US$1 = 18.42 MXN ▲ 0.06", live
-  with a free key, otherwise daily).
-- **Round buttons** on the right: the weather, Inputs, Wi-Fi, a **VPN lock** (green while NordVPN is on, red when
-  it's off), the app library and Settings.
-- **Kodi's recently watched**: five posters on a glass shelf, each with a bar showing how far in you are. OK
-  resumes it (even when Kodi wasn't running), and holding OK opens a menu.
-- **"Ready to watch"**: a card with the poster when a download finishes.
-- **The dock**: just Netflix, Prime Video, YouTube and Kodi as icons on the glass, then the **HAL 9000 tile**.
-  Everything else is under the library button.
-- **A time-of-day sky** behind it all, and no wallpaper.
+(The whole TV story, home screen and all, is in [Taking over the TV](#taking-over-the-tv) above. Here are HAL's screens in pictures.)
 
 ### HAL's screen
 
