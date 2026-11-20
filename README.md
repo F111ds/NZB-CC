@@ -1,4 +1,89 @@
-mobile nzb command center
+# NZB-CC: a home media command center with HAL 9000 in charge
+
+> "Good evening, Dave. Everything's running smoothly."
+
+NZB-CC runs on a Windows PC at home and pulls the house's media and network gear into one place. The centre of it
+is **HAL 9000**, a phone app (add it to your home screen) styled after the computer in *2001: A Space Odyssey*.
+HAL watches over the PC and everything on it, talks in one calm sentence about your evening, and lets you act from
+the sofa: find and download something, put it on the TV, pause the ads, restart a service, lock the PC.
+
+It's a personal project for one home. Nothing goes to a cloud service of its own: the phone talks to the PC over
+your Wi-Fi (or Tailscale when you're out), behind an access code.
+
+![HAL 9000 Home screen](docs/app-screenshots/01-home.png)
+
+## What it does
+
+- **Downloads**: search your Usenet indexers, add to SABnzbd, see the queue and history, and what Sonarr/Radarr
+  will fetch next. Saved searches run on their own and tell your phone when something new turns up.
+- **Watching**: your Kodi library, continue watching, play on the TV, a remote, TV volume and mute. Movies and
+  shows also play **on the phone** at home through Jellyfin. HAL knows what's on the TV: the movie in Kodi, the
+  video in YouTube, Netflix or Prime, or the games console (PS5, Switch, also through a Denon amp).
+- **The PC**: live CPU, memory, GPU and temperatures with history graphs, drives and their health, services
+  (restart from the phone, or let HAL restart them), Windows Defender, firewall, updates, worth-knowing Windows
+  events, the UPS (battery, power cuts, safe shutdown).
+- **The network**: internet speed and ping, devices that join your Wi-Fi, **Pi-hole** (ads blocked, pause blocking,
+  the Raspberry Pi's health) and **Uptime Kuma** (every monitor, certificates about to expire).
+- **Alerts** to your phone (ntfy) when something needs you, and when it's fine again. A morning briefing and a
+  weekly summary, if you want them.
+- **HAL on the TV**: an Android TV launcher with a HAL screen showing the house at a glance, which can pop up
+  over whatever is on and speak a message you send from the phone.
+- **For fun**: chess against HAL, a full-screen wall display for a spare tablet, Siri ("Hey Siri, ask HAL"),
+  a home-screen widget, and a song.
+
+## How it fits together
+
+```
+ phone (HAL app, /app)  ──Wi-Fi / Tailscale──▶  mobile_server.py on the PC (port 8765)
+                                                  ├─ HAL 9000 (hal_server.py, /hal): watches the PC, alerts, history
+                                                  ├─ SABnzbd · Sonarr · Radarr · Prowlarr · your indexers
+                                                  ├─ Kodi and Jellyfin
+                                                  ├─ Pi-hole · Uptime Kuma · the UPS (NUT)
+                                                  └─ the TV over ADB (tv-launcher/tools): HAL's screen, volume, what's on
+ Android TV  ◀── tv-launcher (NZB-CC TV Launcher APK, with HAL's screen)
+```
+
+| Part | What it is |
+|---|---|
+| `mobile_server.py` | The phone server: the HAL app at `/app`, the classic NZB app at `/`, and HAL at `/hal` |
+| `app_page.py` | The HAL 9000 all-in-one app (one page: Home, Get, Watch, System) |
+| `hal_server.py` | HAL: watches the PC, services, network, Pi-hole, Uptime Kuma, UPS; alerts, briefings, history |
+| `system_monitor.py` | Reads the PC's hardware, drives, security and Windows details |
+| `nzb_command_center.py`, `system_command_center.py`, `kodi_client.py`, `media_server.py` | The original Windows desktop apps (still work) |
+| `tv-launcher/` | The Android TV launcher (with HAL's screen) and the scripts that install it |
+| `setup.ps1`, `update_all.ps1`, `backup_settings.ps1` | Set up once, update everything, back up your settings |
+| `tests/` | Tests for the servers and the app (`python tests/test_hal.py` etc.) |
+
+## Getting started
+
+1. Install Python 3 on the Windows PC, put this folder somewhere permanent, and run **`setup.ps1`**
+   (right-click › Run with PowerShell). It starts the phone server with Windows and moves HAL into it.
+2. On your phone, open `http://<your-pc>:8765/app/`, pair with the 6-digit PIN from
+   `http://localhost:8765/hal/pair` on the PC, and add the page to your home screen.
+3. In the app: **Settings › Connections** for SABnzbd, your indexers, Kodi, Pi-hole and Uptime Kuma (keys are
+   stored encrypted for your Windows user and never sent to the phone).
+4. Optional: install the TV launcher with `tv-launcher/install-on-tv.ps1`.
+
+Updating: **Update everything** in the app (Settings), or `update_all.ps1`. It downloads the newest files from
+GitHub, checks them, restarts what's needed and updates the TV app, without stopping a movie that's playing.
+
+## Privacy and security
+
+- Every request needs the access code; wrong codes are rate-limited. The server only answers your home network
+  and Tailscale unless you allow more.
+- API keys and passwords are encrypted with Windows DPAPI in the settings files, and never shown again.
+- `backup_settings.ps1` backs settings up to GitHub with every key and password removed.
+- Nothing is sent anywhere else, apart from what you set up yourself (ntfy alerts, your indexers, the weather on
+  the TV).
+
+## Credits
+
+- The TV launcher is built on [CleanYourTV](tv-launcher/LICENSE-cleanyourtv) (MIT) and uses the Sora font (OFL).
+- HAL 9000 and *2001: A Space Odyssey* belong to their owners; this is a fan tribute for a home setup, not affiliated.
+
+---
+
+The rest of this page goes into each part in detail.
 
 Screenshots of every page of the HAL 9000 phone app: [docs/app-screenshots](docs/app-screenshots/README.md).
 
