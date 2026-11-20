@@ -179,7 +179,7 @@ body.noscroll{overflow:hidden}
 #chead.on{transform:none}#chead .eye.sm{width:28px;height:28px}#chead .eye.sm::before{inset:4px}#chead .brand{font-size:12px}
 @media (min-width:1000px){#chead{display:none}}
 .vbars{display:flex;align-items:flex-end;gap:2px;height:34px}.vbars i{flex:1;border-radius:2px 2px 0 0;display:block}
-.qrow{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+.qrow{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:10px}
 .qb{border:0;border-radius:14px;background:var(--card);color:var(--text);padding:10px 4px;font-size:12px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:4px}.qb span{font-size:20px}.qb.warn{color:var(--amber)}
 .cardbtn{display:block;width:100%;text-align:left;border:0;color:inherit;font:inherit}
 .drow{display:flex;align-items:center;gap:10px;margin-top:10px}.drow b{font:700 13px var(--mono);width:26px}.dbar{flex:1;height:6px;border-radius:3px;background:#222227;overflow:hidden}.dbar i{display:block;height:100%;border-radius:3px}
@@ -191,7 +191,6 @@ body.noscroll{overflow:hidden}
 .dfree{font:12px var(--mono);color:var(--soft);min-width:96px;text-align:right}
 .linkish{background:none;border:0;padding:0;cursor:pointer}
 .tvvol{display:grid;grid-template-columns:auto 1fr 1.4fr 1fr;gap:8px;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.07)}
-.tvoff{display:block;width:100%;height:46px;margin-top:8px;border:0;border-radius:12px;background:rgba(255,255,255,.06);color:var(--soft);font-size:15px;font-weight:600}.tvoff.sure{background:#3a0d0a;color:#ffb4a8}
 .tvvol .k{margin-right:4px}.tvvol button{height:46px;border:0;border-radius:12px;background:rgba(255,255,255,.08);color:var(--white);font-size:22px;font-weight:600}
 .tvvol button[data-tvkey=mute]{font-size:14px}.tvvol button.hit{background:#3a0d0a;color:#ffb4a8}
 /* Bigger tap areas for the small text buttons, without making them look bigger */
@@ -362,19 +361,16 @@ function downloadsCard(){if(!H)return'';if(H.sab_ok===false)return'<div class="c
     '<button class="btn" data-q="'+(H.paused?'resume':'pause')+'">'+(H.paused?'▶':'❚❚')+'</button></span></h3><div class="tt">'+esc(c.name)+'</div>'+
     '<div class="sub">'+f0(c.pct,'%')+' · '+esc(c.sizeleft||'')+' left'+(s!=null&&!H.paused?' · ready ~'+clock(Date.now()+s*1000):'')+'</div><div class="bar"><i style="width:'+(c.pct||0)+'%"></i></div></div>'}
 function tvCard(full){const k=H&&H.kodi;const p=k&&k.playing;
-  if(!p&&k&&k.front){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span><span class="mono" style="color:#e8a598">● ON</span></h3>'+(k.front_title?'<div class="tt" style="font-size:17px">'+esc(k.front_title)+'</div><div class="sub">'+esc([k.front_sub,'on '+k.front,k.front_paused?'paused':''].filter(Boolean).join(' · '))+'</div>':'<div class="tt">'+esc(k.front)+' is on, '+esc(NAME())+'.</div><div class="sub">Kodi\'s there when you want it.</div>')+tvVol(true)+'</div>'}
+  if(!p&&k&&k.front){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span><span class="mono" style="color:#e8a598">● ON</span></h3>'+(k.front_title?'<div class="tt" style="font-size:17px">'+esc(k.front_title)+'</div><div class="sub">'+esc([k.front_sub,'on '+k.front,k.front_paused?'paused':''].filter(Boolean).join(' · '))+'</div>':'<div class="tt">'+esc(k.front)+' is on, '+esc(NAME())+'.</div><div class="sub">Kodi\'s there when you want it.</div>')+tvVol()+'</div>'}
   if(!p){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span></h3><div class="tt">Nothing\'s playing, '+esc(NAME())+'.</div><div class="sub">'+(k&&k.configured===false?'Kodi isn\'t set up yet.':k&&k.online===false?'Kodi isn\'t answering (the TV may be off).':'Kodi is ready when you are.')+'</div>'+
-    (H&&H.tv_ready?'<button class="btn r wide" style="margin-top:12px" data-tvon>Turn the TV on and open Kodi</button>':'')+tvVol(!!(k&&k.online))+'</div>'}
+    (H&&H.tv_ready?'<button class="btn r wide" style="margin-top:12px" data-tvon>Turn the TV on and open Kodi</button>':'')+tvVol()+'</div>'}
   const us=p.source==='usenet',chip=H&&H.stream_ready||us?srcChip(p.source):'';
   return'<div class="card tvcard"><h3>'+(chip?'<span style="display:flex;align-items:center"><span class="k">NOW ON THE TV</span>'+chip+'</span>':'<span class="k">NOW ON THE TV</span>')+(full?'':'<button class="btn" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'▶ Play':'❚❚ Pause')+'</button>')+'</h3>'+
     '<div class="tt" style="font-size:'+(full?17:14)+'px">'+esc(p.title)+'</div><div class="sub">'+esc((p.sub?p.sub+' · ':'')+mmss(p.time)+' / '+mmss(p.total)+(chip&&full?(us?' · streaming from Usenet':' · from your movie folders'):''))+'</div><div class="bar"><i style="width:'+(p.pct||0)+'%;background:'+(us?'var(--sky)':'#ffb4a8')+'"></i></div>'+
     (full?'<div class="remote"><button data-kc="seek_back" data-pid="'+p.playerid+'">⏪</button><button class="on" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'▶':'❚❚')+'</button><button data-kc="seek_fwd" data-pid="'+p.playerid+'">⏩</button><button data-kc="stop" data-pid="'+p.playerid+'">■</button><button data-kc="next" data-pid="'+p.playerid+'">⏭</button></div>'+
-      tvVol(true):'')+'</div>'}
+      tvVol():'')+'</div>'}
 // The TV's own volume (any app, not just Kodi). Quick taps add up and go as one.
-// on: the TV is known to be on, so it gets a "Turn the TV off" button (two taps, so a stray one can't end a movie).
-let tvOffArmed=0;
-function tvOffBtn(){const sure=Date.now()-tvOffArmed<4000;return sure?'<button class="tvoff sure" data-tvoff>Tap again to turn the TV off</button>':'<button class="tvoff" data-tvoff>⏻&nbsp; Turn the TV off</button>'}
-function tvVol(on){return'<div class="tvvol"><span class="k">VOLUME</span><button data-tvkey="vol_down" aria-label="Quieter">−</button><button data-tvkey="mute" aria-label="Mute">🔇 Mute</button><button data-tvkey="vol_up" aria-label="Louder">+</button></div>'+(on?tvOffBtn():'')}
+function tvVol(){return'<div class="tvvol"><span class="k">VOLUME</span><button data-tvkey="vol_down" aria-label="Quieter">−</button><button data-tvkey="mute" aria-label="Mute">🔇 Mute</button><button data-tvkey="vol_up" aria-label="Louder">+</button></div>'}
 let tvKeyQ={key:'',n:0,t:0};
 function tvKey(key,btn){if(btn){btn.classList.add('hit');setTimeout(()=>btn.classList.remove('hit'),180)}
   if(key==='mute'){sendTvKey('mute',1);return}
@@ -412,9 +408,12 @@ function systemsList(skip){if(!S)return'<div class="list"><div class="empty">'+(
 function homeBody(){if(DESK)return'<div class="cols"><div>'+attention(3)+downloadsCard()+arrivedList(5)+totals()+'</div><div>'+tvCard(true)+jfList()+upcomingList(5,'COMING UP')+'</div><div>'+vitals()+systemsList()+'<p class="hint" style="text-align:left">“'+esc(S?S.hal.quote:'')+'”</p></div></div>';
   // Phone: the PC and the house at a glance. Downloads live on Get.
   return attention(3)+upsCard()+netCard()+piholeCard()+kumaCard()+vitals()+drivesCard()+restartCard()+tvCard(false)+jfList()+'<div class="sec"><span>EVERYTHING ELSE</span></div>'+systemsList(['network','storage','hardware','pihole','kuma'])+'<div class="sec"><span>QUICK BUTTONS</span></div>'+quickRow()}
+// TV off takes two taps (the first turns it amber for 4 seconds), so a stray one can't end a movie.
+let tvOffArmed=0;
+function tvOffBtn(){return Date.now()-tvOffArmed<4000?'<button class="qb warn" data-tvoff><span>⏻</span>Tap again</button>':'<button class="qb" data-tvoff><span>⏻</span>TV off</button>'}
 function quickRow(){const p=S&&S.pihole,ph=p&&p.found&&p.ok,paused=ph&&p.blocking===false;
   const b=(attr,ic,label,cls)=>'<button class="qb'+(cls?' '+cls:'')+'" '+attr+'><span>'+ic+'</span>'+label+'</button>';
-  return'<div class="qrow">'+b('data-qa="lock"','🔒','Lock PC')+b('data-qa="sleep"','🌙','Sleep')+b('data-tvon','📺','TV on')+
+  return'<div class="qrow">'+b('data-qa="lock"','🔒','Lock PC')+b('data-qa="sleep"','🌙','Sleep')+b('data-tvon','📺','TV on')+tvOffBtn()+
     (ph?(paused?b('data-phresume','🛡️','Ads on','warn'):b('data-phpause="5"','⏸️','Pause ads')):b('data-hal="log"','⚙️','More'))+'</div>'}
 function upsCard(){const u=S&&S.power&&S.power.ups;if(!u||!u.on_battery)return'';
   return'<div class="card" style="border:1px solid var(--red2)"><h3><span class="k" style="color:var(--red2)">⚡ POWER CUT · ON THE UPS</span><span class="mono">'+(u.since?ago(u.since):'')+'</span></h3>'+
@@ -1105,7 +1104,7 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if(d.jf){act(()=>api('/api/jellyfin/control',{session:d.sid,action:d.jf}));return}
   if('tvon' in d){act(()=>api('/api/tv/on',{kodi:true}),'Turning the TV on and opening Kodi.');return}
   if('tvoff' in d){if(Date.now()-tvOffArmed>=4000){tvOffArmed=Date.now();c.outerHTML=tvOffBtn();
-      setTimeout(()=>document.querySelectorAll('[data-tvoff].sure').forEach(x=>{if(Date.now()-tvOffArmed>=4000)x.outerHTML=tvOffBtn()}),4100);return}
+      setTimeout(()=>document.querySelectorAll('[data-tvoff].warn').forEach(x=>{if(Date.now()-tvOffArmed>=4000)x.outerHTML=tvOffBtn()}),4100);return}
     tvOffArmed=0;act(()=>api('/api/tv/off',{}),r=>(r&&r.message)||'Turning the TV off.');return}
 });
 
