@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.16.1"
+VERSION = "1.16.2"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2732,6 +2732,7 @@ def voice_app(q: str) -> tuple[str, str] | None:
     return None
 
 
+TV_GLOBAL_SEARCH_APPS = {"netflix", "prime"}   # searched through the TV's own search (they ignore outside searches)
 _tv_app_diagnosed: set = set()
 
 
@@ -2761,7 +2762,17 @@ def tv_app(hal, app: str, query: str = "") -> dict:
         return ok and "Error" not in out and "unable to resolve" not in out.lower() and "does not exist" not in out
 
     def launch() -> tuple[bool, str]:
-        if query:
+        if query and app in TV_GLOBAL_SEARCH_APPS:
+            # Netflix and Prime accept a search from another app and then ignore it, so use the TV's own search:
+            # its results include theirs, and picking one opens it in the app.
+            qs = query.replace("'", "")
+            ok, out = tv_adb(f"am start -a android.search.action.GLOBAL_SEARCH --es query '{qs}'", timeout=20)
+            if not ok:
+                return False, out
+            if taken(ok, out):
+                return True, f"Searching the TV for {query}. Pick it with the remote and it opens in {label}."
+            log.info("TV app %s: the TV's search wasn't taken (%s)", app, (out or "")[-160:])
+        elif query:
             qq = urllib.parse.quote(query, safe="")
             qs = query.replace("'", "")   # for the shell's single quotes
             tries = [f"am start -a android.intent.action.VIEW -d '{u.format(q=qq)}' {pkg}"
