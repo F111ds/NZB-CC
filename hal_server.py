@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.12.0"
+VERSION = "1.12.1"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2164,12 +2164,18 @@ def _tv_is_input(pkg: str, act: str) -> bool:
 def _cec_pretty(name: str) -> str:
     n = name.strip().strip('"')
     m = re.fullmatch(r"PS\s?([2-5])", n, re.I)
-    return f"PlayStation {m.group(1)}" if m else n
+    if m:
+        return f"PlayStation {m.group(1)}"
+    if re.fullmatch(r"(nintendo\s*)?switch(\s*2)?", n, re.I):
+        return "Nintendo Switch" + (" 2" if n.rstrip().endswith("2") else "")
+    if re.fullmatch(r"xbox", n, re.I):
+        return "Xbox"
+    return n
 
 
 def _tv_hdmi_parse(out: str) -> str:
     """The name of what's showing on the TV's HDMI input, from `dumpsys hdmi_control` (CEC): the device at the active
-    source's address, else a PlayStation, else the one games console/player that's on. "" if it can't tell."""
+    source's address, else a games console (PlayStation, Nintendo Switch, Xbox), else the one games console/player that's on. "" if it can't tell."""
     active, devices = "", []
     for line in (out or "").splitlines():
         s = line.strip()
@@ -2189,7 +2195,7 @@ def _tv_hdmi_parse(out: str) -> str:
         if active and d["pa"] == active:
             return _cec_pretty(d["name"])
     for d in devices:
-        if re.search(r"playstation|\bps[2-5]\b", d["name"], re.I):
+        if re.search(r"playstation|\bps[2-5]\b|nintendo|switch|xbox", d["name"], re.I):
             return _cec_pretty(d["name"])
     on = [d for d in devices if d["power"] == 0 and d["type"] in (4, 1, 3, 5)]
     return _cec_pretty(on[0]["name"]) if len(on) == 1 else ""
