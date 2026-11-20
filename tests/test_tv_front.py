@@ -77,6 +77,27 @@ ms = hs._tv_media_parse("""    YouTube com.google.android.youtube.tv/YouTube (us
 assert ms["com.google.android.youtube.tv"] == {"title": "Top 10 Robots in Movies", "sub": "WatchMojo", "state": 3}
 assert ms["com.amazon.amazonvideo.livingroom"]["title"] == "The Boys" and ms["com.amazon.amazonvideo.livingroom"]["state"] == 2
 
+# a games console on an HDMI input: its name comes from HDMI-CEC
+HDMI = """  mActiveSource: ActiveSource(logicalAddress: 0x04, physicalAddress: 0x2000)
+      HdmiDeviceInfo: CEC: logical_address: 0x04 device_type: 4 vendor_id: 0x104 display_name: PS5 power_status: 0 physical_address: 0x2000 port_id: 2
+      HdmiDeviceInfo: CEC: logical_address: 0x05 device_type: 5 display_name: Sonos Arc power_status: 0 physical_address: 0x1000 port_id: 1"""
+assert hs._tv_hdmi_parse(HDMI) == "PlayStation 5"
+assert hs._tv_hdmi_parse("  active source: (0x1, 0x3000)\n  HdmiDeviceInfo: CEC: device_type: 4 display_name: PlayStation 4 power_status: 1 physical_address: 0x1000") == "PlayStation 4"
+assert hs._tv_hdmi_parse("") == ""
+assert hs._tv_is_input("com.mediatek.wwtv.tvcenter", "com.mediatek.wwtv.tvcenter.nav.TurnkeyUiMainActivity")
+assert not hs._tv_is_input("com.google.android.youtube.tv", "com.google.android.apps.youtube.tv.activity.ShellActivity")
+INPUT_FRONT = "  ResumedActivity: ActivityRecord{1 u0 com.mediatek.wwtv.tvcenter/.nav.TurnkeyUiMainActivity t3}"
+hs.tv_adb = lambda cmd, timeout=30: (True, INPUT_FRONT if "activities" in cmd else HDMI if "hdmi_control" in cmd else "")
+hs._tv_front_refresh()
+f = hs.tv_front()
+assert f["app"] == "PlayStation 5" and not f["home"] and not f["kodi"]
+hs.tv_adb = lambda cmd, timeout=30: (True, INPUT_FRONT if "activities" in cmd else "")
+hs._tv_front_refresh()
+assert hs.tv_front()["app"] == "HDMI"                                 # an input, nobody named on it
+hs.tv_adb = lambda cmd, timeout=30: (True, "  ResumedActivity: ActivityRecord{1 u0 com.google.android.youtube.tv/.Shell t3}" if "activities" in cmd else "")
+hs._tv_front_refresh()
+assert hs.tv_front()["app"] == "YouTube"                              # back to an app: the input's name goes
+
 # Kodi has Short Circuit paused in the background
 movie = {"playerid": 1, "title": "Short Circuit", "paused": True}
 m._kodi_now_playing = lambda: dict(movie)
