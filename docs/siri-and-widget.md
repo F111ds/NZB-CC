@@ -34,6 +34,9 @@ Things you can say after "Hey Siri, ask HAL":
 | "Pause" / "Resume" / "Stop" | What's playing in Kodi |
 | "Skip back" / "Skip ahead" | 15 seconds back, 30 forward |
 | "Turn it up" / "Turn it down" / "Turn it up by 5" / "Mute" | The TV's own volume, in any app |
+| "Open YouTube" / "Open Netflix" / "Open Prime" | Opens the app on the TV (turning the TV on first if it's off) |
+| "Play cat videos on YouTube" / "Search YouTube for …" | YouTube with the search results |
+| "Watch Stranger Things on Netflix" / "Play The Office on Prime" | Opens the app's search for it. Netflix and Prime don't let other apps press play, and if the app won't take the search, HAL just opens it and says so |
 | "What's on?" | The movie in Kodi, the video on YouTube, the show on Netflix or Prime, or the games console |
 | "What's new?" | What SABnzbd finished downloading today |
 | "How's everything?" | A summary: alerts, downloads, ads blocked, drives |

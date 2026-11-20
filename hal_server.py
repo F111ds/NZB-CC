@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.15.1"
+VERSION = "1.16.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1666,6 +1666,8 @@ def siri_intent(q: str) -> str:
         if has("pause", "off", "stop", "disable", "turn off"):
             return "ads_off"
         return "ads"
+    if voice_app(q):
+        return "app"
     if voice_title(q):
         return "play"
     if has("whats on", "what s on", "what is on", "what am i watching", "whats playing", "what s playing", "what is playing", "on the tv right now"):
@@ -1900,6 +1902,9 @@ class FunMixin:
                     "intent": intent}
         if intent == "tv_show":
             return {"say": tv_show(self, "")["message"], "intent": intent}
+        if intent == "app":
+            app, query = voice_app(q)
+            return {"say": spoken(tv_app(self, app, query)["message"]), "intent": intent}
         if intent == "play":
             title = voice_title(q)
             low = str(q).lower()
@@ -2682,6 +2687,93 @@ def tv_front(max_age: float = 15) -> dict | None:
     title = media.get("title", "") if media.get("title", "").strip().lower() not in ("", name.lower(), pkg.lower()) else ""
     return {"pkg": pkg, "app": name, "kodi": pkg == "org.xbmc.kodi", "home": home, "hal": hal,
             "title": title, "sub": media.get("sub", "") if title else "", "paused": bool(title) and media.get("state") == 2}
+
+
+# ---- Opening apps on the TV by voice: "open YouTube", "play cat videos on YouTube" ----
+TV_VOICE_APPS = {
+    "youtube": ("com.google.android.youtube.tv", "YouTube", "https://www.youtube.com/results?search_query={q}"),
+    "netflix": ("com.netflix.ninja", "Netflix", "https://www.netflix.com/search?q={q}"),
+    "prime": ("com.amazon.amazonvideo.livingroom", "Prime Video", "https://app.primevideo.com/search?phrase={q}"),
+}
+_APP_WORDS = r"(?P<app>you ?tube|net ?flix|amazon prime video|amazon prime|prime video|amazon video|prime)"
+
+
+def _app_key(word: str) -> str:
+    w = word.replace(" ", "")
+    return "youtube" if w == "youtube" else "netflix" if w == "netflix" else "prime"
+
+
+def voice_app(q: str) -> tuple[str, str] | None:
+    """('youtube', 'cat videos') for 'play cat videos on YouTube'; ('netflix', '') for 'open Netflix'; None otherwise."""
+    s = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9' ]+", " ", str(q or "").lower())).strip()
+    s = re.sub(r"^(?:ok |hey )?(?:hal )?(?:please |can you |could you )?", "", s)
+    s = re.sub(r" please$", "", s)
+    if not re.search(_APP_WORDS, s):
+        return None
+    pats = [
+        r"^(?:open|start|launch|go to|switch to|bring up|put on|turn on|fire up|load)? ?(?:the )?" + _APP_WORDS + r"(?: app)?(?: on the (?:tv|television))?$",
+        r"^(?:play|watch|search for|search|find|look up|look for|put on|show me|show)\s+(?P<q>.+?)\s+(?:on|in|from)\s+(?:the )?" + _APP_WORDS + r"(?: app)?$",
+        r"^(?:search|look on|look in|search on)\s+(?:the )?" + _APP_WORDS + r"\s+for\s+(?P<q>.+)$",
+        r"^(?:open|start|go to)\s+(?:the )?" + _APP_WORDS + r"\s+and\s+(?:search for|search|find|look up|play|watch)\s+(?P<q>.+)$",
+    ]
+    for pat in pats:
+        m = re.match(pat, s)
+        if m:
+            query = (m.groupdict().get("q") or "").strip()
+            if query in ("something", "anything", "it", "stuff"):
+                query = ""
+            return _app_key(m.group("app")), query
+    return None
+
+
+def tv_app(hal, app: str, query: str = "") -> dict:
+    """Opens YouTube / Netflix / Prime Video on the TV, searching for `query` when there is one. Turns the TV on first
+    when it can't be reached, and opens the app once it answers."""
+    pkg, label, search = TV_VOICE_APPS[app]
+    name = hal.settings["name"]
+    if hal.monitor.__class__.__name__ == "DemoMonitor":
+        return {"ok": True, "message": "Demo mode: nothing was sent to the TV."}
+    query = re.sub(r"\s+", " ", query).strip()[:120]
+
+    def launch() -> tuple[bool, str]:
+        if query:
+            uri = search.format(q=urllib.parse.quote(query, safe=""))
+            ok, out = tv_adb(f"am start -a android.intent.action.VIEW -d '{uri}' {pkg}", timeout=20)
+            if ok and "Error" not in out and "unable to resolve" not in out.lower():
+                return True, f"Searching {label} for {query}."
+            log.info("TV app %s: search link not taken (%s)", app, (out or "")[-160:])
+        ok, out = tv_adb(f"monkey -p {pkg} -c android.intent.category.LEANBACK_LAUNCHER 1", timeout=20)
+        if not ok:
+            return False, out
+        if "No activities found" in out or "not found" in out.lower():
+            return False, f"{label} isn't installed on the TV."
+        if query:
+            return True, f"I opened {label}, but it wouldn't take the search. You'll have to look for {query} yourself."
+        return True, f"Opening {label}."
+
+    ok, msg = launch()
+    if ok:
+        log.info("TV app: %s%s", label, f" search {query!r}" if query else "")
+        return {"ok": True, "message": msg}
+    if "isn't installed" in msg:
+        return {"ok": False, "message": msg}
+    # The TV didn't answer: probably off. Turn it on (no Kodi), and open the app once it's up.
+    r = _phone_post(hal, "/api/tv/on", {"kodi": False}, timeout=15)
+    if not r.get("ok"):
+        return {"ok": False, "message": f"I couldn't reach the TV, {name}."}
+
+    def later():
+        end = time.time() + 60
+        while time.time() < end:
+            time.sleep(6)
+            done, _m = launch()
+            if done:
+                log.info("TV app: %s opened after turning the TV on", label)
+                return
+        log.info("TV app: %s - the TV didn't answer after turning it on", label)
+
+    threading.Thread(target=later, daemon=True, name="tv-app").start()
+    return {"ok": True, "message": f"Turning the TV on, {name}. {label} will open in a moment."}
 
 
 TV_KEYS = {"vol_up": 24, "vol_down": 25, "mute": 164}

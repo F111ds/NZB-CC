@@ -123,4 +123,32 @@ hs._phone_api = lambda hal, path: {"kodi": {"playing": None, "front": "YouTube",
 assert real.siri("what's on")["say"].startswith("You're watching How It's Made")
 hs._sab_h_cache.update(t=1e12, v={"slots": [{"name": "Coldwater.S04E02.1080p.WEB-GRP", "ok": True, "t": 4e9}]})
 assert "Coldwater season 4, episode 2" in real.siri("what's new")["say"]
+# ---- opening apps on the TV ----
+for q, want in [("open YouTube", ("youtube", "")), ("Open Netflix.", ("netflix", "")), ("put on Amazon Prime", ("prime", "")),
+                ("play cat videos on YouTube", ("youtube", "cat videos")), ("watch Stranger Things on Netflix", ("netflix", "stranger things")),
+                ("search YouTube for how to fix a faucet", ("youtube", "how to fix a faucet")), ("open YouTube and search for lofi music", ("youtube", "lofi music")),
+                ("play the office on prime", ("prime", "the office")), ("play glass meridian", None), ("pause the ads", None)]:
+    assert hs.voice_app(q) == want, (q, hs.voice_app(q))
+assert hs.siri_intent("open netflix") == "app" and hs.siri_intent("play glass meridian") == "play"
+cmds = []
+hs.tv_adb = lambda cmd, timeout=30: (cmds.append(cmd), (True, "Starting: Intent { act=android.intent.action.VIEW }"))[1]
+r = hs.tv_app(real, "youtube", "cat videos & dogs")
+assert r["ok"] and r["message"] == "Searching YouTube for cat videos & dogs."
+assert "search_query=cat%20videos%20%26%20dogs'" in cmds[-1] and cmds[-1].endswith(" com.google.android.youtube.tv")   # safe for the TV's shell
+r = hs.tv_app(real, "netflix")
+assert r["message"] == "Opening Netflix." and cmds[-1].startswith("monkey -p com.netflix.ninja")
+# a search link the app won't take: it opens the app and says so
+hs.tv_adb = lambda cmd, timeout=30: (cmds.append(cmd), (True, "Error: Activity not started, unable to resolve Intent") if cmd.startswith("am start") else (True, "Events injected: 1"))[1]
+r = hs.tv_app(real, "prime", "the office")
+assert r["ok"] and "wouldn't take the search" in r["message"]
+# the TV is off: turned on through the phone server, and the app opens later
+hs.tv_adb = lambda cmd, timeout=30: (False, "The TV didn't answer in time. Is it on?")
+posted = []
+hs._phone_post = lambda hal, path, body, timeout=20: (posted.append((path, body)), {"ok": True})[1]
+_T = hs.threading.Thread
+hs.threading.Thread = lambda target, daemon=True, name="": type("T", (), {"start": lambda self: None})()
+r = hs.tv_app(real, "youtube")
+hs.threading.Thread = _T
+assert posted[-1] == ("/api/tv/on", {"kodi": False}) and r["message"].startswith("Turning the TV on") and "YouTube will open" in r["message"]
+assert "YouTube" in real.siri("open youtube")["say"]
 print("\nALL VOICE TESTS PASSED")
