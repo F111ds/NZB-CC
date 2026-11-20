@@ -85,6 +85,16 @@ It tries each way in turn and asks "did the TV show results?". The first one you
 `tv_search_methods.json`, and HAL uses it at once. Until then, "search Netflix for …" just opens Netflix.
 `-App netflix` tests only Netflix; `-Reset` forgets what was saved.
 
+What worked on our TV (Chromecast with Google TV), for reference:
+
+| App | Search | What you see |
+|---|---|---|
+| YouTube | YouTube web link | YouTube's results |
+| Prime Video | Prime web link | Prime's results |
+| Netflix | none of its own: Netflix ignores searches sent from outside the app | HAL uses the TV's own search (global search, Google app); pick the Netflix result with the remote |
+
+If a search stops working after an app update, run the test again for that app, e.g. `-App prime`.
+
 ## Home-screen widget
 
 1. Install **Scriptable** (free) from the App Store.
