@@ -334,7 +334,7 @@ function homeLine(){if(!H&&!S)return'I\'m thinking…';const parts=[],iss=issues
   const cur=DESK&&H&&H.current,n=H?H.total||0:0;
   if(cur&&!H.paused){const s=secsOf(cur.eta);const at=s!=null&&s<86400?' by '+clock(Date.now()+s*1000):'';parts.push(n>1?n+' downloads are on their way'+(at?', the first one'+at:'')+'.':'One download finishes'+(at||' soon')+'.')}
   else if(DESK&&H&&H.paused)parts.push('Downloads are paused.');
-  const kp=H&&H.kodi&&H.kodi.playing;parts.push(kp?'You\'re watching '+kp.title+'.':'The TV is free.');
+  const kp=H&&H.kodi&&H.kodi.playing;const fa=H&&H.kodi&&H.kodi.front;parts.push(kp?'You\'re watching '+kp.title+'.':fa?fa+' is on the TV.':'The TV is free.');
   if(iss.length===1)parts.push('There\'s one small thing: '+iss[0].title.charAt(0).toLowerCase()+iss[0].title.slice(1)+'.');
   else if(iss.length>1)parts.push(iss.length+' things need your attention.');
   if(!cur&&!kp&&!iss.length&&S)return S.hal.quote;
@@ -355,6 +355,7 @@ function downloadsCard(){if(!H)return'';if(H.sab_ok===false)return'<div class="c
     '<button class="btn" data-q="'+(H.paused?'resume':'pause')+'">'+(H.paused?'▶':'❚❚')+'</button></span></h3><div class="tt">'+esc(c.name)+'</div>'+
     '<div class="sub">'+f0(c.pct,'%')+' · '+esc(c.sizeleft||'')+' left'+(s!=null&&!H.paused?' · ready ~'+clock(Date.now()+s*1000):'')+'</div><div class="bar"><i style="width:'+(c.pct||0)+'%"></i></div></div>'}
 function tvCard(full){const k=H&&H.kodi;const p=k&&k.playing;
+  if(!p&&k&&k.front){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span><span class="mono" style="color:#e8a598">● ON</span></h3><div class="tt">'+esc(k.front)+' is on, '+esc(NAME())+'.</div><div class="sub">Kodi\'s there when you want it.</div>'+tvVol()+'</div>'}
   if(!p){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span></h3><div class="tt">Nothing\'s playing, '+esc(NAME())+'.</div><div class="sub">'+(k&&k.configured===false?'Kodi isn\'t set up yet.':k&&k.online===false?'Kodi isn\'t answering (the TV may be off).':'Kodi is ready when you are.')+'</div>'+
     (H&&H.tv_ready?'<button class="btn r wide" style="margin-top:12px" data-tvon>Turn the TV on and open Kodi</button>':'')+tvVol()+'</div>'}
   return'<div class="card tvcard"><h3><span class="k">NOW ON THE TV</span>'+(full?'':'<button class="btn" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'▶ Play':'❚❚ Pause')+'</button>')+'</h3>'+
