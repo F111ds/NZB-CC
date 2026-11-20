@@ -132,6 +132,42 @@ hs.tv_adb = lambda cmd, timeout=30: (True, INPUT_FRONT if "activities" in cmd el
 hs._tv_front_refresh()
 assert hs.tv_front()["app"] == "PlayStation 5"
 
+# the amp is on an input you haven't renamed ("Media Player"): the one console the TV can see is who's on it
+hs._denon_http = fake_http("MPLAY", "Media Player")
+CEC_AMP_PS = ("  active source: (0x1, 0x1000)\n"
+              "  HdmiDeviceInfo: CEC: device_type: 5 display_name: Denon AVR-X2700H power_status: 0 physical_address: 0x1000\n"
+              "  HdmiDeviceInfo: CEC: device_type: 4 display_name: PS5 power_status: 0 physical_address: 0x1100")
+hs.tv_adb = lambda cmd, timeout=30: (True, INPUT_FRONT if "activities" in cmd else CEC_AMP_PS if "hdmi_control" in cmd else "")
+hs._tv_front_refresh()
+assert hs.tv_front()["app"] == "PlayStation 5", hs.tv_front()
+hs.tv_adb = lambda cmd, timeout=30: (True, INPUT_FRONT if "activities" in cmd else
+                                     CEC_AMP_PS + "\n  HdmiDeviceInfo: CEC: device_type: 4 display_name: Switch physical_address: 0x1200" if "hdmi_control" in cmd else "")
+hs._tv_front_refresh()
+assert hs.tv_front()["app"] == "Media Player (Denon)"                 # a PlayStation and a Switch: no guessing
+hs.tv_adb = lambda cmd, timeout=30: (True, INPUT_FRONT if "activities" in cmd else "display_name: Denon AVR-X2700H" if "hdmi_control" in cmd
+                                     else "label=PlayStation(R)5" if "tv_input" in cmd else "")
+hs._tv_front_refresh()
+assert hs.tv_front()["app"] == "PlayStation 5"                         # from the TV's input labels
+assert hs._only_console("PS5", "PlayStation(R)5 label=PlayStation") == "PlayStation 5"
+assert hs._only_console("PS5 and Nintendo Switch") == "" and hs._only_console("") == ""
+
+# switching from Kodi to the PlayStation: the screen counts as changed at once, not after the slow name lookups
+front("org.xbmc.kodi")
+mid = {}
+def slow_adb(cmd, timeout=30):
+    if "activities" in cmd:
+        return True, INPUT_FRONT
+    if "hdmi_control" in cmd:
+        mid["front"] = hs.tv_front()          # what the phone and HAL would see while the TV is still being asked
+    return True, CEC_AMP_PS if "hdmi_control" in cmd else ""
+hs.tv_adb = slow_adb
+hs._tv_front_refresh()
+assert mid["front"] and not mid["front"]["kodi"] and mid["front"]["app"] == "HDMI", mid
+assert hs.tv_front()["app"] == "PlayStation 5"
+m._kodi_now_playing = lambda: {"playerid": 1, "title": "Short Circuit", "paused": True}
+m.tv_front_app = lambda: mid["front"]
+assert m.kodi_now_playing() is None                                    # no "watching Short Circuit" while the PlayStation is on
+
 # Kodi has Short Circuit paused in the background
 movie = {"playerid": 1, "title": "Short Circuit", "paused": True}
 m._kodi_now_playing = lambda: dict(movie)

@@ -2412,6 +2412,17 @@ def _console_anywhere(*texts: str) -> str:
     return _cec_pretty(re.sub(r"\s+", " ", re.sub(r"\(R\)|®", " ", best)))
 
 
+def _only_console(*texts: str) -> str:
+    """The games console's name if the TV's answers mention exactly one console (PS5 and PlayStation 5 are the
+    same one), else "": with a PlayStation and a Switch both listed, there's no telling which is on."""
+    names = set()
+    for text in texts:
+        for mt in CONSOLE_RE.finditer(text or ""):
+            names.add(_cec_pretty(re.sub(r"\s+", " ", re.sub(r"\(R\)|®", " ", mt.group(0))).strip()))
+    names = {n for n in names if not any(o != n and o.startswith(n) for o in names)}   # "PlayStation" is the PlayStation 5
+    return names.pop() if len(names) == 1 else ""
+
+
 # ---- The Denon (or Marantz) amp: the consoles go through it, so the TV only sees "the amp's input" ----
 DENON_INPUTS = {"GAME": "Game", "GAME2": "Game 2", "MPLAY": "Media Player", "BD": "Blu-ray", "DVD": "DVD", "SAT/CBL": "CBL/SAT",
                 "SAT": "SAT", "CBL/SAT": "CBL/SAT", "AUX1": "AUX1", "AUX2": "AUX2", "AUX": "AUX", "TV": "TV Audio", "NET": "HEOS Music",
@@ -2571,7 +2582,15 @@ def _tv_front_refresh() -> None:
                          "if [ -n \"$f\" ]; then echo \"$f\"; else dumpsys window | grep -m1 -E 'mCurrentFocus|mFocusedApp'; fi", timeout=25)
         pkg, act = _tv_front_parse(out) if ok else ("", "")
         media_out, inp = "", ""
+        prev = {"pkg": _tv_front.get("pkg"), "title": (_tv_front.get("media") or {}).get("title"), "input": _tv_front.get("input")}
+        if pkg and pkg != prev["pkg"]:
+            # Say at once that the screen changed: the name lookups below (the PlayStation's name, the amp) can take a
+            # while, and until now the old answer stood - Kodi "in front" with its paused movie while the PlayStation was on.
+            t0 = time.time()
+            _tv_front.update({"pkg": pkg, "activity": act, "t": t0, "ok_t": t0, "error": "", "media": {},
+                              "input": "HDMI" if _tv_is_input(pkg, act) else ""})
         if pkg and _tv_is_input(pkg, act):
+            seen, have_inputs = "", False   # what the TV said, for a second look if the amp's input has no name
             try:   # an HDMI input: who's on it (the PlayStation says its name over HDMI-CEC)
                 hok, hout = tv_adb("dumpsys hdmi_control", timeout=20)
                 inp = _tv_hdmi_parse(hout) if hok else ""
@@ -2579,7 +2598,9 @@ def _tv_front_refresh() -> None:
                 if not inp:   # other wordings, and the TV's input list (Sony and others label an input with the device's name)
                     iok, iout = tv_adb("dumpsys tv_input | grep -i -E 'label|name|hdmi|title'", timeout=20)
                     inp = _console_anywhere(hout if hok else "", iout if iok else "")
-                hout = (hout or "") + "\n--- tv_input ---\n" + (iout or "")
+                    have_inputs, iout = True, (iout if iok else "")
+                hout = (hout if hok else "") + "\n--- tv_input ---\n" + (iout or "")
+                seen = hout
                 if not inp and _tv_front.get("raw_logged") != "hdmi:" + pkg:
                     _tv_front["raw_logged"] = "hdmi:" + pkg
                     bits = [l.strip() for l in (hout or "").splitlines() if re.search(r"active|display|name|device|0x", l, re.I)][:30]
@@ -2589,6 +2610,13 @@ def _tv_front_refresh() -> None:
             if not inp or re.search(r"denon|marantz|avr|receiver", inp, re.I):
                 try:   # through the Denon: ask the amp which input it's on
                     d = denon_now()
+                    if d.endswith("(Denon)"):
+                        # An input you haven't renamed on the amp ("Media Player"): if the TV can see exactly one
+                        # games console (its HDMI-CEC list or input labels), that's who is on it.
+                        if not have_inputs:
+                            iok, iout = tv_adb("dumpsys tv_input | grep -i -E 'label|name|hdmi|title'", timeout=20)
+                            seen += "\n" + (iout if iok else "")
+                        d = _only_console(seen) or d
                     if d:
                         inp = d
                 except Exception as exc:  # noqa: BLE001
@@ -2614,7 +2642,7 @@ def _tv_front_refresh() -> None:
                 bits = [l.strip() for l in media_out.splitlines() if pkg in l or "metadata" in l.lower() or "description" in l
                         or "PlaybackState" in l or "TITLE" in l][:25]
                 log.info("TV front app: no title found for %s. The TV's media sessions said: %s", pkg, " | ".join(bits)[:1500] or "(nothing)")
-            if pkg != _tv_front.get("pkg") or media.get("title") != (_tv_front.get("media") or {}).get("title") or inp != _tv_front.get("input"):
+            if pkg != prev["pkg"] or media.get("title") != prev["title"] or inp != prev["input"]:
                 log.info("TV front app: %s%s%s", act, f" playing {media['title']!r} ({media.get('sub') or '-'}, state {media.get('state')})" if media.get("title") else "",
                          f" showing {inp}" if inp else "")
             _tv_front.update({"pkg": pkg, "activity": act, "t": now, "ok_t": now, "error": "", "media": media, "input": inp})
