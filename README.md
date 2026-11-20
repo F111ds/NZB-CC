@@ -25,11 +25,53 @@ pick the best release and send it to SABnzbd, then watch it download. It worked 
    Windows, processes).
 4. **HAL 9000** brought the phone side together: one calm voice that watches over the PC, the network, Pi-hole,
    Uptime Kuma and the UPS, and tells you about your evening in a sentence.
-5. **HAL on the TV** came last: a TV launcher with HAL's screen, and HAL's voice in the living room.
+5. **The TV got a home screen of our own.** We threw out the TV's stock home screen, with its ads and promos,
+   and replaced it with our own build of the open-source CleanYourTV launcher. Then we kept going: Kodi's
+   recently watched shelf, the peso rate, the weather, and finally HAL himself on the TV, with his voice in the
+   living room.
 
 The desktop apps are still here, still work, and still share their settings with everything else. The
 phone app's **Settings › Connections** edits the same SABnzbd and indexer settings the NZB Command Center uses.
 What follows is the whole thing, from the newest screen back to where it started.
+
+## Taking over the TV
+
+The TV is a Sony BRAVIA running Android TV. Its own home screen was rows of ads, promoted shows and apps nobody
+asked for. So we replaced it completely. We started from **CleanYourTV**, an open-source TV launcher
+(MIT licence), and rebuilt it into our own: the **NZB-CC TV Launcher** in `tv-launcher/`. The PC installs and
+updates it over the network, with no USB stick and no app store.
+
+What we added on top of CleanYourTV:
+
+- **A cleaner home screen**:
+  - one line at the top with the time, the date, the weather and the **dollar-to-peso rate** (live, with the
+    day's change);
+  - small round buttons;
+  - a **VPN lock** that's green while NordVPN is on;
+  - the Sora font;
+  - a time-of-day sky instead of a wallpaper;
+  - a single glass dock with just the apps we use: Netflix, Prime Video, YouTube, Kodi, and HAL.
+- **Kodi's recently watched** on the home screen: five posters with how far in you are. OK picks up where you
+  left off, even if Kodi wasn't running, and holding OK opens a menu. The list comes from the PC, so it's there
+  the moment the TV turns on.
+- **"Ready to watch"**: when SABnzbd finishes a download, a card with its poster slides in on the home screen.
+- **HAL 9000 on the TV**: a HAL tile in the dock, and HAL's own screen with his eye, his line, four boxes, the
+  downloads, and five pages of details on the remote.
+  - He talks in a low, slow voice tuned from the PC.
+  - The phone can put him on screen over whatever's playing and make him say anything.
+- **Run from the phone**: TV volume and mute in any app, turning the TV on and opening Kodi, and HAL knowing
+  what's on screen:
+  - the movie in Kodi;
+  - the video on YouTube, or the show on Netflix or Prime;
+  - the PlayStation or Switch through the Denon amp.
+- **A photo screensaver** with pictures from a folder on the PC.
+- **Clean-up scripts**: one switches off the TV's tracking and promo apps (and can switch them back on), and
+  another removes the apps you pick. Both list what they'll do and ask first.
+- **Updates that never interrupt you**: **Update everything** puts the new TV app on the TV by itself, and waits
+  if something's playing.
+- A **Continue watching** button for Netflix and Prime Video, as an optional extra you can try and remove again.
+
+All of it was built here, step by step, from the TV in the living room and a lot of photos of it.
 
 ## Everything HAL does, without getting up off the couch
 
