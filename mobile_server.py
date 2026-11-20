@@ -4366,7 +4366,32 @@ def stream_to_tv(stream_id: str) -> dict:
         tv_start(launch_kodi=True)
         started_tv = True
     _tv_wait_for_kodi(90 if started_tv else TV_PLAY_WAIT_SECS)
+    if not started_tv and tv_configured():
+        front = tv_front_app()
+        if front and not front.get("kodi"):   # Kodi answers in the background: bring it up, or it plays out of sight
+            try:
+                tv_open_kodi()
+                time.sleep(2)
+            except Exception as exc:  # noqa: BLE001 - best effort: play anyway
+                log.info("stream to tv: couldn't bring Kodi to the front (%s)", exc)
+    where = urllib.parse.urlsplit(url).netloc
+    log.info("stream to tv: Kodi at %s opens AltMount at %s", kodi_host or "?", where)
     kodi_call("Player.Open", {"item": {"file": url}}, timeout=20)
+    # Kodi says OK at once, then may fail to open the address: check it really started.
+    playing = False
+    for _ in range(10):
+        time.sleep(1)
+        try:
+            players = kodi_call("Player.GetActivePlayers", timeout=4)
+        except UpstreamError:
+            continue
+        if isinstance(players, list) and players:
+            playing = True
+            break
+    if not playing:
+        log.info("stream to tv: Kodi didn't start playing %s", where)
+        raise UpstreamError(f"Kodi couldn't open the stream from {where}. Check that the TV can reach the PC: "
+                            f"on the phone, http://{where}/live should show OK.")
     _stream_mark_watched(stream_id)
     return {"ok": True, "started_tv": started_tv, "title": entry["title"]}
 
