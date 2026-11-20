@@ -221,5 +221,19 @@ except ValueError:
     pass
 m.load_settings, m.tv_configured, m.tv_power_state, m.sony_call, m.sony_ircc = _saved_m
 m._tv_awake, m._tv_sleep_adb = _saved_a
+# Kodi's library in numbers for the TV's Downloads page; the last answer stays while Kodi is off
+_kp = m.kodi_paged
+m._library_cache.update(t=0, v={})
+m.kodi_paged = lambda method, key, params, **k: ([{"title": "Coco", "year": 2017, "playcount": 0, "dateadded": "2001-01-01 00:00:00"},
+                                                  {"title": "Arrival", "year": 2016, "playcount": 2, "dateadded": "2099-01-01 00:00:00"}]
+                                                 if key == "movies" else [{"episode": 10}, {"episode": 5}])
+lib_ = m.library_summary()
+assert lib_["movies"] == 2 and lib_["unwatched"] == 1 and lib_["added_week"] == 1 and lib_["newest"] == "Arrival (2016)" and lib_["episodes"] == 15
+def _off(*a, **k):
+    raise m.UpstreamError("Can't reach Kodi")
+m.kodi_paged = _off
+m._library_cache["t"] = 0
+assert m.library_summary()["stale"] and m.library_summary()["movies"] == 2
+m.kodi_paged = _kp
 print("tv off ok")
 print("\nALL VOICE TESTS PASSED")

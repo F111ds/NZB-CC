@@ -917,7 +917,8 @@ public class HalActivity extends Activity {
             LinearLayout.LayoutParams hl = flexHourly ? new LinearLayout.LayoutParams(-1, 0, 1f) : new LinearLayout.LayoutParams(-1, dp(46));
             hl.topMargin = dp(8);
             box.addView(new HourBars(this, hourly, color)
-                    .part(col.optJSONArray("hourly2"), colorOf(col.optString("hourly2_color"), 0xFFFF6A4D)), hl);
+                    .part(col.optJSONArray("hourly2"), colorOf(col.optString("hourly2_color"), 0xFFFF6A4D))
+                    .tops(col.optJSONArray("hourly_tops")), hl);
             JSONArray labels = col.optJSONArray("hourly_labels");
             if (labels != null && labels.length() > 0) {
                 // One label under each bar (days), or a few spread across (24 h ago ... now).
@@ -1127,6 +1128,17 @@ public class HalActivity extends Activity {
             this.color = color;
         }
 
+        private String[] tops;
+
+        /** A small label over each bar ("45 GB"), so short bars can still be read. */
+        HourBars tops(JSONArray a) {
+            if (a != null && a.length() == vals.length) {
+                tops = new String[a.length()];
+                for (int i = 0; i < tops.length; i++) tops[i] = a.optString(i, "");
+            }
+            return this;
+        }
+
         /** The part of each bar drawn in a second color from the bottom (blocked out of all queries). */
         HourBars part(JSONArray a, int color) {
             if (a != null && a.length() == vals.length) {
@@ -1143,15 +1155,24 @@ public class HalActivity extends Activity {
             if (n == 0) return;
             float max = 1;
             for (float v : vals) max = Math.max(max, v);
-            float gap = getResources().getDisplayMetrics().density * 2, w = (getWidth() - gap * (n - 1)) / n, h = getHeight();
+            float d = getResources().getDisplayMetrics().density;
+            float gap = d * 2, w = (getWidth() - gap * (n - 1)) / n, full = getHeight();
+            float label = tops != null ? d * 16 : 0, h = full - label;
             p.setColor(color);
             for (int i = 0; i < n; i++) {
                 float bh = Math.max(h * 0.04f, h * vals[i] / max), x = i * (w + gap);
+                if (tops != null && !tops[i].isEmpty()) {
+                    p.setColor(0xFFD4D4D8);
+                    p.setTextSize(d * 10);
+                    p.setTypeface(Typeface.MONOSPACE);
+                    p.setTextAlign(Paint.Align.CENTER);
+                    c.drawText(tops[i], x + w / 2, full - bh - d * 4, p);
+                }
                 p.setColor(color);
-                c.drawRoundRect(x, h - bh, x + w, h, gap / 2, gap / 2, p);
+                c.drawRoundRect(x, full - bh, x + w, full, gap / 2, gap / 2, p);
                 if (part != null && vals[i] > 0 && part[i] > 0) {
                     p.setColor(partColor);
-                    c.drawRect(x, h - bh * Math.min(1f, part[i] / vals[i]), x + w, h, p);
+                    c.drawRect(x, full - bh * Math.min(1f, part[i] / vals[i]), x + w, full, p);
                 }
             }
         }

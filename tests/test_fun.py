@@ -177,10 +177,16 @@ netg, pig, dlg = det["pages"][1]["grid"], det["pages"][3]["grid"], det["pages"][
 assert netg[0][0]["graph_fit"] and [c["key"] for c in netg[1]] == ["TRAFFIC · LAST 24 H", "BUSIEST DEVICES"] and netg[1][0]["graph2"]
 assert any(r[0].startswith("Docker") for r in netg[1][1]["rows"])
 assert len(pig[0][1]["hourly"]) == 24 and len(pig[0][1]["hourly2"]) == 24 and pig[1][2]["key"] == "MOST ASKED FOR" and pig[1][2]["rows"][0][0] == "i.ytimg.com"
-assert [c["key"] for r in dlg for c in r] == ["QUEUE", "RECENTLY FINISHED", "LAST 7 DAYS", "COMING UP"] and len(dlg[1][0]["hourly"]) == 7
+assert [c["key"] for r in dlg for c in r] == ["QUEUE", "RECENTLY FINISHED", "LAST 7 DAYS", "YOUR LIBRARY", "ROOM LEFT"] and len(dlg[1][0]["hourly"]) == 7
+assert len(dlg[1][0]["hourly_tops"]) == 7 and dlg[1][0]["hourly_tops"][0].endswith("GB")
 from datetime import datetime as _dt
-idle = hs._dl_grid(hal, _dt.now(), [], "", [], [], [], {"diskspace1": "100", "diskspacetotal1": "200"}, {}, {}, {"shows": 2})
-assert idle[0][0]["key"] == "LAST 7 DAYS" and idle[1][0]["big"] == "Idle" and any(r[0] == "Download drive" for r in idle[1][0]["rows"])
+_days = [{"date": f"2026-11-{14 + i:02d}", "done": 1, "failed": 0, "bytes": 2 * 1073741824} for i in range(7)]
+idle = hs._dl_grid(hal, _dt.now(), [], "", [], {"diskspace1": "100", "diskspacetotal1": "200"}, {"days": _days}, {"ok": False},
+                   [{"mount": "Z:", "total": 200 * 1073741824}])
+assert [c["key"] for r in idle for c in r] == ["LAST 7 DAYS", "RECENTLY FINISHED", "QUEUE", "YOUR LIBRARY", "ROOM LEFT"]
+assert idle[1][0]["big"] == "Idle" and idle[1][2]["badge"] == "Z: DRIVE" and idle[1][2]["rows"][1] == ["Room for about", "50 more downloads", "ok"]
+assert "Kodi isn't answering" in idle[1][1]["bigsub"] and not idle[1][2]["badge"].startswith("DOWN")
+assert hs.nice_release("Top.Gun.Maverick.2022.MULTI.DV.IMAX") == "Top Gun Maverick (2022)" and hs.nice_release("Blade.Runner.2049.2017.1080p") == "Blade Runner 2049 (2017)"
 assert hs._when(_dt.now().timestamp(), _dt.now()).endswith(("AM", "PM"))
 # a few Uptime Kuma monitors: a card each (response-time graph, checks), summary first
 _mons = hal.kuma["monitors"]

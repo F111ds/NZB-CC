@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.20.0"
+VERSION = "1.21.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1507,6 +1507,7 @@ def nice_release(name: str) -> str:
     """'The.Long.Orbit.2025.2160p.UHD.BluRay-X' -> 'The Long Orbit (2025)'; 'Show.S02E06.1080p' -> 'Show S02E06'."""
     title = re.sub(r"[._]+", " ", re.sub(r"\.(nzb|mkv|mp4|avi)$", "", name or "", flags=re.I)).strip()
     title = re.sub(r"\s+(2160p|1080p|720p|480p|WEB|BluRay|HDTV|x26[45]|HEVC|H\s?26[45]).*$", "", title, flags=re.I).strip() or (name or "")
+    title = re.sub(r"\s((?:19|20)\d\d)(?:\s+(?=[A-Z0-9-]*[A-Z])[A-Z0-9][A-Z0-9-]*)+$", r" \1", title)   # "2022 MULTI DV IMAX": release tags after the year
     return re.sub(r"\s((?:19|20)\d\d)$", r" (\1)", title)
 
 
@@ -1530,58 +1531,89 @@ def _when(t: float, now: datetime) -> str:
     return clock if days == 0 else f"yesterday {clock}" if days == 1 else f"{dt.strftime('%a')} {clock}" if days < 7 else dt.strftime("%b %d").replace(" 0", " ")
 
 
-def _dl_grid(hal, now: datetime, queue: list, badge: str, hist: list, upcoming: list, saved: list, qd: dict,
-             stats: dict, arr: dict, counts: dict) -> list:
-    """The Downloads page as two rows of cards (TV app 3.5-nzbcc.41+). Busy: the queue leads. Idle: the last 7 days lead."""
+def _size_short(b: float) -> str:
+    """'45 GB', '922 MB', '' for nothing: the label over a day's bar."""
+    if not b:
+        return ""
+    return f"{b / 1073741824:.0f} GB" if b >= 1073741824 else f"{b / 1048576:.0f} MB"
+
+
+def _dl_grid(hal, now: datetime, queue: list, badge: str, hist: list, qd: dict | None, stats: dict,
+             library: dict, drives: list) -> list:
+    """The Downloads page as two rows of cards (TV app 3.5-nzbcc.43+). Busy: the queue leads. Idle: the last 7 days
+    lead. Underneath: the queue, the Kodi library in numbers, and the room left on the download drive."""
     days = (stats or {}).get("days") or []
     tot = (stats or {}).get("totals") or {}
     week_bytes = sum(to_int(d.get("bytes")) for d in days)
     week_done = sum(to_int(d.get("done")) for d in days)
     week_failed = sum(to_int(d.get("failed")) for d in days)
-    labels = []
+    names = []
     for i, d in enumerate(days):
         try:
-            labels.append("Today" if i == len(days) - 1 else date.fromisoformat(str(d.get("date"))).strftime("%a"))
+            names.append("Today" if i == len(days) - 1 else date.fromisoformat(str(d.get("date"))).strftime("%a"))
         except ValueError:
-            labels.append("")
-    week = {"key": "LAST 7 DAYS", "badge": "SABNZBD",
+            names.append("")
+    busiest = max(range(len(days)), key=lambda i: to_int(days[i].get("bytes")), default=None)
+    busiest_name = ""
+    if busiest is not None and to_int(days[busiest].get("bytes")):
+        busiest_name = "today" if busiest == len(days) - 1 else date.fromisoformat(str(days[busiest]["date"])).strftime("%A")
+    week = {"key": "LAST 7 DAYS", "badge": f"{week_done} FINISHED" + (f" · {week_failed} FAILED" if week_failed else "") if days else "SABNZBD",
             "big": sm.fmt_bytes(week_bytes) if days else "—",
-            "bigsub": (f"this week · {week_done} finished" + (f" · {week_failed} failed" if week_failed else "")) if days else "SABnzbd's history isn't available",
-            "hourly": [round(to_int(d.get("bytes")) / 1073741824, 2) for d in days], "hourly_color": "#FF6A4D", "hourly_labels": labels,
+            "bigsub": ("this week" + (f" · busiest {busiest_name}" if busiest_name else "")) if days else "SABnzbd's history isn't available",
+            "hourly": [round(to_int(d.get("bytes")) / 1073741824, 2) for d in days], "hourly_color": "#FF6A4D",
+            "hourly_tops": [_size_short(to_int(d.get("bytes"))) for d in days],
+            "hourly_labels": [f"{n} · {to_int(d.get('done'))}" if to_int(d.get("done")) else n for n, d in zip(names, days)],
             "chips": [[k + " ", sm.fmt_bytes(tot[v]), ""] for k, v in (("today", "day"), ("this month", "month"), ("all time", "total")) if tot.get(v)]}
     recent = {"key": "RECENTLY FINISHED", "weight": 1.3,
               "rows": [[nice_release(s["name"])[:40], _when(s["t"], now) if s["ok"] else "failed", "ok" if s["ok"] else "warning"]
                        for s in hist if s.get("t")][:6] or [["Nothing finished yet", "", "ok"]]}
-    coming = []
-    for x in upcoming[:5]:
-        coming.append(x)
-    if not coming:
-        coming.append(["Nothing scheduled in Sonarr or Radarr", "", "ok"])
-    if counts.get("shows") is not None:
-        coming.append(["Sonarr", f"following {counts['shows']} show{'s' if counts['shows'] != 1 else ''}", "ok"])
-    if counts.get("wanted") is not None:
-        coming.append(["Radarr", f"{counts['wanted']} movie{'s' if counts['wanted'] != 1 else ''} wanted", "ok"])
-    coming += [["Saved: " + s.get("query", "")[:30], f"{len(s.get('new') or [])} new" if s.get("new") else "nothing new",
-                "info" if s.get("new") else "ok"] for s in saved[:2]]
-    coming_card = {"key": "COMING UP", "badge": "NEXT TWO WEEKS", "weight": 1.3, "rows": coming[:7]}
+
+    avg = week_bytes / week_done if week_done else 0
+    last = next((s for s in hist if s.get("ok") and s.get("t")), None)
+    lim = str((qd or {}).get("speedlimit") or "").strip()
+    paused = bool((qd or {}).get("paused"))
+    q_rows = ([["Speed limit", f"{lim}%" if lim and lim not in ("0", "100") else "none", "ok"]] if qd is not None else []) \
+        + ([["Last download", f"{nice_release(last['name'])[:18]} · {_when(last['t'], now)}", "ok"]] if last else []) \
+        + ([["Average download", sm.fmt_bytes(avg), "ok"]] if avg else []) \
+        + ([["Failed this week", str(week_failed), "warning" if week_failed else "ok"]] if days else [])
+    idle = {"key": "QUEUE", "badge": "SABNZBD " + ("PAUSED" if paused else "READY") if qd is not None else "",
+            "big": "Paused" if paused else "Idle", "bigsub": "nothing queued", "rows": q_rows or [["Nothing in the queue", "", "ok"]]}
+
+    lib = library or {}
+    if lib.get("ok"):
+        libc = {"key": "YOUR LIBRARY", "badge": "KODI · LAST SEEN" if lib.get("stale") else "KODI",
+                "big": f"{to_int(lib.get('movies')):,}", "bigsub": "movies",
+                "rows": [["TV shows", f"{to_int(lib.get('shows'))} · {to_int(lib.get('episodes')):,} episodes", "ok"],
+                         ["Added this week", f"{to_int(lib.get('added_week'))} movie{'s' if to_int(lib.get('added_week')) != 1 else ''}", "ok"],
+                         ["Newest", str(lib.get("newest") or "—")[:28], "ok"],
+                         ["Unwatched", f"{to_int(lib.get('unwatched'))} movies", "ok"]]}
+    else:
+        libc = {"key": "YOUR LIBRARY", "badge": "KODI", "big": "—", "bigsub": "Kodi isn't answering",
+                "rows": [["Turn the TV on and Kodi's numbers show here", "", "ok"]]}
+
+    free_gb, total_gb = to_float((qd or {}).get("diskspace1"), 0) or 0, to_float((qd or {}).get("diskspacetotal1"), 0) or 0
+    if total_gb:
+        free_b, total_b = free_gb * 1073741824, total_gb * 1073741824
+        used = round(100 - free_gb * 100 / total_gb)
+        letter = next((d["mount"] for d in drives or [] if d.get("total") and abs(d["total"] - total_b) / total_b < 0.02), "")
+        per_day = week_bytes / 7
+        room_rows = [["Used", f"{used}%", "warning" if used >= 90 else "ok", used]]
+        if avg:
+            room_rows.append(["Room for about", f"{int(free_b // avg)} more downloads", "ok"])
+        if per_day > 0:
+            days_left = free_b / per_day
+            room_rows.append(["At this week's pace", f"full in ~{days_left / 7:.0f} weeks" if days_left >= 14 else f"full in ~{days_left:.0f} days",
+                              "warning" if days_left < 14 else "ok"])
+        else:
+            room_rows.append(["This week", "nothing added", "ok"])
+        room = {"key": "ROOM LEFT", "badge": f"{letter} DRIVE" if letter else "SABNZBD'S DRIVE",
+                "big": sm.fmt_bytes(free_b), "bigsub": f"free of {sm.fmt_bytes(total_b)}", "rows": room_rows}
+    else:
+        room = {"key": "ROOM LEFT", "big": "—", "bigsub": "SABnzbd didn't say", "rows": [["Free space shows when SABnzbd answers", "", "ok"]]}
+
     if queue:
-        return [[{"key": "QUEUE", "badge": badge, "weight": 2, "queue": queue}, recent], [{**week, "weight": 1.3}, coming_card]]
-    apps = {a.get("app"): a for a in (arr or {}).get("apps") or []}
-    rows = []
-    if qd is not None:
-        lim = str(qd.get("speedlimit") or "").strip()
-        rows.append(["SABnzbd", ("paused" if qd.get("paused") else "ready") + (f" · limit {lim}%" if lim and lim not in ("0", "100") else " · no speed limit"),
-                     "warning" if qd.get("paused") else "ok"])
-    for k, name in (("sonarr", "Sonarr"), ("radarr", "Radarr")):
-        a = apps.get(k)
-        if a and a.get("configured"):
-            rows.append([name, ("online" + (f" · {a['queue']} grabbing" if a.get("queue") is not None else "")) if a.get("online") else "not answering",
-                         "ok" if a.get("online") else "warning"])
-    free, total = to_float((qd or {}).get("diskspace1"), 0) or 0, to_float((qd or {}).get("diskspacetotal1"), 0) or 0
-    if total:
-        rows.append(["Download drive", f"{sm.fmt_bytes(free * 1073741824)} free", "warning" if free / total < 0.1 else "ok", round(100 - free * 100 / total)])
-    idle = {"key": "QUEUE", "big": "Idle", "bigsub": "nothing queued", "rows": rows or [["Nothing in the queue", "", "ok"]]}
-    return [[{**week, "weight": 2}, recent], [idle, coming_card]]
+        return [[{"key": "QUEUE", "badge": badge, "weight": 2, "queue": queue}, recent], [{**week, "weight": 1.4, "hourly_labels": names}, libc, room]]
+    return [[{**week, "weight": 2}, recent], [idle, libc, room]]
 
 
 def tv_downloads_page(hal, demo: bool = False) -> dict:
@@ -1601,8 +1633,8 @@ def tv_downloads_page(hal, demo: bool = False) -> dict:
         up_rows = [["Night Harbor S02E06", "tomorrow 2 AM", "ok"], ["Glass Meridian II (2026)", "Sun", "ok"], ["The Quiet Sun S01E09", "Mon 1 AM", "ok"]]
         saved = [{"query": "glass meridian 2160p", "new": [1]}, {"query": "night harbor s03"}]
         arr = {"apps": [{"app": "sonarr", "configured": True, "online": True, "queue": 1}, {"app": "radarr", "configured": True, "online": True, "queue": 0}]}
-        grid = _dl_grid(hal, now, q, "38.2 MB/s", hist, up_rows, saved, {"diskspace1": "312", "diskspacetotal1": "3726"}, stats, arr,
-                        {"shows": 14, "wanted": 3})
+        lib = {"ok": True, "movies": 412, "unwatched": 64, "added_week": 5, "newest": "The Long Orbit (2025)", "shows": 38, "episodes": 1906}
+        grid = _dl_grid(hal, now, q, "38.2 MB/s", hist, {"diskspace1": "312", "diskspacetotal1": "3726"}, stats, lib, [])
         return {"title": "Downloads", "level": "ok", "head": "DOWNLOADING · 3 IN QUEUE", "grid": grid, "cols": [
             {"key": "QUEUE", "badge": "38.2 MB/s", "queue": q},
             {"key": "TODAY", "big": "6 done", "bigsub": "0 failed today",
@@ -1658,10 +1690,13 @@ def tv_downloads_page(hal, demo: bool = False) -> dict:
     grid = None
     try:
         if time.time() - _dl_stats_cache["t"] > 300:
-            _dl_stats_cache.update(t=time.time(), v={"stats": _phone_api(hal, "/api/stats") or {}, "counts": _phone_api(hal, "/api/arr/counts") or {},
-                                                        "arr": _phone_api(hal, "/api/arr") or {}})
-        grid = _dl_grid(hal, now, queue, badge, hist, up_rows, saved, qd, _dl_stats_cache["v"].get("stats") or {},
-                        _dl_stats_cache["v"].get("arr") or {}, _dl_stats_cache["v"].get("counts") or {})
+            _dl_stats_cache.update(t=time.time(), v={"stats": _phone_api(hal, "/api/stats") or {}})
+        library = _phone_api(hal, "/api/library/summary") or {}
+        try:
+            drives = hal.status().get("drives") or []
+        except Exception:  # noqa: BLE001
+            drives = []
+        grid = _dl_grid(hal, now, queue, badge, hist, qd, _dl_stats_cache["v"].get("stats") or {}, library, drives)
     except Exception as exc:  # noqa: BLE001 - the plain columns still show
         log.info("TV downloads grid: %s", exc)
     if saved:
