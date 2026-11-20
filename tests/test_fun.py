@@ -151,7 +151,17 @@ assert sc["pi"]["rows"][0][1] == "Pi 4 B · 4 GB" and sc["pi"]["rows"][1][1] == 
 assert sc["alerts"][0]["title"] and "ads blocked" in sc["record"]
 assert "Z: (Seagate" not in json.dumps(sc["pc"]) and "screen" in hs.tv_brief(hal.status())
 det = hs.tv_details(hal)
-assert [pg["title"] for pg in det["pages"]] == ["The PC", "Network", "Uptime Kuma", "Raspberry Pi"]
+assert [pg["title"] for pg in det["pages"]] == ["The PC", "Network", "Uptime Kuma", "Raspberry Pi", "Downloads"]
+dlp = det["pages"][4]
+assert dlp["cols"][0]["queue"][0]["pct"] == 59 and dlp["cols"][1]["big"] == "6 done" and dlp["cols"][2]["key"] == "COMING UP"
+assert hs.nice_release("The.Long.Orbit.2025.2160p.UHD.BluRay-X") == "The Long Orbit (2025)"
+# one "Dave" on the TV: the greeting has the name, so HAL's line after it doesn't repeat it
+tb2 = hs.tv_brief(hal.status())
+assert tb2["lines"][0]["text"].count("Dave") <= 1 and tb2["quote"] and not tb2["quote"].endswith(", Dave.")
+# the network box names the new device
+netrows = hs.tv_screen(hal.status())["net"]["rows"]
+assert any(r[0] == "New device" and r[1] == "android-3f2a" and r[2] == "warning" for r in netrows), netrows
+assert "days on duty" in hs.tv_screen(hal.status())["record"]
 pc = det["pages"][0]
 assert len(pc["cols"][0]["graph"]) > 10 and len(pc["cols"][0]["cores"]) == 16 and len(pc["cols"][2]["drives"]) == 3
 assert pc["cols"][2]["badge"] == "CHECK" and [d for d in pc["cols"][2]["drives"] if d["warn"]][0]["mount"] == "Z:"
