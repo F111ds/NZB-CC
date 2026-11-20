@@ -36,7 +36,7 @@ Things you can say after "Hey Siri, ask HAL":
 | "Turn it up" / "Turn it down" / "Turn it up by 5" / "Mute" | The TV's own volume, in any app |
 | "Open YouTube" / "Open Netflix" / "Open Prime" | Opens the app on the TV (turning the TV on first if it's off) |
 | "Play cat videos on YouTube" / "Search YouTube for …" | YouTube with the search results |
-| "Watch Stranger Things on Netflix" / "Play The Office on Prime" | Searches the TV for it (Netflix and Prime ignore searches from other apps). Pick it with the remote and it opens in Netflix or Prime |
+| "Watch Stranger Things on Netflix" / "Play The Office on Prime" | Searches Netflix or Prime for it, the way `try-tv-search.ps1` found works on your TV (run it once, see below). Pick it with the remote |
 | "What's on?" | The movie in Kodi, the video on YouTube, the show on Netflix or Prime, or the games console |
 | "What's new?" | What SABnzbd finished downloading today |
 | "How's everything?" | A summary: alerts, downloads, ads blocked, drives |
@@ -73,6 +73,17 @@ The same trick makes one-step commands for the things you say most, so there's n
 If HAL can't tell which title you meant, he plays the closest match and says which one. Titles are matched
 without "the", punctuation or capital letters, so "the quiet sun" and "Quiet Sun" both work; saying the year
 ("Night Harbor 2024") picks between a movie and a show with the same name.
+
+## Searching Netflix and Prime: run the test once
+
+TV apps differ in which kind of search request they act on (some accept one and ignore it), so HAL needs to
+know what works on your TV. On the PC, with the TV on and in view, run once:
+
+    powershell -ExecutionPolicy Bypass -File .\tv-launcher\try-tv-search.ps1
+
+It tries each way in turn and asks "did the TV show results?". The first one you say yes to is saved in
+`tv_search_methods.json`, and HAL uses it at once. Until then, "search Netflix for …" just opens Netflix.
+`-App netflix` tests only Netflix; `-Reset` forgets what was saved.
 
 ## Home-screen widget
 
