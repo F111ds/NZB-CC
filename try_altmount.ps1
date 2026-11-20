@@ -90,6 +90,35 @@ if (-not (Test-Path $secretFile)) {
     [IO.File]::WriteAllText($secretFile, [Convert]::ToBase64String($bytes))
 }
 $env:JWT_SECRET = (Get-Content $secretFile -Raw).Trim()
+
+# AltMount 0.4.0 refuses to start (a CORS "insecure setup" panic) unless its settings list the web addresses its
+# page is opened from. It writes config.yaml on its first start, so let it do that once, then add the line.
+$configFile = Join-Path $Folder "config.yaml"
+function Set-AllowedOrigins {
+    $c = @(Get-Content $configFile)
+    $line = "allowed_origins: ['http://localhost:$Port', 'http://127.0.0.1:$Port']"
+    if ($c -match '^\s*allowed_origins:') {
+        $c = $c -replace '^(\s*)allowed_origins:.*$', ('$1' + $line)
+    } else {
+        $i = [array]::IndexOf($c, 'api:')
+        if ($i -lt 0) { Say "Couldn't find the api: section in $configFile." Red; exit 1 }
+        $indent = if ($i + 1 -lt $c.Count) { $c[$i + 1] -replace '^(\s*).*', '$1' } else { '    ' }
+        if (-not $indent) { $indent = '    ' }
+        $rest = if ($i + 1 -lt $c.Count) { $c[($i + 1)..($c.Count - 1)] } else { @() }
+        $c = $c[0..$i] + ($indent + $line) + $rest
+    }
+    Set-Content -Path $configFile -Value $c
+}
+if (-not (Test-Path $configFile)) {
+    Say "First start: letting AltMount write its settings..." Cyan
+    $first = Start-Process -FilePath $exe.FullName -ArgumentList "serve" -WorkingDirectory $Folder -PassThru -WindowStyle Hidden
+    for ($i = 0; $i -lt 20 -and -not (Test-Path $configFile); $i++) { Start-Sleep -Seconds 1 }
+    Start-Sleep -Seconds 2
+    if (-not $first.HasExited) { Stop-Process -Id $first.Id -Force -ErrorAction SilentlyContinue }
+    if (-not (Test-Path $configFile)) { Say "AltMount didn't write $configFile. Look at altmount.log in $Folder." Red; exit 1 }
+}
+Set-AllowedOrigins
+
 $proc = Start-Process -FilePath $exe.FullName -ArgumentList "serve" -WorkingDirectory $Folder -PassThru
 
 $up = $false
