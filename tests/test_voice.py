@@ -58,8 +58,18 @@ m.tv_configured = lambda settings=None: True
 m.tv_power_state = lambda settings=None: "off"
 m.tv_start = lambda launch_kodi=True: started.append(launch_kodi) or True
 m.time.sleep = lambda s: None
-r = m.voice_play("glass meridian")
+r = m.voice_play("glass meridian", wait=True)
 assert started == [True] and r["ok"] and r["started_tv"]
+# the TV is on but Kodi isn't open (the home screen): Kodi is opened, and Siri gets an answer at once
+opened = []
+up["n"] = 0
+m.tv_power_state = lambda settings=None: "on"
+m.tv_open_kodi = lambda settings=None: opened.append(1)
+_Thread = m.threading.Thread
+m.threading.Thread = lambda target, daemon=True, name="": type("T", (), {"start": lambda self: None})()
+r = m.voice_play("glass meridian")
+m.threading.Thread = _Thread
+assert opened == [1] and r["ok"] and r["pending"] and r["opened_kodi"] and r["title"] == "Glass Meridian"
 
 # ---- playback control ----
 m.kodi_call = lambda method, params=None, timeout=6: ([{"playerid": 1, "type": "video"}] if method == "Player.GetActivePlayers" else calls.append((method, params)) or {})
@@ -99,6 +109,9 @@ hs._phone_post = lambda hal, path, body, timeout=20: (sent.append((path, body)),
 r = real.siri("Turn on the TV and play Night Harbor")
 assert sent[-1] == ("/api/voice/play", {"q": "night harbor", "tv_on": True, "from_start": False})
 assert r["say"].startswith("Turning the TV on. Playing Night Harbor, season 2, episode 5") and "where you left off" in r["say"]
+hs._phone_post = lambda hal, path, body, timeout=20: {"ok": True, "pending": True, "title": "Glass Meridian", "opened_kodi": True}
+assert real.siri("play glass meridian")["say"].startswith("Opening Kodi") and "Glass Meridian will start in a moment" in real.siri("play glass meridian")["say"]
+hs._phone_post = lambda hal, path, body, timeout=20: (sent.append((path, body)), {"ok": True})[1]
 assert real.siri("pause")["say"] == "Paused." and sent[-1] == ("/api/voice/control", {"action": "pause"})
 hs._phone_post = lambda hal, path, body, timeout=20: {"ok": False, "message": "I couldn't find Zzz in your library."}
 assert "couldn't find" in real.siri("play zzz")["say"]
