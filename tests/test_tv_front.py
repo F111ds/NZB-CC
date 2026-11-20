@@ -14,7 +14,7 @@ assert hs._tv_front_parse("") == ("", "") and hs._tv_front_parse("error: device 
 
 
 def front(pkg, act=""):
-    hs._tv_front.update(pkg=pkg, activity=act or pkg + ".Main", t=time.time(), busy=False)
+    hs._tv_front.update(pkg=pkg, activity=act or pkg + ".Main", t=time.time(), ok_t=time.time(), busy=False)
     return hs.tv_front()
 
 
@@ -23,8 +23,17 @@ assert front("org.xbmc.kodi")["kodi"] is True
 assert front("com.gathin.tvhome", "com.gathin.tvhome.HalActivity")["hal"] is True
 assert front("com.gathin.tvhome", "com.gathin.tvhome.MainActivity")["home"] is True
 assert front("com.example.someapp")["app"] == "Someapp"
-hs._tv_front.update(t=time.time() - 300, busy=True)
+hs._tv_front.update(t=time.time() - 300, ok_t=time.time() - 300, busy=True)
 assert hs.tv_front() is None                                    # too old: unknown, not a guess
+
+# a failed check keeps the last answer
+front("com.google.android.youtube.tv")
+hs.tv_adb = lambda cmd, timeout=30: (False, "The TV didn't answer in time. Is it on?")
+hs._tv_front_refresh()
+assert hs.tv_front()["app"] == "YouTube" and "Is it on" in hs._tv_front["error"]
+hs.tv_adb = lambda cmd, timeout=30: (True, "  topResumedActivity=ActivityRecord{9 u0 com.netflix.ninja/.MainActivity t3}")
+hs._tv_front_refresh()
+assert hs.tv_front()["app"] == "Netflix"
 
 # Kodi has Short Circuit paused in the background
 movie = {"playerid": 1, "title": "Short Circuit", "paused": True}
