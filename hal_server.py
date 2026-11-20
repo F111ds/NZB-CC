@@ -2086,6 +2086,48 @@ def tv_adb(command: str, timeout: float = 30) -> tuple[bool, str]:
     return r.returncode == 0, out[-400:]
 
 
+# What's in front on the TV. Kodi keeps a paused movie "playing" in the background when you switch to
+# YouTube, so Kodi alone can't say what's on. Asked through ADB, at most every 15 s, never holding up a page.
+TV_APPS = {"org.xbmc.kodi": "Kodi", "com.google.android.youtube.tv": "YouTube", "com.google.android.youtube.tvkids": "YouTube Kids",
+           "com.google.android.youtube.tvmusic": "YouTube Music", "org.jellyfin.androidtv": "Jellyfin", "com.netflix.ninja": "Netflix",
+           "com.amazon.amazonvideo.livingroom": "Prime Video", "com.disney.disneyplus": "Disney+", "com.hbo.hbonow": "Max",
+           "com.wbd.stream": "Max", "com.plexapp.android": "Plex", "com.spotify.tv.android": "Spotify", "com.apple.atve.androidtv.appletv": "Apple TV",
+           "com.google.android.apps.tv.launcherx": "Home", "com.google.android.tvlauncher": "Home", "com.android.tv.settings": "Settings"}
+_tv_front = {"t": 0.0, "pkg": "", "activity": "", "busy": False}
+
+
+def _tv_front_parse(out: str) -> tuple[str, str]:
+    m = re.search(r"\s([A-Za-z][\w.]*)/([\w.$]+)", out or "")
+    if not m:
+        return "", ""
+    act = m.group(2)
+    return m.group(1), (m.group(1) + act if act.startswith(".") else act)
+
+
+def _tv_front_refresh() -> None:
+    try:
+        ok, out = tv_adb("dumpsys activity activities | grep -m1 -E 'mResumedActivity|ResumedActivity'", timeout=10)
+        pkg, act = _tv_front_parse(out) if ok else ("", "")
+        _tv_front.update({"pkg": pkg, "activity": act, "t": time.time()})
+    finally:
+        _tv_front["busy"] = False
+
+
+def tv_front(max_age: float = 15) -> dict | None:
+    """{"pkg", "app", "kodi", "home", "hal"} for the app on the TV's screen, or None when it isn't known (yet).
+    Returns the last answer at once and refreshes it in the background."""
+    if not _tv_front["busy"] and time.time() - _tv_front["t"] > max_age:
+        _tv_front["busy"] = True
+        threading.Thread(target=_tv_front_refresh, daemon=True).start()
+    if not _tv_front["pkg"] or time.time() - _tv_front["t"] > 120:
+        return None
+    pkg, act = _tv_front["pkg"], _tv_front["activity"]
+    hal = act.endswith("HalActivity")
+    home = (pkg == TV_PACKAGE and not hal) or TV_APPS.get(pkg) == "Home" or "Dream" in act
+    name = TV_APPS.get(pkg) or ("HAL" if hal else "Home" if home else pkg.rsplit(".", 1)[-1].replace("_", " ").title())
+    return {"pkg": pkg, "app": name, "kodi": pkg == "org.xbmc.kodi", "home": home, "hal": hal}
+
+
 TV_KEYS = {"vol_up": 24, "vol_down": 25, "mute": 164}
 
 

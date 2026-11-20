@@ -744,7 +744,26 @@ def _kodi_secs(t) -> int:
     return to_int(t.get("hours")) * 3600 + to_int(t.get("minutes")) * 60 + to_int(t.get("seconds"))
 
 
+def tv_front_app() -> dict | None:
+    """The app in front on the TV (through HAL's TV tools), or None if unknown."""
+    try:
+        return _hal_mod.tv_front() if _hal_mod and _hal_mod.tv_host() else None
+    except Exception:  # noqa: BLE001 - never let this break the page
+        return None
+
+
 def kodi_now_playing() -> dict | None:
+    """What Kodi is playing, but only if Kodi is on the TV's screen: switch to YouTube and Kodi keeps the movie
+    paused in the background, which isn't what's on."""
+    playing = _kodi_now_playing()
+    if playing:
+        front = tv_front_app()
+        if front and not front["kodi"] and not front["hal"]:
+            return None
+    return playing
+
+
+def _kodi_now_playing() -> dict | None:
     players = kodi_call("Player.GetActivePlayers")
     players = [p for p in players if isinstance(p, dict)] if isinstance(players, list) else []
     video = [p for p in players if p.get("type") == "video"] or players
@@ -5774,7 +5793,9 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
         if not kodi_configured():
             return {"configured": False}
         try:
-            return {"configured": True, "online": True, "playing": kodi_now_playing()}
+            playing, front = kodi_now_playing(), tv_front_app()
+            return {"configured": True, "online": True, "playing": playing,
+                    "front": front["app"] if front and not (front["kodi"] or front["home"] or front["hal"]) else ""}
         except UpstreamError as exc:
             return {"configured": True, "online": False, "problem": str(exc)}  # not "error": see api() in the page
 
