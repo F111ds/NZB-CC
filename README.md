@@ -227,6 +227,10 @@ home-screen widget ([docs/siri-and-widget.md](docs/siri-and-widget.md)).
 
 (The whole TV story, home screen and all, is in [Taking over the TV](#taking-over-the-tv) above. Here are HAL's screens in pictures.)
 
+| The TV's home screen | With HAL selected in the dock |
+|---|---|
+| ![The TV home screen](docs/tv-screenshots/0-home-screen.png) | ![HAL selected](docs/tv-screenshots/0-home-screen-hal-selected.png) |
+
 ### HAL's screen
 
 Open the HAL tile, or tap **Show HAL on the TV** in the phone app's Watch tab, and HAL's screen comes up over
