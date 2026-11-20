@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -File .\try_altmount.ps1
 ```
 
 The script:
-- downloads the latest AltMount for Windows from GitHub into `C:\AltMount` (first time only);
+- downloads the latest AltMount for Windows from GitHub into `F:\AltMount` (first time only);
 - starts it on port **8090** in its own window (SABnzbd already uses 8080, which is AltMount's normal port);
 - opens AltMount's page in your browser.
 
@@ -39,7 +39,7 @@ Two Windows prompts may appear:
   The TV needs this later.
 
 > If the script can't download, get the file ending in `_windows_amd64.zip` from
-> https://github.com/kipsilabs/altmount/releases, unzip it into `C:\AltMount` and run the script again.
+> https://github.com/kipsilabs/altmount/releases, unzip it into `F:\AltMount` and run the script again.
 
 ## Step 3: Create your login
 AltMount's page (http://localhost:8090) asks you to create the admin account the first time. Do that.
@@ -134,7 +134,7 @@ Run tests 1 to 4 from step 7 again on the TV. This checks the PC-to-TV leg (your
 ## Stopping and removing it
 
 - **Stop:** close the AltMount window. Start it again with the same command as in step 2.
-- **Remove:** stop it and delete `C:\AltMount`. If you did step 8, long-press *AltMount (test)* in Kodi
+- **Remove:** stop it and delete `F:\AltMount`. If you did step 8, long-press *AltMount (test)* in Kodi
   → **Remove source**.
 - Nothing else was changed. If you lowered SABnzbd's connections, set them back, and un-pause SABnzbd.
 

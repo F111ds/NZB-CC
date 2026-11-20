@@ -3,11 +3,11 @@
   Sonarr or Radarr.
 
   What it does:
-    1. Downloads the latest AltMount for Windows from GitHub into C:\AltMount (first run only).
+    1. Downloads the latest AltMount for Windows from GitHub into F:\AltMount (first run only).
     2. Starts it on port 8090 (SABnzbd already uses 8080) in its own window.
     3. Opens AltMount's web page once it answers, and prints the settings Kodi on the TV needs.
 
-  Stop it: close the AltMount window. Remove it: delete C:\AltMount.
+  Stop it: close the AltMount window. Remove it: delete F:\AltMount.
   Guide: docs/altmount-streaming-test.md
 
   Usage (in PowerShell, from the NZB-CC folder):
@@ -15,7 +15,7 @@
     powershell -ExecutionPolicy Bypass -File .\try_altmount.ps1 -Update    # fetch a newer AltMount first
 #>
 param(
-    [string]$Folder = "C:\AltMount",
+    [string]$Folder = "F:\AltMount",
     [int]$Port = 8090,
     [switch]$Update
 )
@@ -25,6 +25,11 @@ $ErrorActionPreference = "Stop"
 
 function Say($text, $color = "Gray") { Write-Host $text -ForegroundColor $color }
 
+$drive = Split-Path -Path $Folder -Qualifier -ErrorAction SilentlyContinue
+if ($drive -and -not (Test-Path "$drive\")) {
+    Say "Drive $drive isn't there. Plug it in, or choose another folder, e.g. -Folder D:\AltMount" Red
+    exit 1
+}
 New-Item -ItemType Directory -Force -Path $Folder | Out-Null
 $exe = Get-ChildItem -Path $Folder -Filter "altmount*windows*.exe" -ErrorAction SilentlyContinue |
        Sort-Object LastWriteTime -Descending | Select-Object -First 1
