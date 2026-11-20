@@ -7,14 +7,14 @@ They use made-up demo data: no real passwords, API keys or access codes appear i
 |---|---|
 | **Home: HAL, alerts, Pi-hole, Uptime Kuma**<br><img src="01-home.png" width="300"> | **Home: vitals, internet, drives, last restart**<br><img src="02-home-2.png" width="300"> |
 | **Home: everything else and the quick buttons**<br><img src="03-home-3.png" width="300"> | **Pi-hole sheet: blocking, Raspberry Pi, pause**<br><img src="04-pihole.png" width="300"> |
-| **Uptime Kuma sheet: every monitor**<br><img src="05-uptime-kuma.png" width="300"> | **Get: search and the download queue**<br><img src="06-get-queue.png" width="300"> |
+| **Uptime Kuma sheet: every monitor**<br><img src="05-uptime-kuma.png" width="300"> | **Get: the queue at the top, then search**<br><img src="06-get-queue.png" width="300"> |
 | **Get: search results**<br><img src="07-get-search.png" width="300"> | **Get: coming up (Sonarr / Radarr)**<br><img src="08-get-coming-up.png" width="300"> |
 | **Get: download history**<br><img src="09-get-history.png" width="300"> | **Get: saved searches**<br><img src="10-get-saved.png" width="300"> |
 | **Watch: the TV, Jellyfin and your library**<br><img src="11-watch.png" width="300"> | **Library: movies**<br><img src="12-library-movies.png" width="300"> |
 | **Movie page: watch on phone or play on the TV**<br><img src="13-movie.png" width="300"> | **Watching on the phone**<br><img src="14-player.png" width="300"> |
 | **Playback options**<br><img src="15-player-options.png" width="300"> | **Library: shows**<br><img src="16-library-shows.png" width="300"> |
 | **A show: seasons and episodes**<br><img src="17-show.png" width="300"> | **Library: missing episodes**<br><img src="18-library-missing.png" width="300"> |
-| **System: vitals, alerts and every system**<br><img src="19-system.png" width="300"> | **System: pod bay controls**<br><img src="20-system-2.png" width="300"> |
+| **System: what needs you, the readings, every system**<br><img src="19-system.png" width="300"> | **System: more (log &amp; controls, HAL's record, for fun)**<br><img src="20-system-2.png" width="300"> |
 | **Settings**<br><img src="21-settings.png" width="300"> | **Settings: connections (keys are never shown)**<br><img src="22-connections.png" width="300"> |
 | **Connections: Kodi, Pi-hole, Uptime Kuma**<br><img src="23-connections-2.png" width="300"> | **HAL: status**<br><img src="24-hal-status.png" width="300"> |
 | **HAL: vitals**<br><img src="25-hal-vitals.png" width="300"> | **HAL: services**<br><img src="26-hal-services.png" width="300"> |

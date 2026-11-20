@@ -4,7 +4,8 @@
 
 NZB-CC runs on a Windows PC at home and pulls the house's downloads, media, PC and network into one place. You use it
 from three screens: **HAL 9000** on your phone, **HAL on the TV**, and the original **desktop command centers** on
-the PC. Nothing goes to a cloud service of its own: the phone talks to the PC over your Wi-Fi (or Tailscale when
+the PC. Find something, put it on the TV, turn it up, pause the ads, check the drives, restart a service, lock the
+PC: all from the couch. Nothing goes to a cloud service of its own: the phone talks to the PC over your Wi-Fi (or Tailscale when
 you're out), behind an access code.
 
 | On the phone | On the TV | On the PC |
@@ -29,6 +30,58 @@ pick the best release and send it to SABnzbd, then watch it download. It worked 
 The desktop apps are still here, still work, and still share their settings with everything else. The
 phone app's **Settings › Connections** edits the same SABnzbd and indexer settings the NZB Command Center uses.
 What follows is the whole thing, from the newest screen back to where it started.
+
+## Everything HAL does, without getting up off the couch
+
+**Find and download**
+- Search every Usenet indexer at once. Each result shows quality, HDR, source, size, age and grabs, and HAL marks
+  the ones you already have.
+- Add with one tap. Watch the queue: pause, resume or remove any download, or pause them all, and see the time
+  left and when it'll be done.
+- See what Sonarr and Radarr will fetch next. Find missing episodes from the library and send them off.
+- Saved searches run by themselves every few hours and tell your phone when something new turns up.
+- See the history, and retry a download that failed.
+
+**Watch**
+- Play anything in your Kodi library on the TV. Continue watching resumes where you stopped.
+- Use the remote: play, pause, skip back and forward, stop, next. Control the TV's own volume and mute in any app.
+- Turn the TV on and open Kodi from the phone.
+- Watch movies and shows **on the phone** at home (through Jellyfin), with quality, subtitle and audio choices,
+  then move what you're watching onto the TV.
+- Know what's on the TV: the movie in Kodi, the video on YouTube, Netflix or Prime, or the PlayStation or Switch
+  (through the Denon amp).
+
+**HAL on the TV**
+- Put HAL's screen on the TV over whatever is on, and make him say anything (with your own saved phrases).
+- A page each on the PC, the network, Uptime Kuma, the Raspberry Pi and the downloads, from the remote.
+
+**Look after the PC**
+- Live CPU, memory, graphics card and temperatures, with the last hour, day or week as graphs.
+- Drives: how full each one is, their health, temperature, wear, and how many days until one fills up.
+- Restart a service that stopped (or let HAL do it himself). Lock, sleep, fix the network, or restart (hold the
+  button: "I'm afraid I can't do that, Dave.").
+- Empty the Recycle Bin, clean temp files, run a Defender scan, check for Windows updates.
+- See which Windows events are worth knowing about, explained in plain words, with repeats grouped.
+- The UPS: battery, load, power cuts, and a safe shutdown when the battery runs low.
+
+**Look after the network**
+- Internet speed and ping, with an hour's graph.
+- An alert when a new device joins your Wi-Fi ("It's mine" to dismiss it).
+- Pi-hole: ads blocked today, pause blocking for 5, 30 or 60 minutes, the most blocked sites, the Raspberry Pi's
+  health.
+- Uptime Kuma: every monitor and its response time, and certificates about to expire.
+
+**HAL himself**
+- One line about your evening, in HAL's voice if you like.
+- Phone alerts when something needs you and when it's fine again; hide an alert for a day.
+- A morning briefing and a weekly summary.
+- "Hey Siri, ask HAL…", a home-screen widget, a wall display for a spare tablet, chess, a song.
+- HAL's record (ads blocked, data downloaded, days on duty) with milestones.
+
+**Keep it all up to date**
+- **Update everything** from the phone: the apps on the PC and the TV app, without stopping a movie that's playing.
+- Edit SABnzbd, the indexers, Kodi, Pi-hole and Uptime Kuma from the phone. Settings backups go to GitHub with the
+  keys removed.
 
 ## HAL 9000 on the phone
 
@@ -56,8 +109,25 @@ home-screen widget ([docs/siri-and-widget.md](docs/siri-and-widget.md)).
 
 ## HAL on the TV
 
-The TV runs the NZB-CC launcher (in `tv-launcher/`), which has a **HAL 9000 tile** on its home screen. Open it, or
-tap **Show HAL on the TV** in the phone app's Watch tab, and HAL's screen comes up over whatever is on:
+### The TV's home screen
+
+The TV runs the NZB-CC launcher (in `tv-launcher/`, built on CleanYourTV) instead of the stock home screen:
+
+- **One line at the top**: the time, the date, and the **dollar-to-peso rate** ("US$1 = 18.42 MXN ▲ 0.06", live
+  with a free key, otherwise daily).
+- **Round buttons** on the right: the weather, Inputs, Wi-Fi, a **VPN lock** (green while NordVPN is on, red when
+  it's off), the app library and Settings.
+- **Kodi's recently watched**: five posters on a glass shelf, each with a bar showing how far in you are. OK
+  resumes it (even when Kodi wasn't running), and holding OK opens a menu.
+- **"Ready to watch"**: a card with the poster when a download finishes.
+- **The dock**: just Netflix, Prime Video, YouTube and Kodi as icons on the glass, then the **HAL 9000 tile**.
+  Everything else is under the library button.
+- **A time-of-day sky** behind it all, and no wallpaper.
+
+### HAL's screen
+
+Open the HAL tile, or tap **Show HAL on the TV** in the phone app's Watch tab, and HAL's screen comes up over
+whatever is on:
 
 ![HAL's screen on the TV](docs/tv-screenshots/1-hal-screen.png)
 
@@ -72,14 +142,19 @@ tap **Show HAL on the TV** in the phone app's Watch tab, and HAL's screen comes 
 - **HAL talks**: he says his line when the screen opens, in a low, slow voice (tunable from the PC), and the eye
   flares on every word. **OK** on the remote makes him talk again. From the phone you can make him say anything
   (**Talk on the TV…**, with your own saved phrases).
-- **Details pages**: press **Down** for a full page each on the PC, the network, Uptime Kuma and the Raspberry Pi.
-  **Left** and **Right** move between them, and **Back** returns to HAL. They refresh every 15 seconds.
+- **Details pages**: press **Down** for a full page each on the PC, the network, Uptime Kuma, the Raspberry Pi and
+  the **downloads** (the queue with progress bars, today's finished and failed downloads, what's coming up, and
+  saved searches). **Left** and **Right** move between them, and **Back** returns to HAL. They refresh every 15
+  seconds.
+- **When the PC is off**: the boxes dim and say when they were last seen, so old numbers never pass for live ones.
 
 | The PC | Network |
 |---|---|
 | ![The PC](docs/tv-screenshots/2-details-pc.png) | ![Network](docs/tv-screenshots/3-details-network.png) |
 | **Uptime Kuma** | **Raspberry Pi** |
 | ![Uptime Kuma](docs/tv-screenshots/4-details-uptime-kuma.png) | ![Raspberry Pi](docs/tv-screenshots/5-details-raspberry-pi.png) |
+| **Downloads** | **When the PC can't be reached** |
+| ![Downloads](docs/tv-screenshots/6-details-downloads.png) | ![PC unreachable](docs/tv-screenshots/7-pc-unreachable.png) |
 
 The screen drifts a little every few minutes so nothing burns in. **Update everything** puts new versions of the
 TV app on the TV by itself, and never while you're watching something. (These pictures are drawn from HAL's demo
