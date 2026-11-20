@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import difflib
 import ctypes
 import ctypes.wintypes
 import gzip
@@ -82,7 +83,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.20.0"
+VERSION = "3.21.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -1175,6 +1176,117 @@ def kodi_show_details(show_id: int) -> dict:
         "next": next_episode(episodes),
     })
     return out
+
+
+# ---- Voice (HAL's Siri commands): play a title by name, and simple playback control -------------------------
+VOICE_FILLER = {"the", "a", "an", "movie", "film", "show", "series", "please", "on", "tv", "kodi", "for", "me", "some", "next", "episode", "of"}
+
+
+def _voice_norm(s: str, drop_filler: bool = True) -> str:
+    words = re.sub(r"[^a-z0-9 ]+", " ", str(s or "").lower().replace("&", " and ")).split()
+    if drop_filler:
+        words = [w for w in words if w not in VOICE_FILLER] or words
+    return " ".join(words)
+
+
+def voice_match(query: str, movies: list[dict], shows: list[dict]) -> tuple[str, dict, float] | None:
+    """The movie or show a spoken title means: ("movie" | "show", item, score 0-1), or None if nothing is close.
+    Spoken titles lose punctuation and articles, so both sides are compared without them."""
+    q = _voice_norm(query)
+    if not q:
+        return None
+    best = None
+    for kind, items in (("movie", movies), ("show", shows)):
+        for it in items:
+            title = _voice_norm(it.get("title", ""))
+            if not title:
+                continue
+            score = difflib.SequenceMatcher(None, q, title).ratio()
+            if q == title:
+                score = 1.0
+            elif f" {q} " in f" {title} " or f" {title} " in f" {q} ":
+                score = max(score, 0.86)
+            year = str(it.get("year") or "")
+            if year and year in q.split():
+                score += 0.05
+            if best is None or score > best[2]:
+                best = (kind, it, score)
+    return best if best and best[2] >= 0.62 else None
+
+
+def _kodi_wait(seconds: float) -> bool:
+    end = time.time() + seconds
+    while time.time() < end:
+        try:
+            kodi_call("JSONRPC.Ping", timeout=3)
+            return True
+        except (UpstreamError, ConfigError):
+            time.sleep(2)
+    return False
+
+
+def voice_play(query: str, from_start: bool = False, tv_on: bool = False) -> dict:
+    """'Play Glass Meridian': finds it in Kodi's library and plays it on the TV (resuming, unless from_start).
+    A show plays its next episode. When Kodi doesn't answer (the TV is off) and TV control is set up, the TV is turned
+    on and Kodi opened first."""
+    if not kodi_configured():
+        return {"ok": False, "message": "Kodi isn't set up yet."}
+    started_tv = False
+    awake = False
+    if not tv_on:
+        try:
+            kodi_call("JSONRPC.Ping", timeout=4)
+            awake = True
+        except (UpstreamError, ConfigError):
+            awake = False
+    if not awake:
+        if not tv_configured():
+            return {"ok": False, "message": "Kodi isn't answering. Is the TV on?"}
+        if tv_power_state() != "on" or tv_on:
+            started_tv = tv_start(launch_kodi=True)
+        if not _kodi_wait(60):
+            return {"ok": False, "message": "I turned the TV on, but Kodi isn't answering yet. Try again in a moment."}
+    movies = [{"id": to_int(m.get("movieid")), "title": str(m.get("title") or m.get("label") or ""), "year": to_int(m.get("year")),
+               "resume": int(to_float(_kdict(m.get("resume")).get("position")))} for m in kodi_all_movies()]
+    shows = kodi_all_shows()
+    hit = voice_match(query, movies, shows)
+    if not hit:
+        return {"ok": False, "message": f"I couldn't find {query.strip()} in your library."}
+    kind, it, score = hit
+    if kind == "movie":
+        resume = it["resume"] > 0 and not from_start
+        kodi_call("Player.Open", {"item": {"movieid": it["id"]}, "options": {"resume": resume}})
+        log.info("voice play movie %s (%s, score %.2f, resume=%s)", it["id"], it["title"], score, resume)
+        return {"ok": True, "kind": "movie", "title": it["title"], "year": it["year"], "resumed": resume, "started_tv": started_tv}
+    nxt = next_episode(kodi_show_episodes(it["id"]))
+    if not nxt:
+        return {"ok": False, "message": f"You've watched every episode of {it['title']} in your library."}
+    resume = nxt["resume"] > 0 and not from_start
+    kodi_call("Player.Open", {"item": {"episodeid": nxt["id"]}, "options": {"resume": resume}})
+    log.info("voice play episode %s (%s S%02dE%02d, score %.2f)", nxt["id"], it["title"], nxt["season"], nxt["episode"], score)
+    return {"ok": True, "kind": "episode", "title": it["title"], "season": nxt["season"], "episode": nxt["episode"],
+            "episode_title": nxt["title"], "resumed": resume, "started_tv": started_tv}
+
+
+def voice_control(action: str) -> dict:
+    """pause / resume / stop / back (15 s) / forward (30 s), on whatever Kodi is playing."""
+    if action not in ("pause", "resume", "stop", "back", "forward"):
+        raise ValueError("Pause, resume, stop, back or forward.")
+    if not kodi_configured():
+        return {"ok": False, "message": "Kodi isn't set up yet."}
+    players = kodi_call("Player.GetActivePlayers")
+    players = [p for p in players if isinstance(p, dict)] if isinstance(players, list) else []
+    if not players:
+        return {"ok": False, "message": "Nothing is playing in Kodi."}
+    pid = to_int(players[0].get("playerid"))
+    if action in ("pause", "resume"):
+        kodi_call("Player.PlayPause", {"playerid": pid, "play": action == "resume"})
+    elif action == "stop":
+        kodi_call("Player.Stop", {"playerid": pid})
+    else:
+        kodi_control("seek_back" if action == "back" else "seek_fwd", pid)
+    log.info("voice %s", action)
+    return {"ok": True, "action": action}
 
 
 def kodi_continue_watching(limit: int = 6) -> list[dict]:
@@ -5574,6 +5686,10 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             self.send_json(200, result)
         elif path == "/api/tv/mark_watched":
             self.send_json(200, tv_mark_watched(str(body.get("id") or "")))
+        elif path == "/api/voice/play":
+            self.send_json(200, voice_play(str(body.get("q") or "")[:200], from_start=bool(body.get("from_start")), tv_on=bool(body.get("tv_on"))))
+        elif path == "/api/voice/control":
+            self.send_json(200, voice_control(str(body.get("action") or "")))
         elif path == "/api/kodi/control":
             kodi_control(str(body.get("action") or ""), to_int(body.get("playerid"), -1), body.get("value"))
             self.send_json(200, {"ok": True})

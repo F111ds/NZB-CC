@@ -27,6 +27,15 @@ Things you can say after "Hey Siri, ask HAL":
 
 | Say | HAL |
 |---|---|
+| "Play Glass Meridian" | Finds it in your Kodi library and plays it on the TV, picking up where you left off |
+| "Play Night Harbor" | A show: plays the next episode you haven't watched |
+| "Turn on the TV and play Deep Field" | Turns the TV on and opens Kodi first, then plays it (HAL also does this by himself when the TV is off) |
+| "Play Glass Meridian from the start" | From the beginning instead of where you stopped |
+| "Pause" / "Resume" / "Stop" | What's playing in Kodi |
+| "Skip back" / "Skip ahead" | 15 seconds back, 30 forward |
+| "Turn it up" / "Turn it down" / "Turn it up by 5" / "Mute" | The TV's own volume, in any app |
+| "What's on?" | The movie in Kodi, the video on YouTube, the show on Netflix or Prime, or the games console |
+| "What's new?" | What SABnzbd finished downloading today |
 | "How's everything?" | A summary: alerts, downloads, ads blocked, drives |
 | "Pause the ads" / "Pause the ads for 30 minutes" | Pauses Pi-hole (5, 30 or 60 minutes) |
 | "Turn the ads back on" | Resumes Pi-hole |
@@ -46,6 +55,21 @@ Restart and shutdown are refused from Siri on purpose: use the app, where you ca
 
 A quicker one, "Hey Siri, how's HAL": the same shortcut **without** step 2, with `q` set to the
 text `status`, named **How's HAL**.
+
+The same trick makes one-step commands for the things you say most, so there's no waiting for the beep:
+
+| Shortcut name ("Hey Siri, …") | `q` text |
+|---|---|
+| HAL pause | `pause` |
+| HAL resume | `resume` |
+| HAL louder | `turn it up` |
+| HAL quieter | `turn it down` |
+| HAL mute | `mute` |
+| What's on | `what's on` |
+
+If HAL can't tell which title you meant, he plays the closest match and says which one. Titles are matched
+without "the", punctuation or capital letters, so "the quiet sun" and "Quiet Sun" both work; saying the year
+("Night Harbor 2024") picks between a movie and a show with the same name.
 
 ## Home-screen widget
 

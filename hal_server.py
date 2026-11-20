@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.14.0"
+VERSION = "1.15.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1632,6 +1632,26 @@ def parse_hhmm(v: str) -> str:
     return f"{int(m.group(1)):02d}:{m.group(2)}"
 
 
+VOICE_PLAY_RE = re.compile(
+    r"^(?:(?:ok|hey)\s+)?(?:hal\s+)?(?:please\s+)?(?:(?:turn|switch) (?:on )?the (?:tv|television)(?: on)? and\s+)?(?:can you\s+)?"
+    r"(?:play|watch|put on|start watching|continue watching|keep watching|resume watching|resume|start)\s+(?:me\s+)?(?:the\s+(?:movie|film|show)\s+)?(?P<title>.+?)"
+    r"(?:\s+(?:on|in) (?:the )?(?:tv|television|kodi))?(?:\s+from the (?:start|beginning|top))?(?:\s+please)?$")
+
+
+def voice_title(q: str) -> str:
+    """The title in 'play Glass Meridian' / 'turn on the TV and watch Night Harbor', or ''."""
+    s = re.sub(r"[^a-z0-9' ]+", " ", str(q or "").lower()).strip()
+    s = re.sub(r"\s+", " ", s)
+    m = VOICE_PLAY_RE.match(s)
+    if not m:
+        return ""
+    title = m.group("title").strip()
+    if title in ("", "it", "something", "a movie", "a film", "music", "a song", "the song", "daisy", "daisy bell", "chess", "playing",
+                 "watching", "the movie", "the show", "the film", "again", "please", "where i left off", "the tv", "kodi"):
+        return ""
+    return title
+
+
 def siri_intent(q: str) -> str:
     """What a sentence said to Siri asks for."""
     q = " " + re.sub(r"[^a-z0-9 ]+", " ", str(q or "").lower()) + " "
@@ -1646,6 +1666,28 @@ def siri_intent(q: str) -> str:
         if has("pause", "off", "stop", "disable", "turn off"):
             return "ads_off"
         return "ads"
+    if voice_title(q):
+        return "play"
+    if has("whats on", "what s on", "what is on", "what am i watching", "whats playing", "what s playing", "what is playing", "on the tv right now"):
+        return "whats_on"
+    if has("whats new", "what s new", "what is new", "what finished", "anything new", "new today", "finished today"):
+        return "whats_new"
+    if has("turn it up", "turn up", "louder", "volume up", "turn the volume up", "raise the volume", "up the volume"):
+        return "vol_up"
+    if has("turn it down", "turn down", "quieter", "volume down", "turn the volume down", "lower the volume"):
+        return "vol_down"
+    if has("mute", "unmute", "silence"):
+        return "mute"
+    if has("skip back", "go back", "rewind", "back a bit"):
+        return "back"
+    if has("skip forward", "skip ahead", "fast forward", "forward a bit"):
+        return "forward"
+    if has("pause", "hold it", "hold on") and not has("download", "downloads"):
+        return "pause"
+    if has("resume", "unpause", "keep playing", "carry on", "continue") and not has("download", "downloads"):
+        return "resume"
+    if has("stop") and not has("download", "downloads"):
+        return "stop"
     if has("lock"):
         return "lock"
     if has("sleep"):
@@ -1858,6 +1900,64 @@ class FunMixin:
                     "intent": intent}
         if intent == "tv_show":
             return {"say": tv_show(self, "")["message"], "intent": intent}
+        if intent == "play":
+            title = voice_title(q)
+            low = str(q).lower()
+            tv_on = bool(re.search(r"\b(turn|switch) (on )?the (tv|television)( on)?\b", low))
+            from_start = bool(re.search(r"from the (start|beginning|top)", low))
+            if demo:
+                return {"say": f"Demo mode: I'd play {title} on the TV, {name}.", "intent": intent}
+            r = _phone_post(self, "/api/voice/play", {"q": title, "tv_on": tv_on, "from_start": from_start}, timeout=90)
+            if not r.get("ok"):
+                return {"say": f"{r.get('message') or 'I could not do that.'}", "intent": intent}
+            what = (f"{r['title']}, season {r['season']}, episode {r['episode']}" + (f", {r['episode_title']}" if r.get("episode_title") else "")
+                    if r.get("kind") == "episode" else r["title"])
+            lead = "Turning the TV on. " if r.get("started_tv") else ""
+            tail = " Picking up where you left off." if r.get("resumed") else (" Enjoy the film." if r.get("kind") == "movie" else "")
+            return {"say": spoken(f"{lead}Playing {what}, {name}.{tail}"), "intent": intent, "played": r}
+        if intent in ("pause", "resume", "stop", "back", "forward"):
+            if demo:
+                return {"say": "Demo mode: nothing was changed.", "intent": intent}
+            r = _phone_post(self, "/api/voice/control", {"action": intent})
+            if not r.get("ok"):
+                return {"say": r.get("message") or "I could not do that.", "intent": intent}
+            return {"say": {"pause": "Paused.", "resume": "Playing.", "stop": f"Stopped, {name}.", "back": "Going back a little.",
+                            "forward": "Skipping ahead."}[intent], "intent": intent}
+        if intent in ("vol_up", "vol_down", "mute"):
+            m = re.search(r"\b(\d{1,2})\b", str(q))
+            r = tv_key(self, intent, int(m.group(1)) if m else 3)
+            return {"say": r["message"] if not r.get("ok") or demo else {"vol_up": "Louder.", "vol_down": "Quieter.", "mute": "Done."}[intent],
+                    "intent": intent}
+        if intent == "whats_on":
+            if demo:
+                return {"say": f"You're watching How It's Made on YouTube, {name}.", "intent": intent}
+            k = (_phone_api(self, "/api/home") or {}).get("kodi") or {}
+            p = k.get("playing") or {}
+            if p:
+                say = f"You're watching {p.get('title')}" + (f", {p['sub']}" if p.get("sub") else "") + (", paused" if p.get("paused") else "") + "."
+            elif k.get("front_title"):
+                say = f"You're watching {k['front_title']} on {k['front']}."
+            elif k.get("front"):
+                say = f"{k['front']} is on the TV."
+            elif k.get("online") is False:
+                say = "The TV seems to be off."
+            else:
+                say = "Nothing's playing right now."
+            return {"say": spoken(say), "intent": intent}
+        if intent == "whats_new":
+            if demo:
+                return {"say": f"Today SABnzbd finished The Long Orbit and Coldwater, season 4, episode 2, {name}.", "intent": intent}
+            if time.time() - _sab_h_cache["t"] > 60:
+                _sab_h_cache.update(t=time.time(), v=sab_history())
+            start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            done = [nice_release(s["name"]) for s in _sab_h_cache["v"].get("slots", []) if s["ok"] and s["t"] >= start]
+            if not done:
+                return {"say": f"Nothing new has finished today, {name}.", "intent": intent}
+            names = done[:3]
+            listing = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+            more = f", and {len(done) - 3} more" if len(done) > 3 else ""
+            return {"say": spoken(re.sub(r"\bS(\d+)E(\d+)\b", lambda m_: f"season {int(m_.group(1))}, episode {int(m_.group(2))}", f"Today SABnzbd finished {listing}{more}, {name}.")),
+                    "intent": intent}
         if intent == "tv_on":
             return {"say": tv_on_via_phone_server(self) if not demo else "Demo mode: nothing was changed.", "intent": intent}
         if intent in ("morning", "week"):
@@ -2593,6 +2693,23 @@ def tv_show(hal, say: str = "") -> dict:
         hal.tv_seen = time.time()
     log.info("TV: HAL shown%s", " with a message" if say else "")
     return {"ok": True, "message": (f"On the TV now, {name}. He'll say it in a moment." if say else f"I'm on the TV now, {name}.")}
+
+
+def _phone_post(hal, path: str, body: dict, timeout: float = 20) -> dict:
+    """A POST to the NZB phone server HAL lives in; {"ok": False, "message": ...} if it can't be reached."""
+    port = int(hal.settings.get("phone_port") or 8765)
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=json.dumps(body).encode(),
+                                     headers={"X-Mobile-Token": _token_bytes.decode(), "Content-Type": "application/json"}, method="POST")
+        with _OPENER.open(req, timeout=timeout) as resp:
+            return json.loads(resp.read(200_000).decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            return {"ok": False, "message": json.loads(exc.read(4000).decode("utf-8", "replace")).get("error") or f"HTTP {exc.code}"}
+        except ValueError:
+            return {"ok": False, "message": f"HTTP {exc.code}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"I couldn't reach the phone server: {str(exc)[:80]}"}
 
 
 def tv_on_via_phone_server(hal) -> str:
