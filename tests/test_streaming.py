@@ -228,6 +228,24 @@ assert p["source"] == "usenet" and p["title"] == "Glass Meridian" and p["sub"] =
 m.kodi_call = fake_kodi("smb://HAL9000/Movies/Short Circuit (1986)/Short Circuit.mkv", "Short Circuit")
 p = m._kodi_now_playing()
 assert p["source"] == "pc" and p["title"] == "Short Circuit", p
+# however Kodi reports the address, HAL gets the movie's name (never the address)
+raw_path = saved[0]["path"]
+variants = [
+    opened,                                                                     # as sent
+    opened + "|User-Agent=Kodi",                                                # Kodi's header options on the end
+    opened.replace(urllib.parse.quote(raw_path, safe=""), raw_path),            # unescaped
+    f"http://192.168.68.60:8090/webdav{raw_path}",                              # a WebDAV address
+]
+for v in variants:
+    assert m.is_stream_file(v), v
+    assert m.stream_title(v, v) == ("Glass Meridian", "2025"), (v, m.stream_title(v, v))
+# not in "Streamed lately" (e.g. started from AltMount's own page): the name from the file, not the address
+odd = "http://192.168.68.60:8090/api/files/stream?download_key=abc&path=%2Fcomplete%2FDeadpool.2016.1080p.DSNP.WEB-DL%2FDeadpool.2016.1080p.DSNP.WEB-DL.mkv"
+assert m.stream_title(odd, "stream?download_key=abc&path=...") == ("Deadpool", "2016"), m.stream_title(odd, "x")
+assert m.stream_title("http://x:8090/api/files/stream?download_key=abc", "http://x:8090/api/files/stream?download_key=abc")[0] == "a stream from Usenet"
+m.kodi_call = fake_kodi(odd, "stream?download_key=abc&path=%2Fcomplete%2FDeadpool")
+p = m._kodi_now_playing()
+assert p["source"] == "usenet" and p["title"] == "Deadpool" and p["sub"] == "2016", p
 print("source ok")
 
 # ---- a release that can't be streamed: why, so the phone can offer another or Download ----

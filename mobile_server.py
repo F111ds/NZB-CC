@@ -777,13 +777,9 @@ def _kodi_now_playing() -> dict | None:
     title = str(item.get("title") or item.get("label") or "Playing")
     file = str(item.get("file") or "")
     usenet = is_stream_file(file)
-    if usenet:   # Kodi only knows the file name: use the title we kept when it was streamed
-        entry = stream_for_file(file)
-        if entry:
-            title, item["year"] = entry["title"], to_int(entry.get("year"))
-        else:
-            title, yr = release_title_year(title)
-            item["year"] = to_int(yr)
+    if usenet:   # Kodi only knows an address: the movie's name is the one kept when it was streamed
+        title, yr = stream_title(file, title)
+        item["year"] = to_int(yr)
     if item.get("showtitle"):
         sub = f"{item['showtitle']} · S{to_int(item.get('season')):02d}E{to_int(item.get('episode')):02d}"
     else:
@@ -4180,17 +4176,57 @@ def streams_view() -> dict:
 
 def is_stream_file(file: str) -> bool:
     """Whether a file Kodi is playing comes from AltMount (Usenet) rather than the PC's folders."""
-    f = str(file or "")
-    return "/api/files/stream?" in f or ("/webdav/" in f and f.lower().startswith(("http://", "https://", "dav://", "davs://")))
+    f = str(file or "").split("|", 1)[0]
+    low = f.lower()
+    return "/api/files/stream" in low or ("/webdav/" in low and low.startswith(("http://", "https://", "dav://", "davs://")))
+
+
+def stream_path_of(file: str) -> str:
+    """The AltMount path inside a stream address, however Kodi reports it: escaped or not, with Kodi's
+    "|header=..." options on the end, or a WebDAV address."""
+    f = str(file or "").split("|", 1)[0].strip()
+    if not is_stream_file(f):
+        return ""
+    parts = urllib.parse.urlsplit(f)
+    if "/api/files/stream" in parts.path.lower():
+        path = (urllib.parse.parse_qs(parts.query).get("path") or [""])[0]
+        if not path:   # Kodi sometimes reports the address unescaped: take everything after "path="
+            m = re.search(r"[?&]path=(.+?)(?:&download_key=|$)", f, re.I)
+            path = urllib.parse.unquote(m.group(1)) if m else ""
+        return path
+    i = parts.path.lower().find("/webdav/")
+    return urllib.parse.unquote(parts.path[i + len("/webdav"):]) if i >= 0 else ""
+
+
+def _norm_name(path: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (str(path).replace("\\", "/").rsplit("/", 1)[-1]).lower())
 
 
 def stream_for_file(file: str) -> dict | None:
-    """The "Streamed lately" entry for a file Kodi is playing, if it's one of ours."""
-    if not is_stream_file(file):
+    """The "Streamed lately" entry for a file Kodi is playing, if it's one of ours: the same path, else the same
+    file name (a WebDAV address, or one Kodi has rewritten)."""
+    path = stream_path_of(file)
+    if not path:
         return None
-    q = urllib.parse.parse_qs(urllib.parse.urlsplit(str(file)).query)
-    path = (q.get("path") or [""])[0]
-    return next((x for x in load_streams() if path and x.get("path") == path), None)
+    items = load_streams()
+    hit = next((x for x in items if x.get("path") == path), None)
+    if hit:
+        return hit
+    name = _norm_name(path)
+    return next((x for x in items if name and _norm_name(x.get("path", "")) == name), None)
+
+
+def stream_title(file: str, label: str = "") -> tuple[str, str]:
+    """(movie name, year) for a stream Kodi is playing: the name kept when it was streamed, else read from the
+    file's name (never from the address, which is what Kodi shows as its label)."""
+    entry = stream_for_file(file)
+    if entry:
+        return entry["title"], str(entry.get("year") or "")
+    base = stream_path_of(file).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    if not base and label and "://" not in label and "download_key" not in label:
+        base = label
+    title, year = release_title_year(base) if base else ("", "")
+    return title or "a stream from Usenet", year
 
 
 def _local_ipv4s() -> list[str]:
