@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.19.1"
+VERSION = "1.19.2"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2914,7 +2914,16 @@ def _tv_front_refresh() -> None:
     try:
         # Two ways to ask, as TVs' Android versions word it differently: the resumed activity, else the focused window.
         ok, out = tv_adb("f=$(dumpsys activity activities | grep -m1 -E 'mResumedActivity|ResumedActivity'); "
-                         "if [ -n \"$f\" ]; then echo \"$f\"; else dumpsys window | grep -m1 -E 'mCurrentFocus|mFocusedApp'; fi", timeout=25)
+                         "if [ -n \"$f\" ]; then echo \"$f\"; else dumpsys window | grep -m1 -E 'mCurrentFocus|mFocusedApp'; fi; "
+                         "dumpsys power | grep -m1 mWakefulness=", timeout=25)
+        if ok and re.search(r"mWakefulness=(Asleep|Dozing)", out or ""):
+            # In standby the last app is still "in front" (YouTube), but nothing is on: say nothing is.
+            if not _tv_front.get("asleep"):
+                log.info("TV front app: the TV is in standby")
+            now = time.time()
+            _tv_front.update({"pkg": "", "activity": "", "media": {}, "input": "", "asleep": True, "t": now, "ok_t": now, "error": ""})
+            return
+        _tv_front["asleep"] = False
         pkg, act = _tv_front_parse(out) if ok else ("", "")
         media_out, inp = "", ""
         prev = {"pkg": _tv_front.get("pkg"), "title": (_tv_front.get("media") or {}).get("title"), "input": _tv_front.get("input")}

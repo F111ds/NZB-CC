@@ -177,4 +177,12 @@ for pkg, act, shown in [("com.google.android.youtube.tv", "", False), ("org.xbmc
     assert (m.kodi_now_playing() is not None) is shown, pkg
 m.tv_front_app = lambda: None                                   # the TV tools aren't set up: trust Kodi, as before
 assert m.kodi_now_playing()["title"] == "Short Circuit"
+# standby: the last app (YouTube) is still "resumed", but the screen is asleep, so nothing is on
+hs.tv_adb = lambda cmd, timeout=30: (True, "  ResumedActivity: ActivityRecord{1 u0 com.google.android.youtube.tv/.MainActivity t9}\n  mWakefulness=Asleep")
+hs._tv_front["t"] = 0
+hs._tv_front_refresh()
+assert hs.tv_front() is None and hs._tv_front["asleep"]
+hs.tv_adb = lambda cmd, timeout=30: (True, "  ResumedActivity: ActivityRecord{1 u0 com.google.android.youtube.tv/.MainActivity t9}\n  mWakefulness=Awake") if "activities" in cmd else (True, "")
+hs._tv_front_refresh()
+assert hs.tv_front()["app"] == "YouTube" and not hs._tv_front["asleep"]
 print("ALL TV FRONT TESTS PASSED")

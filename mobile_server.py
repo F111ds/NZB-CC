@@ -83,7 +83,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.21.6"
+VERSION = "3.21.7"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -6386,6 +6386,8 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
         elif path == "/api/tv/off":
             res = tv_off()
             log.info("tv off (%s) ip=%s", "already off" if res.get("already") else "sent", self.ip)
+            if _hal_mod and not res.get("already"):   # look at the TV again once it has gone dark, so Home stops saying YouTube
+                threading.Timer(5, lambda: _hal_mod._tv_front.update(t=0)).start()
             self.send_json(200, res)
         elif path == "/api/tv/kodi":
             if not tv_configured():
