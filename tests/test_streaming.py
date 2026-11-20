@@ -170,6 +170,9 @@ m.kodi_call = lambda method, params=None, timeout=6: calls.append((method, param
 m._tv_wait_for_kodi = lambda wait: None
 m._kodi_host = lambda: "192.168.68.62"
 m._lan_ip_towards = lambda host: "192.168.68.10" if host == "192.168.68.62" else ""
+m.tv_configured = lambda settings=None: False
+_real_kodi = m.kodi_call
+m.kodi_call = lambda method, params=None, timeout=6: calls.append((method, params)) or ([{"playerid": 1, "type": "video"}] if method == "Player.GetActivePlayers" else "pong")
 r = m.stream_to_tv(done["stream_id"])
 assert r["ok"] and r["title"] == "Glass Meridian" and not r["started_tv"]
 opened = [p for meth, p in calls if meth == "Player.Open"][0]["item"]["file"]
@@ -177,6 +180,16 @@ assert opened.startswith("http://192.168.68.10:") and opened.endswith("Glass.Mer
 assert m.load_streams()[0].get("played")
 ph = m.stream_phone_url(done["stream_id"], "hal9000:8765")
 assert ph["url"].startswith(f"http://hal9000:{srv.server_address[1]}/api/files/stream?"), ph
+# Kodi says OK but never starts: say so, with the address it was given
+m.kodi_call = lambda method, params=None, timeout=6: [] if method == "Player.GetActivePlayers" else "pong"
+_sleep = m.time.sleep
+m.time.sleep = lambda s: None
+try:
+    m.stream_to_tv(done["stream_id"])
+    raise AssertionError("should report it")
+except m.UpstreamError as exc:
+    assert "couldn't open the stream from 192.168.68.10:" in str(exc), exc
+m.time.sleep = _sleep
 try:
     m.stream_to_tv("nosuchstream1")
     raise AssertionError("should refuse")
