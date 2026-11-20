@@ -18,8 +18,8 @@ android {
         manifestPlaceholders = [fullLauncher: cinema ? 'false' : 'true', cinemaPreview: cinema ? 'true' : 'false']
         minSdk 26
         targetSdk 34
-        versionCode 1039   // above any upstream build, so it installs over the launcher already on the TV
-        versionName '3.5-nzbcc.39'
+        versionCode 1040   // above any upstream build, so it installs over the launcher already on the TV
+        versionName '3.5-nzbcc.40'
     }
 
     // NZB-CC build: one fixed key kept with the source, so every rebuild installs over the last one on the TV.

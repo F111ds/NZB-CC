@@ -168,5 +168,11 @@ assert pc["cols"][2]["badge"] == "CHECK" and [d for d in pc["cols"][2]["drives"]
 assert det["pages"][2]["cols"][0]["monitors"][0]["status"] == "down"                    # problems first
 assert sum(len(c.get("monitors", [])) for c in det["pages"][2]["cols"]) == 12
 assert all(len(r) == 3 for pg in det["pages"] for c in pg["cols"] for r in c.get("rows", []))
+# the 2-row card grid (TV app 3.5-nzbcc.40+) on every page, old cols kept for older TV apps
+assert all(len(pg["grid"]) in (1, 2) and all(row for row in pg["grid"]) for pg in det["pages"]), [pg["title"] for pg in det["pages"] if "grid" not in pg]
+gpc = det["pages"][0]["grid"]
+assert [c["key"] for c in gpc[0]] == ["PROCESSOR", "MEMORY", "GRAPHICS"] and len(gpc[1][0]["drives"]) == 3
+assert sum(len(c.get("monitors", [])) for c in det["pages"][2]["grid"][0]) == 12
+assert len(det["pages"][1]["grid"][1][0]["hourly"]) == 24
 print("tv on demand ok")
 print("\nALL FUN TESTS PASSED")
