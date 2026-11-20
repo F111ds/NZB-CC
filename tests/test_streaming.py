@@ -125,6 +125,11 @@ assert m.altmount_stream_url("/x.mkv").startswith("http://localhost:")        # 
 assert m.is_stream_file(u) and not m.is_stream_file("smb://HAL9000/Movies/Short Circuit (1986)/Short Circuit.mkv")
 assert not m.is_stream_file("D:\\Movies\\Short Circuit.mkv") and not m.is_stream_file("")
 
+# ---- the PC's address for the TV: the one on the TV's network, even with a VPN and virtual adapters ----
+ips = ["192.168.35.1", "192.168.235.1", "10.5.0.2", "10.100.0.2", "192.168.68.60"]
+assert m._lan_ip_towards("192.168.68.62", ips) == "192.168.68.60"
+print("lan address ok")
+
 # ---- Stream: the job, then Play on TV ----
 RESULT = {"title": "Glass.Meridian.2025.1080p.WEB-DL.DDP5.1", "size_bytes": 7_800_000_000, "category": "2000"}
 m.get_cached_result = lambda rid: dict(RESULT) if rid == "res1" else None
