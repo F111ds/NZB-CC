@@ -771,10 +771,19 @@ def _kodi_now_playing() -> dict | None:
     if not video:
         return None
     pid = to_int(video[0].get("playerid"))
-    item = _kdict(kodi_call("Player.GetItem", {"playerid": pid, "properties": ["title", "showtitle", "season", "episode", "year", "art", "thumbnail"]})).get("item", {})
+    item = _kdict(kodi_call("Player.GetItem", {"playerid": pid, "properties": ["title", "showtitle", "season", "episode", "year", "art", "thumbnail", "file"]})).get("item", {})
     props = _kdict(kodi_call("Player.GetProperties", {"playerid": pid, "properties": [
         "percentage", "time", "totaltime", "speed", "currentsubtitle", "subtitleenabled", "currentaudiostream"]}))
     title = str(item.get("title") or item.get("label") or "Playing")
+    file = str(item.get("file") or "")
+    usenet = is_stream_file(file)
+    if usenet:   # Kodi only knows the file name: use the title we kept when it was streamed
+        entry = stream_for_file(file)
+        if entry:
+            title, item["year"] = entry["title"], to_int(entry.get("year"))
+        else:
+            title, yr = release_title_year(title)
+            item["year"] = to_int(yr)
     if item.get("showtitle"):
         sub = f"{item['showtitle']} · S{to_int(item.get('season')):02d}E{to_int(item.get('episode')):02d}"
     else:
@@ -783,6 +792,7 @@ def _kodi_now_playing() -> dict | None:
     poster = _art_ref(art.get("poster") or art.get("tvshow.poster") or art.get("thumb") or item.get("thumbnail"))
     fanart = _art_ref(art.get("fanart") or art.get("tvshow.fanart"))
     return {"playerid": pid, "title": title, "sub": sub, "poster": poster, "fanart": fanart,
+            "source": "usenet" if usenet else ("pc" if file else ""),
             "movieid": to_int(item.get("id")) if item.get("type") == "movie" else None,
             "time": _kodi_secs(props.get("time")),
             "total": _kodi_secs(props.get("totaltime")), "pct": to_float(props.get("percentage")),
@@ -3316,6 +3326,7 @@ def connections_view() -> dict:
         "kodi": {"url": str(data.get("kodi_url") or ""), "username": str(data.get("kodi_username") or ""),
                  "password_set": bool(data.get("kodi_password"))},
         "desktop_open": desktop_app_running(),
+        "altmount": {"url": altmount_config()[0], "key_set": bool(load_settings().get("altmount_key"))},
     }
 
 
@@ -3365,6 +3376,18 @@ def save_connections(body: dict) -> dict:
             data["kodi_password"] = _dpapi_protect(pw)
         elif body.get("clear_kodi_password"):
             data["kodi_password"] = ""
+        if "altmount_url" in body or str(body.get("altmount_key") or "").strip():
+            am_url = _plain_url(body.get("altmount_url"), "AltMount") if "altmount_url" in body else None
+            am_key = str(body.get("altmount_key") or "").strip()
+            if am_key and not re.fullmatch(r"[A-Za-z0-9_\-]{8,128}", am_key):
+                raise ValueError("That AltMount API key doesn't look right (AltMount › Configuration › System).")
+
+            def _am(st):
+                if am_url is not None:
+                    st["altmount_url"] = am_url
+                if am_key:
+                    st["altmount_key"] = _dpapi_protect(am_key)
+            update_settings(_am)
         bak = CONFIG_FILE.with_name(CONFIG_FILE.name + ".bak")
         tmp = CONFIG_FILE.with_suffix(".tmp")
         _retry_busy(lambda: bak.write_bytes(CONFIG_FILE.read_bytes()))
@@ -3419,6 +3442,10 @@ def test_connection(body: dict) -> dict:
                              data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "JSONRPC.Ping"}).encode())
             ok = '"pong"' in raw.decode("utf-8", "replace")
             return {"ok": ok, "message": "Kodi is answering." if ok else "That address answered, but not like Kodi."}
+        if what == "altmount":
+            saved_url, saved_key = altmount_config()
+            url = _plain_url(body.get("url"), "AltMount") if body.get("url") else saved_url
+            return altmount_test(url, str(body.get("key") or "").strip() or saved_key)
     except UpstreamError as exc:
         return {"ok": False, "message": str(exc)}
     except ConfigError as exc:
@@ -3432,7 +3459,9 @@ def _default_settings() -> dict:
             "jellyfin_url": "", "jellyfin_token": "",
             "notify_drive_health": True, "notify_drive_hot": True, "notify_drive_low": True, "drive_low_gb": DRIVE_LOW_GB,
             # Sony TV power / app launch (TV on + Kodi). Blank tv_host = the host from the Kodi URL.
-            "tv_host": "", "tv_psk": "", "tv_mac": "", "tv_mac_manual": False, "tv_kodi_uri": ""}
+            "tv_host": "", "tv_psk": "", "tv_mac": "", "tv_mac_manual": False, "tv_kodi_uri": "",
+            # Usenet streaming through AltMount (blank address: no Stream buttons). The key is DPAPI-encrypted.
+            "altmount_url": "", "altmount_key": ""}
 
 
 def _retry_busy(fn, tries: int = 20):
@@ -3988,6 +4017,361 @@ def tv_play(item_id: str, wait: float = TV_PLAY_WAIT_SECS, from_start: bool = Fa
         raise ValueError("Kodi can't find this movie yet. Update Kodi's library and try again.")
     kodi_call("Player.Open", {"item": target})
     return {"ok": True, "played": target}
+
+
+# ---- Usenet streaming through AltMount -----------------------------------------------------------------
+# "Stream" on a search result: the NZB goes to AltMount (POST /api/nzb/streams, its Stremio endpoint, which
+# must be switched on in AltMount), AltMount checks the release with the Usenet provider and answers with a
+# stream address, and Kodi plays that address. Nothing is downloaded. Streamed movies are remembered in
+# streamed.json ("Streamed lately"), and a movie Kodi plays from AltMount counts as source "usenet".
+STREAMS_FILE = BASE_DIR / "streamed.json"
+STREAM_WAIT_SECS = 240               # how long AltMount may take to get a release ready
+STREAMS_KEEP = 30
+STREAM_JOBS_KEEP = 20
+MAX_ALTMOUNT_BYTES = 2 * 1024 * 1024
+STREAM_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{8,40}$")
+_stream_jobs: dict[str, dict] = {}
+_stream_jobs_lock = threading.Lock()
+_streams_lock = threading.Lock()
+
+
+def altmount_config(settings: dict | None = None) -> tuple[str, str]:
+    """(address, API key) of AltMount, or blanks when it isn't set up."""
+    s = settings if settings is not None else load_settings()
+    url = str(s.get("altmount_url") or "").strip().rstrip("/")
+    raw = str(s.get("altmount_key") or "")
+    return url, (_dpapi_unprotect(raw).strip() if raw else "")
+
+
+def altmount_configured(settings: dict | None = None) -> bool:
+    url, key = altmount_config(settings)
+    return bool(url and key)
+
+
+def _multipart(fields: dict, file: tuple[str, bytes] | None = None) -> tuple[bytes, str]:
+    boundary = "----NZBStream" + secrets.token_hex(16)
+    parts = []
+    for name, value in fields.items():
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode("utf-8"))
+    if file:
+        fname = file[0].replace('"', "_")
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{fname}"\r\n'
+                     "Content-Type: application/x-nzb\r\n\r\n".encode("utf-8") + file[1] + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode("ascii"))
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
+def altmount_post(path: str, *, url: str, key: str, fields: dict | None = None,
+                  file: tuple[str, bytes] | None = None, timeout: float = 30) -> tuple[int, object]:
+    """POSTs a form to AltMount. Returns (HTTP status, parsed JSON or text); only a connection problem raises."""
+    body, ctype = _multipart(fields or {}, file)
+    req = urllib.request.Request(url + path, data=body, method="POST",
+                                 headers={"User-Agent": USER_AGENT, "Content-Type": ctype, "X-Api-Key": key})
+    try:
+        with _OPENER.open(req, timeout=timeout) as resp:
+            status, raw = resp.status, resp.read(MAX_ALTMOUNT_BYTES)
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        try:
+            raw = exc.read(64_000)
+        except Exception:  # noqa: BLE001
+            raw = b""
+    except urllib.error.URLError as exc:
+        raise UpstreamError(f"AltMount isn't answering ({redact(exc.reason)}). Is it running on the PC?") from None
+    except OSError as exc:  # timeouts, resets
+        raise UpstreamError(f"AltMount didn't answer in time ({redact(exc)}).") from None
+    except (http.client.HTTPException, ValueError) as exc:
+        raise UpstreamError(f"AltMount gave a bad answer ({type(exc).__name__}).") from None
+    try:
+        return status, json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        return status, raw.decode("utf-8", "replace")[:300]
+
+
+def altmount_error_text(status: int, payload) -> str:
+    """AltMount's error answer ({"error": {"message", "details"}}) as one line."""
+    if isinstance(payload, dict):
+        err = payload.get("error")
+        if isinstance(err, dict):
+            msg, det = str(err.get("message") or "").strip(), str(err.get("details") or "").strip()
+            text = msg + (": " + det if det and det.lower() not in msg.lower() else "")
+            if text:
+                return redact(text)[:300]
+        if isinstance(err, str) and err:
+            return redact(err)[:300]
+        if payload.get("message"):
+            return redact(str(payload["message"]))[:300]
+    elif isinstance(payload, str) and payload.strip() and not payload.lstrip().startswith("<"):
+        return redact(payload.strip())[:300]
+    return f"HTTP {status}"
+
+
+def stream_problem(status: int, message: str) -> tuple[str, str]:
+    """(kind, what to tell the user) for a release AltMount couldn't get ready."""
+    m = message.lower()
+    if status == 404 and "stremio" in m:
+        return "setup", ("AltMount's Stremio Integration is switched off. In AltMount open Configuration › "
+                         "Stremio Integration, turn on Enable Integration and Save.")
+    if status == 401 or "api key" in m or "download_key" in m:
+        return "setup", "AltMount didn't accept the API key. Check it under Settings › Connections."
+    if "episode not specified" in m or "multi-episode" in m:
+        return "pack", "It's a whole season in one release. Pick a single-episode release instead."
+    if "compress" in m:
+        return "archive", "It's packed in a compressed archive, so it has to be downloaded before it can play."
+    if "encrypt" in m or "password" in m:
+        return "archive", "It's password-protected, so it can't be streamed."
+    if any(w in m for w in ("missing", "segment", "article", "incomplete", "corrupt", "not available", "unavailable")):
+        return "missing", "Pieces of it are missing from your provider, so it wouldn't play to the end."
+    if status == 408 or "timed out" in m or "timeout" in m:
+        return "slow", "AltMount took too long to get it ready. Try again, or try another release."
+    if "no media" in m or "no video" in m or "no file" in m:
+        return "nomedia", "There's no video in this release that I can play."
+    return "other", f"AltMount couldn't get it ready: {message}"
+
+
+def release_title_year(release: str) -> tuple[str, str]:
+    """('Glass Meridian', '2025') from 'Glass.Meridian.2025.1080p.WEB-DL...'; (cleaned name, '') without a year."""
+    base = re.sub(r"\.(mkv|mp4|m4v|avi|ts|m2ts|mov|wmv)$", "", str(release or "").strip(), flags=re.I)
+    # The year is the last year-like number before the quality tags ("Blade Runner 2049 (2017) 2160p" is 2017).
+    tags = re.search(r"[ ._\-(\[](?:2160p|1080p|720p|576p|480p|4k|uhd|S\d{1,2}E\d{1,3}|web-?dl|webrip|bluray|blu-ray|remux|hdtv|dvdrip)\b", base, re.I)
+    cut = tags.start() if tags else len(base)
+    years = [y for y in re.finditer(r"[ ._\-(\[]+((?:19|20)\d{2})(?=[ ._\-)\]]|$)", base) if y.start() < cut and y.start() > 0]
+    if years:
+        y = years[-1]
+        return re.sub(r"[._]+", " ", base[:y.start()]).strip(" -([") or base[:y.start()], y.group(1)
+    m = re.match(r"^(.+?)[ ._\-]+(?:S\d{1,2}E\d{1,3}|2160p|1080p|720p|480p)", base, re.I)
+    return re.sub(r"[._]+", " ", (m.group(1) if m else base)).strip(" -")[:120], ""
+
+
+def load_streams() -> list[dict]:
+    try:
+        data = json.loads(read_text_retry(STREAMS_FILE))
+    except (FileNotFoundError, ValueError):
+        return []
+    return [x for x in data if isinstance(x, dict) and x.get("id") and x.get("path")] if isinstance(data, list) else []
+
+
+def _remember_stream(entry: dict) -> dict:
+    with _streams_lock:
+        items = [x for x in load_streams() if x.get("path") != entry["path"]]
+        items.insert(0, entry)
+        tmp = STREAMS_FILE.with_name(STREAMS_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(items[:STREAMS_KEEP], indent=1, ensure_ascii=False), encoding="utf-8")
+        replace_retry(tmp, STREAMS_FILE)
+    return entry
+
+
+def _stream_mark_watched(stream_id: str) -> None:
+    with _streams_lock:
+        items = load_streams()
+        for x in items:
+            if x["id"] == stream_id:
+                x["played"] = time.time()
+        tmp = STREAMS_FILE.with_name(STREAMS_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(items, indent=1, ensure_ascii=False), encoding="utf-8")
+        replace_retry(tmp, STREAMS_FILE)
+
+
+def streams_view() -> dict:
+    """"Streamed lately" for the Watch tab (no paths or keys)."""
+    return {"configured": altmount_configured(),
+            "items": [{k: x.get(k) for k in ("id", "title", "year", "res", "size", "t", "played")} for x in load_streams()[:10]]}
+
+
+def is_stream_file(file: str) -> bool:
+    """Whether a file Kodi is playing comes from AltMount (Usenet) rather than the PC's folders."""
+    f = str(file or "")
+    return "/api/files/stream?" in f or ("/webdav/" in f and f.lower().startswith(("http://", "https://", "dav://", "davs://")))
+
+
+def stream_for_file(file: str) -> dict | None:
+    """The "Streamed lately" entry for a file Kodi is playing, if it's one of ours."""
+    if not is_stream_file(file):
+        return None
+    q = urllib.parse.parse_qs(urllib.parse.urlsplit(str(file)).query)
+    path = (q.get("path") or [""])[0]
+    return next((x for x in load_streams() if path and x.get("path") == path), None)
+
+
+def _lan_ip_towards(host: str) -> str:
+    """This PC's address on the network that leads to host (the TV), for addresses the TV can open."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect((host, 9))
+            return s.getsockname()[0]
+    except OSError:
+        return ""
+
+
+def altmount_stream_url(path: str, viewer_host: str = "") -> str:
+    """The address a player opens for a streamed file. AltMount on "localhost" is swapped for an address the
+    viewer (the TV, or the phone) can reach. The key in it is AltMount's own download key (a hash of its API key)."""
+    url, key = altmount_config()
+    if not url or not key:
+        raise ValueError("Usenet streaming isn't set up. Add AltMount under Settings › Connections.")
+    p = urllib.parse.urlsplit(url)
+    host = p.hostname or "localhost"
+    if host in ("localhost", "127.0.0.1", "::1") and viewer_host:
+        host = viewer_host
+    port = f":{p.port}" if p.port else ""
+    netloc = (f"[{host}]" if ":" in host else host) + port
+    download_key = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    # The path last, so the address ends in ".mkv" (players guess the format from it).
+    return (f"{p.scheme or 'http'}://{netloc}/api/files/stream?download_key={download_key}"
+            f"&path={urllib.parse.quote(path, safe='')}")
+
+
+def _kodi_host() -> str:
+    try:
+        return urllib.parse.urlsplit(normalize_kodi_url(get_config().get("kodi_url", ""))).hostname or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _stream_job_view(job: dict) -> dict:
+    out = {k: job.get(k) for k in ("id", "state", "stage", "title", "year", "release", "res", "size", "kind",
+                                    "message", "stream_id")}
+    out["elapsed"] = int(time.time() - job["started"])
+    return out
+
+
+def _stream_run(job_id: str, item: dict) -> None:
+    def update(**kw):
+        with _stream_jobs_lock:
+            if job_id in _stream_jobs:
+                _stream_jobs[job_id].update(kw)
+
+    def cancelled() -> bool:
+        with _stream_jobs_lock:
+            return _stream_jobs.get(job_id, {}).get("state") == "cancelled"
+
+    try:
+        url, key = altmount_config()
+        nzb_data, used = download_indexer_nzb(item)
+        if cancelled():
+            return
+        update(stage="check")
+        status, payload = altmount_post("/api/nzb/streams", url=url, key=key,
+                                        fields={"timeout": str(STREAM_WAIT_SECS)},
+                                        file=(safe_nzb_filename(item["title"]), nzb_data), timeout=STREAM_WAIT_SECS + 30)
+        if cancelled():
+            return
+        streams = payload.get("streams") if status == 200 and isinstance(payload, dict) else None
+        if not isinstance(streams, list) or not streams:
+            text = altmount_error_text(status, payload) if status != 200 else "no video in it"
+            kind, message = stream_problem(status, text if status != 200 else "no media")
+            log.info("stream failed title=%r status=%s: %s", item["title"], status, text)
+            update(state="failed", kind=kind, message=message)
+            return
+        good = [s for s in streams if isinstance(s, dict) and s.get("url")]
+        pick = next((s for s in good if not re.search(r"\bsample\b", str(s.get("name") or ""), re.I)), good[0] if good else None)
+        path = (urllib.parse.parse_qs(urllib.parse.urlsplit(str(pick.get("url") if pick else "")).query).get("path") or [""])[0]
+        if not path:
+            update(state="failed", kind="other", message="AltMount answered without a stream address.")
+            return
+        title, year = release_title_year(item["title"])
+        entry = _remember_stream({"id": secrets.token_urlsafe(9), "title": title, "year": year, "release": item["title"],
+                                  "res": release_resolution(item["title"]), "size": format_bytes(item.get("size_bytes") or 0),
+                                  "path": path, "t": time.time()})
+        log.info("stream ready title=%r indexer=%s", item["title"], used)
+        update(state="ready", stage="ready", stream_id=entry["id"])
+    except (UpstreamError, ValueError, ConfigError) as exc:
+        kind, message = ("offline", str(exc)) if "AltMount" in str(exc) else ("other", str(exc))
+        update(state="failed", kind=kind, message=message)
+    except Exception:  # noqa: BLE001 - a background job: report, never die quietly
+        log.exception("stream job failed")
+        update(state="failed", kind="other", message="Something went wrong (see mobile_server.log on the PC).")
+
+
+def stream_start(result_id: str) -> dict:
+    """Starts getting a search result ready to stream; the phone follows it with stream_status()."""
+    if not altmount_configured():
+        raise ValueError("Usenet streaming isn't set up. Add AltMount under Settings › Connections.")
+    item = get_cached_result(result_id)
+    if not item:
+        raise ValueError("That search result expired. Search again and retry.")
+    title, year = release_title_year(item["title"])
+    job = {"id": secrets.token_urlsafe(12), "state": "working", "stage": "nzb", "title": title, "year": year,
+           "release": item["title"], "res": release_resolution(item["title"]),
+           "size": format_bytes(item.get("size_bytes") or 0), "started": time.time()}
+    with _stream_jobs_lock:
+        while len(_stream_jobs) >= STREAM_JOBS_KEEP:
+            del _stream_jobs[next(iter(_stream_jobs))]
+        _stream_jobs[job["id"]] = job
+    threading.Thread(target=_stream_run, args=(job["id"], item), daemon=True, name="stream-job").start()
+    return _stream_job_view(job)
+
+
+def stream_status(job_id: str) -> dict:
+    with _stream_jobs_lock:
+        job = _stream_jobs.get(job_id) if STREAM_ID_RE.fullmatch(job_id or "") else None
+        if not job:
+            raise ValueError("I lost track of that one. Tap Stream again.")
+        return _stream_job_view(job)
+
+
+def stream_cancel(job_id: str) -> dict:
+    with _stream_jobs_lock:
+        job = _stream_jobs.get(job_id)
+        if job and job.get("state") == "working":
+            job["state"] = "cancelled"
+    return {"ok": True}
+
+
+def _stream_entry(stream_id: str) -> dict:
+    entry = next((x for x in load_streams() if x["id"] == stream_id), None) if STREAM_ID_RE.fullmatch(stream_id or "") else None
+    if not entry:
+        raise ValueError("That stream isn't in the list any more. Stream it again from Get.")
+    return entry
+
+
+def stream_to_tv(stream_id: str) -> dict:
+    """Plays a streamed movie in Kodi, turning the TV on and opening Kodi first if needed."""
+    entry = _stream_entry(stream_id)
+    kodi_host = _kodi_host()
+    url = altmount_stream_url(entry["path"], _lan_ip_towards(kodi_host) if kodi_host else "")
+    try:
+        kodi_call("JSONRPC.Ping", timeout=3)
+        started_tv = False
+    except UpstreamError:
+        if not tv_configured():
+            raise UpstreamError("Kodi isn't answering. Turn the TV on and open Kodi, then try again.") from None
+        tv_start(launch_kodi=True)
+        started_tv = True
+    _tv_wait_for_kodi(90 if started_tv else TV_PLAY_WAIT_SECS)
+    kodi_call("Player.Open", {"item": {"file": url}}, timeout=20)
+    _stream_mark_watched(stream_id)
+    return {"ok": True, "started_tv": started_tv, "title": entry["title"]}
+
+
+def stream_phone_url(stream_id: str, phone_host: str) -> dict:
+    """The address the phone's video player (VLC) opens: AltMount by the same name the phone reached this PC by."""
+    entry = _stream_entry(stream_id)
+    host = urllib.parse.urlsplit("http://" + (phone_host or "")).hostname or ""
+    _stream_mark_watched(stream_id)
+    return {"ok": True, "url": altmount_stream_url(entry["path"], host), "title": entry["title"]}
+
+
+def altmount_test(url: str, key: str) -> dict:
+    """Connections › Test: is AltMount there, is the key right, is its Stremio Integration on?"""
+    if not url:
+        return {"ok": False, "message": "Enter AltMount's address first, e.g. http://localhost:8090."}
+    try:
+        http_fetch(url + "/live", timeout=6, max_bytes=64_000)
+    except UpstreamError as exc:
+        return {"ok": False, "message": f"AltMount isn't answering at that address ({exc}). Is it running?"}
+    if not key:
+        return {"ok": False, "message": "AltMount is answering. Now add its API key (AltMount › Configuration › System)."}
+    status, payload = altmount_post("/api/nzb/streams", url=url, key=key, timeout=10)
+    text = altmount_error_text(status, payload)
+    if status == 404:
+        return {"ok": False, "message": "AltMount is answering, but its Stremio Integration is off. Turn it on: "
+                                        "AltMount › Configuration › Stremio Integration › Enable Integration › Save."}
+    if status == 401:
+        return {"ok": False, "message": "AltMount is answering, but it didn't accept that API key."}
+    if status == 400:   # it got past the key check and only wants an NZB: all set
+        return {"ok": True, "message": "AltMount is answering, accepts the key and is ready to stream."}
+    return {"ok": False, "message": f"AltMount answered: {text}"}
 
 
 # Screensaver photos (GET /api/tv/photos, /api/tv/photo): pictures from a folder on this PC, which
@@ -5524,6 +5908,11 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             self.send_json(200, self._settings_view())
         elif path == "/api/connections":
             self.send_json(200, connections_view())
+        elif path == "/api/stream/status":
+            job = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("job", [""])[0]
+            self.send_json(200, stream_status(job))
+        elif path == "/api/streams":
+            self.send_json(200, streams_view())
         elif path == "/api/kodi/art":
             ref = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("u", [""])[0]
             raw, ctype = kodi_art(ref)
@@ -5635,6 +6024,20 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             self._post_search(body)
         elif path == "/api/add":
             self._post_add(body)
+        elif path == "/api/stream":
+            if self._limited(ADD_LIMITER, "add"):
+                return
+            job = stream_start(str(body.get("id") or ""))
+            log.info("stream start %r ip=%s", job.get("release"), self.ip)
+            self.send_json(200, job)
+        elif path == "/api/stream/cancel":
+            self.send_json(200, stream_cancel(str(body.get("job") or "")))
+        elif path == "/api/stream/tv":
+            result = stream_to_tv(str(body.get("stream") or ""))
+            log.info("stream to tv %r (tv started: %s) ip=%s", result.get("title"), result.get("started_tv"), self.ip)
+            self.send_json(200, result)
+        elif path == "/api/stream/phone":
+            self.send_json(200, stream_phone_url(str(body.get("stream") or ""), str(self.headers.get("Host") or "")[:200]))
         elif path == "/api/add-batch":
             self._post_add_batch(body)
         elif path in ("/api/queue/pause", "/api/queue/resume"):
@@ -5877,6 +6280,7 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             out["upcoming"] = up_future.result()
         out["saved_new"] = sum(len(x.get("new") or []) for x in load_settings()["saved_searches"])
         out["tv_ready"] = tv_configured()
+        out["stream_ready"] = altmount_configured()
         out["version"] = VERSION
         return out
 
@@ -5919,6 +6323,12 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
 
     def _kodi_overview(self) -> dict:
         info = self._kodi_brief()
+        if info.get("configured") is False:   # no Kodi: nothing could play a stream either
+            return info
+        try:
+            info["streams"] = streams_view()
+        except Exception:  # noqa: BLE001 - a bonus: never lose the Kodi overview over it
+            info["streams"] = {"configured": False, "items": []}
         if not info.get("online"):
             return info
         lim = {"limits": {"start": 0, "end": 1}}
