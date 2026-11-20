@@ -83,7 +83,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.21.1"
+VERSION = "3.21.2"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -3135,6 +3135,31 @@ def arr_app_status(app: str) -> dict:
         out["queue"] = to_int(arr_request(app, "/queue/status", timeout=5).get("totalCount"))
     except UpstreamError:
         pass
+    return out
+
+
+_arr_counts_cache: dict = {"t": 0.0, "v": {}}
+
+
+def arr_counts() -> dict:
+    """How many shows Sonarr follows and how many movies Radarr still wants (for the TV's Downloads page).
+    Cached for 10 minutes; a missing app is just left out."""
+    if time.time() - _arr_counts_cache["t"] < 600:
+        return _arr_counts_cache["v"]
+    out: dict = {}
+    if arr_conf("sonarr")["key"]:
+        try:
+            series = arr_request("sonarr", "/series", timeout=15) or []
+            out["shows"] = sum(1 for x in series if x.get("monitored", True))
+        except (UpstreamError, OSError, ValueError):
+            pass
+    if arr_conf("radarr")["key"]:
+        try:
+            movies = arr_request("radarr", "/movie", timeout=20) or []
+            out["wanted"] = sum(1 for x in movies if x.get("monitored") and not x.get("hasFile") and x.get("isAvailable", True))
+        except (UpstreamError, OSError, ValueError):
+            pass
+    _arr_counts_cache.update(t=time.time(), v=out)
     return out
 
 
@@ -6325,6 +6350,8 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             if arg("fresh") == "1":
                 arr_clear_cache()
             self.send_json(200, arr_overview())
+        elif path == "/api/arr/counts":
+            self.send_json(200, arr_counts())
         elif path == "/api/arr/upcoming":
             self.send_json(200, {"items": arr_upcoming(force=arg("fresh") == "1")})
         elif path == "/api/arr/lookup":

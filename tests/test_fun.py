@@ -173,6 +173,14 @@ assert all(len(pg["grid"]) in (1, 2) and all(row for row in pg["grid"]) for pg i
 gpc = det["pages"][0]["grid"]
 assert [c["key"] for c in gpc[0]] == ["PROCESSOR", "MEMORY", "GRAPHICS"] and len(gpc[1][0]["drives"]) == 3
 assert sum(len(c.get("monitors", [])) for c in det["pages"][2]["grid"][0]) == 12
-assert len(det["pages"][1]["grid"][1][0]["hourly"]) == 24
+netg, pig, dlg = det["pages"][1]["grid"], det["pages"][3]["grid"], det["pages"][4]["grid"]
+assert netg[0][0]["graph_fit"] and [c["key"] for c in netg[1]] == ["TRAFFIC · LAST 24 H", "BUSIEST DEVICES"] and netg[1][0]["graph2"]
+assert any(r[0].startswith("Docker") for r in netg[1][1]["rows"])
+assert len(pig[0][1]["hourly"]) == 24 and len(pig[0][1]["hourly2"]) == 24 and pig[1][2]["key"] == "MOST ASKED FOR" and pig[1][2]["rows"][0][0] == "i.ytimg.com"
+assert [c["key"] for r in dlg for c in r] == ["QUEUE", "RECENTLY FINISHED", "LAST 7 DAYS", "COMING UP"] and len(dlg[1][0]["hourly"]) == 7
+from datetime import datetime as _dt
+idle = hs._dl_grid(hal, _dt.now(), [], "", [], [], [], {"diskspace1": "100", "diskspacetotal1": "200"}, {}, {}, {"shows": 2})
+assert idle[0][0]["key"] == "LAST 7 DAYS" and idle[1][0]["big"] == "Idle" and any(r[0] == "Download drive" for r in idle[1][0]["rows"])
+assert hs._when(_dt.now().timestamp(), _dt.now()).endswith(("AM", "PM"))
 print("tv on demand ok")
 print("\nALL FUN TESTS PASSED")

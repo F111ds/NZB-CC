@@ -61,7 +61,7 @@ import xml.etree.ElementTree as ET
 import zlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.18.1"
+VERSION = "1.19.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -696,6 +696,8 @@ class PiHole:
                     td = self._v6("GET", "/api/stats/top_domains?blocked=true&count=5")
                     tc = self._v6("GET", "/api/stats/top_clients?count=200")
                     out["top_blocked"] = [[str(x.get("domain")), to_int(x.get("count"))] for x in td.get("domains") or []][:5]
+                    ta = self._v6("GET", "/api/stats/top_domains?count=5")
+                    out["top_allowed"] = [[str(x.get("domain")), to_int(x.get("count"))] for x in ta.get("domains") or []][:5]
                     out["top_clients"] = [[str(x.get("name") or x.get("ip")), to_int(x.get("count"))] for x in tc.get("clients") or []][:5]
                     out["all_clients"] = [[str(x.get("name") or ""), str(x.get("ip") or "")] for x in tc.get("clients") or []][:200]
                 except OSError:
@@ -712,6 +714,7 @@ class PiHole:
             try:
                 ti = self._v5("topItems=5")
                 out["top_blocked"] = [[k, to_int(v)] for k, v in (ti.get("top_ads") or {}).items()][:5]
+                out["top_allowed"] = [[k, to_int(v)] for k, v in (ti.get("top_queries") or {}).items()][:5]
                 tc = self._v5("topClients=200")
                 src = (tc.get("top_sources") or {}).items()
                 out["top_clients"] = [[k.split("|")[0] or k, to_int(v)] for k, v in src][:5]
@@ -1516,6 +1519,71 @@ def _phone_api(hal, path: str):
         return None
 
 
+_dl_stats_cache: dict = {"t": 0.0, "v": {}}
+
+
+def _when(t: float, now: datetime) -> str:
+    """'4:07 PM', 'yesterday 10:46 PM', 'Sat 6:12 PM' or 'Nov 3' for when something finished."""
+    dt = datetime.fromtimestamp(t)
+    days = (now.date() - dt.date()).days
+    clock = dt.strftime("%I:%M %p").lstrip("0")
+    return clock if days == 0 else f"yesterday {clock}" if days == 1 else f"{dt.strftime('%a')} {clock}" if days < 7 else dt.strftime("%b %d").replace(" 0", " ")
+
+
+def _dl_grid(hal, now: datetime, queue: list, badge: str, hist: list, upcoming: list, saved: list, qd: dict,
+             stats: dict, arr: dict, counts: dict) -> list:
+    """The Downloads page as two rows of cards (TV app 3.5-nzbcc.41+). Busy: the queue leads. Idle: the last 7 days lead."""
+    days = (stats or {}).get("days") or []
+    tot = (stats or {}).get("totals") or {}
+    week_bytes = sum(to_int(d.get("bytes")) for d in days)
+    week_done = sum(to_int(d.get("done")) for d in days)
+    week_failed = sum(to_int(d.get("failed")) for d in days)
+    labels = []
+    for i, d in enumerate(days):
+        try:
+            labels.append("Today" if i == len(days) - 1 else date.fromisoformat(str(d.get("date"))).strftime("%a"))
+        except ValueError:
+            labels.append("")
+    week = {"key": "LAST 7 DAYS", "badge": "SABNZBD",
+            "big": sm.fmt_bytes(week_bytes) if days else "—",
+            "bigsub": (f"this week · {week_done} finished" + (f" · {week_failed} failed" if week_failed else "")) if days else "SABnzbd's history isn't available",
+            "hourly": [round(to_int(d.get("bytes")) / 1073741824, 2) for d in days], "hourly_color": "#FF6A4D", "hourly_labels": labels,
+            "chips": [[k + " ", sm.fmt_bytes(tot[v]), ""] for k, v in (("today", "day"), ("this month", "month"), ("all time", "total")) if tot.get(v)]}
+    recent = {"key": "RECENTLY FINISHED", "weight": 1.3,
+              "rows": [[nice_release(s["name"])[:40], _when(s["t"], now) if s["ok"] else "failed", "ok" if s["ok"] else "warning"]
+                       for s in hist if s.get("t")][:6] or [["Nothing finished yet", "", "ok"]]}
+    coming = []
+    for x in upcoming[:5]:
+        coming.append(x)
+    if not coming:
+        coming.append(["Nothing scheduled in Sonarr or Radarr", "", "ok"])
+    if counts.get("shows") is not None:
+        coming.append(["Sonarr", f"following {counts['shows']} show{'s' if counts['shows'] != 1 else ''}", "ok"])
+    if counts.get("wanted") is not None:
+        coming.append(["Radarr", f"{counts['wanted']} movie{'s' if counts['wanted'] != 1 else ''} wanted", "ok"])
+    coming += [["Saved: " + s.get("query", "")[:30], f"{len(s.get('new') or [])} new" if s.get("new") else "nothing new",
+                "info" if s.get("new") else "ok"] for s in saved[:2]]
+    coming_card = {"key": "COMING UP", "badge": "NEXT TWO WEEKS", "weight": 1.3, "rows": coming[:7]}
+    if queue:
+        return [[{"key": "QUEUE", "badge": badge, "weight": 2, "queue": queue}, recent], [{**week, "weight": 1.3}, coming_card]]
+    apps = {a.get("app"): a for a in (arr or {}).get("apps") or []}
+    rows = []
+    if qd is not None:
+        lim = str(qd.get("speedlimit") or "").strip()
+        rows.append(["SABnzbd", ("paused" if qd.get("paused") else "ready") + (f" · limit {lim}%" if lim and lim not in ("0", "100") else " · no speed limit"),
+                     "warning" if qd.get("paused") else "ok"])
+    for k, name in (("sonarr", "Sonarr"), ("radarr", "Radarr")):
+        a = apps.get(k)
+        if a and a.get("configured"):
+            rows.append([name, ("online" + (f" · {a['queue']} grabbing" if a.get("queue") is not None else "")) if a.get("online") else "not answering",
+                         "ok" if a.get("online") else "warning"])
+    free, total = to_float((qd or {}).get("diskspace1"), 0) or 0, to_float((qd or {}).get("diskspacetotal1"), 0) or 0
+    if total:
+        rows.append(["Download drive", f"{sm.fmt_bytes(free * 1073741824)} free", "warning" if free / total < 0.1 else "ok", round(100 - free * 100 / total)])
+    idle = {"key": "QUEUE", "big": "Idle", "bigsub": "nothing queued", "rows": rows or [["Nothing in the queue", "", "ok"]]}
+    return [[{**week, "weight": 2}, recent], [idle, coming_card]]
+
+
 def tv_downloads_page(hal, demo: bool = False) -> dict:
     """The TV's Downloads details page: the queue, today, what's coming and saved searches."""
     now = datetime.now()
@@ -1524,7 +1592,18 @@ def tv_downloads_page(hal, demo: bool = False) -> dict:
         q = [{"name": "The Long Orbit (2025)", "pct": 59, "info": "38.2 MB/s · 12.8 GB to go · done " + clock(now + timedelta(minutes=12)) + " · movies"},
              {"name": "Night Harbor S02E06", "pct": 0, "info": "queued · 2.1 GB · tv"},
              {"name": "Halcyon Road (2024)", "pct": 12, "info": "paused · 25.0 GB to go · movies", "paused": True}]
-        return {"title": "Downloads", "level": "ok", "head": "DOWNLOADING · 3 IN QUEUE", "cols": [
+        hist = [{"name": n, "ok": ok, "t": (now - timedelta(hours=h)).timestamp()} for n, ok, h in
+                (("The.Long.Orbit.2025.2160p.UHD.BluRay-X", True, 0.8), ("Coldwater.S04E02.1080p.WEB", True, 3), ("Night.Harbor.S02E05.1080p", False, 20),
+                 ("Glass.Meridian.2024.1080p.BluRay", True, 26), ("The.Quiet.Sun.S01E08.1080p", True, 50), ("Deep.Field.2023.2160p", True, 75))]
+        stats = {"totals": {"day": 31_400_000_000, "month": 335_000_000_000, "total": 4_500_000_000_000},
+                 "days": [{"date": (now.date() - timedelta(days=6 - i)).isoformat(), "done": d, "failed": 0, "bytes": int(b * 1073741824)}
+                          for i, (d, b) in enumerate(((2, 18.4), (0, 0), (4, 31.2), (1, 6.1), (3, 22.8), (1, 5.8), (6, 29.2)))]}
+        up_rows = [["Night Harbor S02E06", "tomorrow 2 AM", "ok"], ["Glass Meridian II (2026)", "Sun", "ok"], ["The Quiet Sun S01E09", "Mon 1 AM", "ok"]]
+        saved = [{"query": "glass meridian 2160p", "new": [1]}, {"query": "night harbor s03"}]
+        arr = {"apps": [{"app": "sonarr", "configured": True, "online": True, "queue": 1}, {"app": "radarr", "configured": True, "online": True, "queue": 0}]}
+        grid = _dl_grid(hal, now, q, "38.2 MB/s", hist, up_rows, saved, {"diskspace1": "312", "diskspacetotal1": "3726"}, stats, arr,
+                        {"shows": 14, "wanted": 3})
+        return {"title": "Downloads", "level": "ok", "head": "DOWNLOADING · 3 IN QUEUE", "grid": grid, "cols": [
             {"key": "QUEUE", "badge": "38.2 MB/s", "queue": q},
             {"key": "TODAY", "big": "6 done", "bigsub": "0 failed today",
              "rows": [["Last finished", "", "ok"], ["The Long Orbit (2025)", clock(now - timedelta(minutes=50)), "ok"],
@@ -1533,7 +1612,7 @@ def tv_downloads_page(hal, demo: bool = False) -> dict:
                                           ["Saved searches", "", "ok"], ["glass meridian 2160p", "1 new", "info"], ["night harbor s03", "nothing new", "ok"]]}]}
     cfg = nzb_config()
     key = dpapi_unprotect(str(cfg.get("sab_api_key") or ""))
-    queue, head, level, badge = [], "SABNZBD ISN'T SET UP", "ok", ""
+    queue, head, level, badge, qd = [], "SABNZBD ISN'T SET UP", "ok", "", None
     if key:
         base = str(cfg.get("sab_url") or "http://127.0.0.1:8080").strip().rstrip("/")
         try:
@@ -1574,13 +1653,23 @@ def tv_downloads_page(hal, demo: bool = False) -> dict:
         except ValueError:
             pass
         coming.append([name[:40], when.strip(), "ok"])
+    up_rows = list(coming)
     saved = ((_phone_api(hal, "/api/saved") or {}).get("searches") or [])[:3]
+    grid = None
+    try:
+        if time.time() - _dl_stats_cache["t"] > 300:
+            _dl_stats_cache.update(t=time.time(), v={"stats": _phone_api(hal, "/api/stats") or {}, "counts": _phone_api(hal, "/api/arr/counts") or {},
+                                                        "arr": _phone_api(hal, "/api/arr") or {}})
+        grid = _dl_grid(hal, now, queue, badge, hist, up_rows, saved, qd, _dl_stats_cache["v"].get("stats") or {},
+                        _dl_stats_cache["v"].get("arr") or {}, _dl_stats_cache["v"].get("counts") or {})
+    except Exception as exc:  # noqa: BLE001 - the plain columns still show
+        log.info("TV downloads grid: %s", exc)
     if saved:
         coming.append(["Saved searches", "", "ok"])
         coming += [[s.get("query", "")[:36], f"{len(s.get('new') or [])} new" if s.get("new") else "nothing new", "info" if s.get("new") else "ok"] for s in saved]
     if not coming:
         coming = [["Nothing coming up in the next two weeks", "", "ok"]]
-    return {"title": "Downloads", "level": level, "head": head, "cols": [
+    return {"title": "Downloads", "level": level, "head": head, **({"grid": grid} if grid else {}), "cols": [
         {"key": "QUEUE", "badge": badge, "queue": queue} if queue else {"key": "QUEUE", "rows": [["Nothing in the queue", "", "ok"]]},
         {"key": "TODAY", "big": f"{done} done", "bigsub": f"{failed} failed today", "rows": ([["Last finished", "", "ok"]] + last) if last else [["Nothing finished yet", "", "ok"]]},
         {"key": "COMING UP", "rows": coming}]}
@@ -2138,6 +2227,26 @@ def _hist(vals, n: int = 60) -> list:
     return [round(v, 1) for v in out[-n:]]
 
 
+def _device_name(hal, net: dict, who: str) -> str:
+    """A device as the TV lists it: Pi-hole's name when it has one, else what HAL knows the address to be
+    ("Kodi TV · .62"), else the address."""
+    if not re.fullmatch(r"[0-9.]+|[0-9a-fA-F:]+", who or ""):
+        return who
+    known = {}
+    try:
+        known[tv_host().split(":")[0]] = "Kodi TV"
+    except Exception:  # noqa: BLE001
+        pass
+    known[str(_denon.get("host") or hal.settings.get("denon_host") or "")] = "Denon"
+    known[str(net.get("gateway") or "")] = "Router"
+    known[urllib.parse.urlsplit(str((getattr(hal, "ph", None) or {}).get("base") or "")).hostname or ""] = "Pi-hole"
+    known.pop("", None)
+    name = known.get(who) or ("Docker" if who.startswith("172.17.") else "")
+    if not name:
+        return who
+    return f"{name} · .{who.rsplit('.', 1)[-1]}" if who.startswith("192.168.") else f"{name} · {who}"
+
+
 def _gb(b) -> str:
     return f"{(b or 0) / 1073741824:.1f}"
 
@@ -2203,20 +2312,24 @@ def tv_grids(hal, st: dict, sc: dict, hist: dict) -> dict:
     fw = sec.get("firewall") or []
     fw_on = bool(fw) and all(f["on"] for f in fw)
     new_dev = [i for i in st["issues"] if i["key"].startswith("newdev:")]
-    down_mb = [round(x / 1048576, 2) for x in _hist(hist.get("net_down"))]
-    up_mb = [round(x / 1048576, 3) for x in _hist(hist.get("net_up"))]
+    h24 = hal.history("24h")
+    down24 = [round((x or 0) / 1024, 1) for x in (h24.get("net_down") or [])]
+    up24 = [round((x or 0) / 1024, 1) for x in (h24.get("net_up") or [])]
+    tr = hal.traffic_24h()
+    pings = _hist(hist.get("ping"))
     hourly = ph.get("hourly") or []
     clients = ph.get("top_clients") or []
     cmax = max([c[1] for c in clients] or [1]) or 1
+    peak_at = datetime.fromtimestamp(tr["peak_t"]).strftime("%I %p").lstrip("0") if tr.get("peak_t") else ""
     net = [[
         {"key": "INTERNET", "weight": 2, "badge": "DOWN" if any(i["key"] == "internet" for i in st["issues"]) else "ONLINE",
          "big": f"{n['ping_ms']:.0f} ms" if n.get("ping_ms") is not None else "—",
-         "bigsub": " · ".join(x for x in (f"↓ {sm.fmt_bytes(n['down'])}/s" if n.get("down") is not None else "",
-                                          f"↑ {sm.fmt_bytes(n['up'])}/s" if n.get("up") is not None else "") if x),
-         "graph": down_mb, "graph_color": "#34D399",
-         "chips": [["loss ", f"{n.get('loss') or 0:.0f}%", ""], ["router ", f"{n['gateway_ms']:.0f} ms" if n.get("gateway_ms") is not None else "—", ""],
-                   ["DNS ", "answering" if n.get("dns") is not False else "not answering", ""], ["Tailscale ", "on" if n.get("tailscale") else "off", ""],
-                   ["", "download", " · last hour"]]},
+         "bigsub": " · ".join(x for x in ("ping", f"last hour {min(pings):.0f}–{max(pings):.0f} ms" if pings else "",
+                                          f"{n.get('loss') or 0:.0f}% loss") if x),
+         "graph": pings, "graph_fit": True, "graph_color": "#34D399",
+         "chips": [["router ", str(n.get("gateway") or "—"), f" · {n['gateway_ms']:.0f} ms" if n.get("gateway_ms") is not None else ""],
+                   ["DNS ", "answering" if n.get("dns") is not False else "not answering", ""],
+                   ["Tailscale ", str(n["tailscale"]) if isinstance(n.get("tailscale"), str) else ("on" if n.get("tailscale") else "off"), ""]]},
         {"key": "SECURITY", "badge": "ALL ON" if dfd.get("rtp") and fw_on else "CHECK",
          "rows": [["Defender", "on" if dfd.get("rtp") else "off" if dfd else "—", "ok" if dfd.get("rtp") else "warning"],
                   ["Definitions", (f"{dfd['sig_age'] / 3600:.0f} h old" if dfd.get("sig_age") else "—"), "ok"],
@@ -2225,15 +2338,16 @@ def tv_grids(hal, st: dict, sc: dict, hist: dict) -> dict:
                   ["Windows updates", str(upd) if upd else "none", "ok"],
                   ["New devices", str(len(new_dev)) if new_dev else "none", "warning" if new_dev else "ok"]]},
     ], [
-        {"key": "PI-HOLE · TODAY", "badge": ("BLOCKING" if ph.get("blocking") is not False else "PAUSED") if ph.get("ok") else "NOT ANSWERING",
-         "big": f"{int(ph.get('blocked') or 0):,}" if ph.get("ok") else "—",
-         "bigsub": f"blocked · {ph.get('percent') or 0:.0f}% of {int(ph.get('queries') or 0):,}" if ph.get("ok") else "",
-         "hourly": [h[0] for h in hourly], "hourly_label": "queries per hour, last 24 h" if hourly else ""},
-        {"key": "BUSIEST DEVICES", "badge": f"{ph.get('clients') or len(clients)} ON THE NETWORK" if ph.get("ok") else "",
-         "rows": [[c[0][:24], f"{c[1]:,}", "ok", round(c[1] * 100 / cmax)] for c in clients[:5]] or [["Pi-hole isn't answering", "", "ok"]]},
-        {"key": "UPLOAD", "big": f"{sm.fmt_bytes(n['up'])}/s" if n.get("up") is not None else "—", "bigsub": "now",
-         "graph": up_mb, "graph_color": "#A78BFA",
-         "chips": [["router ", str(n.get("gateway") or "—"), ""]] + ([["Tailscale ", str(n.get("tailscale")), ""]] if isinstance(n.get("tailscale"), str) else [])},
+        {"key": "TRAFFIC · LAST 24 H", "weight": 1.6,
+         "big": f"↓ {sm.fmt_bytes(n['down'])}/s" if n.get("down") is not None else "—",
+         "bigsub": f"↑ {sm.fmt_bytes(n['up'])}/s now" if n.get("up") is not None else "",
+         "graph": down24, "graph_color": "#22D3EE", "graph2": up24, "graph2_color": "#A78BFA",
+         "legend": [["down", "#22D3EE"], ["up", "#A78BFA"]],
+         "chips": [["24 h ↓ ", sm.fmt_bytes(tr["down"]), ""], ["↑ ", sm.fmt_bytes(tr["up"]), ""]]
+                  + ([["peak ", f"{sm.fmt_bytes(tr['peak'])}/s", f" at {peak_at}"]] if tr.get("peak") else [])},
+        {"key": "BUSIEST DEVICES", "weight": 1.3, "badge": f"{ph.get('clients') or len(clients)} ON THE NETWORK" if ph.get("ok") else "",
+         "rows": [[_device_name(hal, n, c[0])[:30], f"{c[1]:,}", "ok", round(c[1] * 100 / cmax)] for c in clients[:5]]
+                 or [["Pi-hole isn't answering", "", "ok"]]},
     ]]
 
     km = st.get("kuma") or {}
@@ -2257,32 +2371,39 @@ def tv_grids(hal, st: dict, sc: dict, hist: dict) -> dict:
     ]] if kmons else [[{"key": "UPTIME KUMA", "rows": [["Status", sc["kuma"]["head"], "warning"]]}]]
 
     lists_age = f"{(time.time() - ph['gravity_t']) / 86400:.0f} days" if ph.get("gravity_t") else "—"
+    temp = hw.get("temp")
+    mem_gb = round((hw.get("mem_total") or 0) / 1e9)
+    top_b, top_a = ph.get("top_blocked") or [], ph.get("top_allowed") or []
+    bmax, amax = max([d[1] for d in top_b] or [1]) or 1, max([d[1] for d in top_a] or [1]) or 1
     pi = [[
-        {"key": "TEMPERATURE", "badge": "COOL" if (hw.get("temp") or 0) < 60 else "WARM" if (hw.get("temp") or 0) < 75 else "HOT",
-         "big": f"{hw['temp']:.1f}°C" if hw.get("temp") is not None else "—", "bigsub": "slows at 80°C",
-         "graph": list(hal.pi_temp_hist)[-60:], "graph_color": "#FBBF24",
-         "chips": [["low ", f"{min(hal.pi_temp_hist):.0f}°", ""], ["high ", f"{max(hal.pi_temp_hist):.0f}°", ""]] if hal.pi_temp_hist else []},
-        {"key": "PROCESSOR", "badge": (sc["pi"]["rows"][0][1].split(" · ")[0] + (f" · {hw['cores']} CORES" if hw.get("cores") else "")).upper(),
-         "big": f"{hw['cpu_pct']:.0f}%" if hw.get("cpu_pct") is not None else "—",
-         "bigsub": "load " + " · ".join(f"{x:.2f}" for x in hw.get("load") or []) if hw.get("load") else "",
-         "graph": list(hal.pi_cpu_hist)[-60:], "graph_color": "#FF6A4D"},
-        {"key": "MEMORY & SYSTEM", "badge": f"{round((hw.get('mem_total') or 0) / 1e9)} GB" if hw.get("mem_total") else "",
-         "big": f"{hw['mem_pct']:.0f}%" if hw.get("mem_pct") is not None else "—", "bigsub": "of memory used",
-         "rows": [["Memory", f"{hw['mem_pct']:.0f}%" if hw.get("mem_pct") is not None else "—", sc["pi"]["rows"][3][2], hw.get("mem_pct") or 0],
-                  ["Model", sc["pi"]["rows"][0][1], "ok"], ["Host name", hw.get("hostname") or "—", "ok"],
+        {"key": "HEALTH", "badge": "" if temp is None else "COOL" if temp < 60 else "WARM" if temp < 75 else "HOT",
+         "big": f"{temp:.1f}°C" if temp is not None else "—", "bigsub": "slows at 80°C" if temp is not None else "",
+         "rows": [["Processor", (f"{hw['cpu_pct']:.0f}%" + (f" · load {hw['load'][0]:.2f}" if hw.get("load") else "")) if hw.get("cpu_pct") is not None else "—",
+                   "ok", hw.get("cpu_pct") or 0],
+                  ["Memory", f"{hw['mem_pct']:.0f}%" + (f" of {mem_gb} GB" if mem_gb else "") if hw.get("mem_pct") is not None else "—",
+                   sc["pi"]["rows"][3][2], hw.get("mem_pct") or 0],
+                  ["Model", sc["pi"]["rows"][0][1].split(" · ")[0] + (f" · {hw['cores']} cores" if hw.get("cores") else ""), "ok"],
                   ["Up for", _dur(hw.get("uptime")) if hw.get("uptime") else "—", "ok"]]},
+        {"key": "DNS QUERIES · LAST 24 H", "weight": 2,
+         "badge": f"PI-HOLE v{str(hw.get('version') or '').lstrip('v')}" if hw.get("version") else "PI-HOLE",
+         "big": f"{int(ph.get('queries') or 0):,}" if ph.get("ok") else "—",
+         "bigsub": (f"asked · {int(ph.get('blocked') or 0):,} blocked ({ph.get('percent') or 0:.0f}%)"
+                    + (f" · {ph['clients']} devices" if ph.get("clients") else "")) if ph.get("ok") else "",
+         "hourly": [h[0] for h in hourly], "hourly2": [h[1] for h in hourly], "hourly_color": "#2A9D74", "hourly2_color": "#FF6A4D",
+         "hourly_labels": ["24 h ago", "18 h", "12 h", "6 h", "now"] if hourly else [],
+         "hourly_label": "green: allowed   red: blocked" if hourly else "",
+         "rows": [] if hourly else [["Pi-hole isn't answering", "", "ok"]]},
     ], [
-        {"key": "PI-HOLE", "badge": f"v{str(hw.get('version') or '').lstrip('v')}" if hw.get("version") else "",
+        {"key": "PI-HOLE", "badge": ("BLOCKING" if ph.get("blocking") is not False else "PAUSED") if ph.get("ok") else "NOT ANSWERING",
          "rows": [["Blocking", ("on" if ph.get("blocking") is not False else "paused") if ph.get("ok") else "—", "ok" if ph.get("blocking") is not False else "warning"],
                   ["Updates", "update ready" if hw.get("update") else "up to date", "info" if hw.get("update") else "ok"],
                   ["Block lists", f"{lists_age} old" if ph.get("gravity_t") else "—", "ok"],
                   ["Sites on the lists", f"{int(ph.get('domains') or 0):,}" if ph.get("domains") else "—", "ok"],
                   ["Devices", str(ph.get("clients") or "—"), "ok"]]},
-        {"key": "MOST BLOCKED", "badge": "TODAY", "weight": 1.3,
-         "rows": [[d[0][:30], f"{d[1]:,}", "ok"] for d in (ph.get("top_blocked") or [])[:5]] or [["Nothing yet", "", "ok"]]},
-        {"key": "BLOCKED TODAY", "big": f"{int(ph.get('blocked') or 0):,}" if ph.get("ok") else "—",
-         "bigsub": f"{ph.get('percent') or 0:.0f}% of queries" if ph.get("ok") else "",
-         "hourly": [h[1] for h in hourly], "hourly_label": "blocked per hour, last 24 h" if hourly else "", "hourly_color": "#FF6A4D"},
+        {"key": "MOST BLOCKED", "badge": "TODAY", "weight": 1.25,
+         "rows": [[d[0][:34], f"{d[1]:,}", "ok", round(d[1] * 100 / bmax)] for d in top_b[:5]] or [["Nothing yet", "", "ok"]]},
+        {"key": "MOST ASKED FOR", "badge": "ALLOWED", "weight": 1.25,
+         "rows": [[d[0][:34], f"{d[1]:,}", "ok", round(d[1] * 100 / amax)] for d in top_a[:5]] or [["Nothing yet", "", "ok"]]},
     ]]
     return {"The PC": pc, "Network": net, "Uptime Kuma": kuma, "Raspberry Pi": pi}
 
@@ -2390,7 +2511,7 @@ def tv_details(hal) -> dict:
         dl = {"title": "Downloads", "level": "warning", "head": "CAN'T READ IT", "cols": [{"key": "QUEUE", "rows": [["Couldn't read SABnzbd", ""]]}]}
     try:
         cols = dl.get("cols") or []
-        if len(cols) == 3 and cols[2].get("rows") is not None:
+        if "grid" not in dl and len(cols) == 3 and cols[2].get("rows") is not None:
             rows = cols[2]["rows"]
             cut = next((i for i, r in enumerate(rows) if r[0] == "Saved searches" and not r[1]), len(rows))
             dl["grid"] = [[{**cols[0], "weight": 2}, cols[1]],
@@ -3587,7 +3708,7 @@ class Hal(FunMixin):
                 "error": ph.get("error", ""), "need_password": ph.get("need_password", False), "missing": bool(ph.get("missing")),
                 "fails": ph.get("fails", 0),
                 "blocking": ph.get("blocking"), "timer": round(timer) if timer else None,
-                **{k: ph.get(k) for k in ("queries", "blocked", "percent", "clients", "domains", "gravity_t", "top_blocked", "top_clients", "t", "hw", "hourly")}}
+                **{k: ph.get(k) for k in ("queries", "blocked", "percent", "clients", "domains", "gravity_t", "top_blocked", "top_allowed", "top_clients", "t", "hw", "hourly")}}
 
     NEW_DEVICE_HOURS = 24
 
@@ -3830,6 +3951,16 @@ class Hal(FunMixin):
         return {"cpu": m.hist("cpu") if m else [], "mem": m.hist("mem") if m else [], "cpu_temp": m.hist("cpu_temp") if m else [],
                 "gpu": m.hist(f"gpu:{gpus[0]['key']}") if (m and gpus) else [], "ping": m.hist("ping") if m else [],
                 "net_down": m.hist("net_down") if m else []}
+
+    def traffic_24h(self) -> dict:
+        """Data moved in the last 24 hours (bytes down / up) and the busiest minute's speed and when it was."""
+        with self.lock:
+            down, up = list(self.minutes["net_down"]), list(self.minutes["net_up"])
+        tot = lambda vals: sum((v or 0) * 60 for v in vals)
+        best = max(range(len(down)), key=lambda i: down[i] or 0, default=None)
+        peak = (down[best] or 0) if best is not None else 0
+        return {"down": tot(down), "up": tot(up), "peak": peak,
+                "peak_t": time.time() - (len(down) - 1 - best) * 60 if best is not None and peak else None}
 
     @staticmethod
     def _mean(vals):
@@ -4344,7 +4475,9 @@ def make_demo_hal(ups_mode: str = "online") -> Hal:
               "blocking": True, "timer": None,
               "top_blocked": [["ads.example-tracker.com", 2104], ["telemetry.tv-maker.net", 1630], ["metrics.app-stats.io", 911],
                               ["pixel.adnetwork.com", 640], ["beacon.streaming-ads.tv", 402]],
-              "top_clients": [["living-room-tv", 22140], ["hal9000", 18032], ["iphone", 9311], ["kodi", 4210], ["ipad", 2004]],
+              "top_allowed": [["i.ytimg.com", 2904], ["www.googleapis.com", 2311], ["api.themoviedb.org", 1288], ["time.android.com", 960],
+                              ["netflix.com", 733]],
+              "top_clients": [["living-room-tv", 22140], ["hal9000", 18032], ["iphone", 9311], ["192.168.68.62", 4210], ["172.17.0.2", 2004]],
               "hw": {"t": now, "model": "Raspberry Pi 4 Model B Rev 1.5", "hostname": "pihole", "temp": 47.2, "hot_limit": 60, "temp_unit": "C",
                      "cpu_pct": 3.1, "cores": 4, "load": [0.08, 0.05, 0.01], "mem_pct": 21.4, "mem_total": 3_978_000_000,
                      "uptime": 12 * 86400 + 3 * 3600, "version": "v6.1.4", "update": False},
