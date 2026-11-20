@@ -186,7 +186,7 @@ idle = hs._dl_grid(hal, _dt.now(), [], "", [], {"diskspace1": "100", "diskspacet
 assert [c["key"] for r in idle for c in r] == ["LAST 7 DAYS", "RECENTLY FINISHED", "QUEUE", "YOUR LIBRARY", "ROOM LEFT"]
 assert idle[1][0]["big"] == "Idle" and idle[1][2]["badge"] == "Z: DRIVE" and idle[1][2]["rows"][1] == ["Room for about", "50 more downloads", "ok"]
 assert "Kodi isn't answering" in idle[1][1]["bigsub"] and not idle[1][2]["badge"].startswith("DOWN")
-assert hs.nice_release("Top.Gun.Maverick.2022.MULTI.DV.IMAX") == "Top Gun Maverick (2022)" and hs.nice_release("Blade.Runner.2049.2017.1080p") == "Blade Runner 2049 (2017)"
+assert hs.nice_release("Top.Gun.Maverick.2022.MULTI.DV.IMAX") == "Top Gun Maverick (2022)" and hs.nice_release("Top.Gun.Maverick.2022.MULTi.DV.IMAX") == "Top Gun Maverick (2022)" and hs.nice_release("Blade.Runner.2049.2017.1080p") == "Blade Runner 2049 (2017)"
 assert hs._when(_dt.now().timestamp(), _dt.now()).endswith(("AM", "PM"))
 # a few Uptime Kuma monitors: a card each (response-time graph, checks), summary first
 _mons = hal.kuma["monitors"]
