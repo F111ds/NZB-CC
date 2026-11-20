@@ -182,5 +182,18 @@ from datetime import datetime as _dt
 idle = hs._dl_grid(hal, _dt.now(), [], "", [], [], [], {"diskspace1": "100", "diskspacetotal1": "200"}, {}, {}, {"shows": 2})
 assert idle[0][0]["key"] == "LAST 7 DAYS" and idle[1][0]["big"] == "Idle" and any(r[0] == "Download drive" for r in idle[1][0]["rows"])
 assert hs._when(_dt.now().timestamp(), _dt.now()).endswith(("AM", "PM"))
+# a few Uptime Kuma monitors: a card each (response-time graph, checks), summary first
+_mons = hal.kuma["monitors"]
+hal.kuma = {**hal.kuma, "monitors": _mons[:5], "up": 4}
+for m_ in _mons[:5]:
+    for i_ in range(10):
+        hal.kuma_ms.setdefault(m_["name"], hs.deque(maxlen=120)).append(m_.get("ms"))
+        hal.kuma_hist.setdefault(m_["name"], hs.deque(maxlen=120)).append(m_["status"])
+hal.kuma_down_t["Front door camera"] = hs.time.time() - 300
+kg = hs.tv_details(hal)["pages"][2]["grid"]
+assert [len(r) for r in kg] == [3, 3] and kg[0][0]["key"] == "UPTIME KUMA" and kg[0][1]["badge"].startswith("DOWN") and "since" in kg[0][1]["bigsub"]
+assert kg[1][0]["graph_fit"] and len(kg[1][0]["checks"]) == 10 and kg[1][0]["big"].endswith("ms")
+hal.kuma = {**hal.kuma, "monitors": _mons}
+assert "monitors" in hs.tv_details(hal)["pages"][2]["grid"][0][1]          # many monitors: the list, as before
 print("tv on demand ok")
 print("\nALL FUN TESTS PASSED")
