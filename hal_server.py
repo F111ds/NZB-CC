@@ -2106,9 +2106,16 @@ def _tv_front_parse(out: str) -> tuple[str, str]:
 
 def _tv_front_refresh() -> None:
     try:
-        ok, out = tv_adb("dumpsys activity activities | grep -m1 -E 'mResumedActivity|ResumedActivity'", timeout=10)
+        # Two ways to ask, as TVs' Android versions word it differently: the resumed activity, else the focused window.
+        ok, out = tv_adb("dumpsys activity activities | grep -m1 -E 'mResumedActivity|ResumedActivity'; "
+                         "dumpsys window | grep -m1 -E 'mCurrentFocus|mFocusedApp'", timeout=15)
         pkg, act = _tv_front_parse(out) if ok else ("", "")
-        _tv_front.update({"pkg": pkg, "activity": act, "t": time.time()})
+        if pkg != _tv_front.get("pkg") or not pkg:
+            log.info("TV front app: %s", act or ("unknown: " + (out or "no answer").strip().splitlines()[-1][:200] if out or not ok else "unknown"))
+        _tv_front.update({"pkg": pkg, "activity": act, "t": time.time(), "error": "" if pkg else (out or "no answer").strip()[-300:]})
+    except Exception as exc:  # noqa: BLE001 - a background check; never let it die quietly
+        log.info("TV front app check failed: %s", exc)
+        _tv_front.update({"t": time.time(), "error": str(exc)[:300]})
     finally:
         _tv_front["busy"] = False
 
@@ -4027,6 +4034,9 @@ class HalRoutes:
                                    "push_from_phone_app": bool(url) and not hal.settings.get("ntfy_url"),
                                    "services": [{"id": s["id"], "name": s["name"]} for s in SERVICES],
                                    "restart_methods": {sid: hal.restart_method(sid) for sid in SERVICE_IDS} if q.get("methods") else {}})
+            elif path == "/api/tv/front":    # what's on the TV, and why not if it can't tell
+                self._h_json(200, {"front": tv_front(), "host": tv_host(), "error": _tv_front.get("error", ""),
+                                   "age": round(time.time() - _tv_front["t"]) if _tv_front["t"] else None})
             elif path == "/api/winevents":
                 if q.get("refresh"):
                     hal.refresh_winevents()
