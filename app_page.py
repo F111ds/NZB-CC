@@ -1029,7 +1029,7 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
 });
 
 function start(){$('app').classList.remove('hidden');$('tabs').classList.remove('hidden');$('side').classList.remove('hidden');refresh();loadUpcoming();
-  if(!start.t)start.t=setInterval(()=>{if(document.hidden||!token)return;refresh();if(tab==='get')loadQueue();if(tab==='watch'&&Date.now()-(loadKodi.t||0)>30000){loadKodi.t=Date.now();loadKodi()}},4000)}
+  if(!start.t)start.t=setInterval(()=>{if(document.hidden||!token||$('halframe'))return;refresh();if(tab==='get')loadQueue();if(tab==='watch'&&Date.now()-(loadKodi.t||0)>30000){loadKodi.t=Date.now();loadKodi()}},4000)}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&token)refresh()});
 (function pairFromLink(){const m=(location.hash||'').match(/^#k=([A-Za-z0-9_-]+)$/);if(m){token=m[1];LS.set('app_token',token);try{history.replaceState(null,'',location.pathname)}catch(e){}}})();
 if(token)start();else showPair();
