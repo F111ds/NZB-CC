@@ -85,7 +85,7 @@ It tries each way in turn and asks "did the TV show results?". The first one you
 `tv_search_methods.json`, and HAL uses it at once. Until then, "search Netflix for …" just opens Netflix.
 `-App netflix` tests only Netflix; `-Reset` forgets what was saved.
 
-What worked on our TV (Chromecast with Google TV), for reference:
+What worked on our TV, for reference:
 
 | App | Search | What you see |
 |---|---|---|
