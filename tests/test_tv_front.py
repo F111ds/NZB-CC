@@ -84,6 +84,10 @@ HDMI = """  mActiveSource: ActiveSource(logicalAddress: 0x04, physicalAddress: 0
 assert hs._tv_hdmi_parse(HDMI) == "PlayStation 5"
 assert hs._tv_hdmi_parse("  active source: (0x1, 0x3000)\n  HdmiDeviceInfo: CEC: device_type: 4 display_name: PlayStation 4 power_status: 1 physical_address: 0x1000") == "PlayStation 4"
 assert hs._tv_hdmi_parse("") == ""
+SW = "      HdmiDeviceInfo: CEC: logical_address: 0x04 device_type: 4 display_name: NintendoSwitch power_status: 0 physical_address: 0x3000"
+assert hs._tv_hdmi_parse("  mActiveSource: ActiveSource(logicalAddress: 0x04, physicalAddress: 0x3000)\n" + SW) == "Nintendo Switch"
+assert hs._tv_hdmi_parse(SW.replace("NintendoSwitch", "Switch") + "\n" + SW.replace("NintendoSwitch", "Sonos Arc").replace("device_type: 4", "device_type: 5")) == "Nintendo Switch"
+assert hs._cec_pretty("Xbox") == "Xbox" and hs._cec_pretty("PS4") == "PlayStation 4" and hs._cec_pretty("Apple TV") == "Apple TV"
 assert hs._tv_is_input("com.mediatek.wwtv.tvcenter", "com.mediatek.wwtv.tvcenter.nav.TurnkeyUiMainActivity")
 assert not hs._tv_is_input("com.google.android.youtube.tv", "com.google.android.apps.youtube.tv.activity.ShellActivity")
 INPUT_FRONT = "  ResumedActivity: ActivityRecord{1 u0 com.mediatek.wwtv.tvcenter/.nav.TurnkeyUiMainActivity t3}"
