@@ -7,6 +7,10 @@ from three screens: **HAL 9000** on your phone, **the TV**, and the original **d
 Find something, put it on the TV, turn it up, pause the ads, check the drives, restart a service, lock the PC: all
 from the couch, by tap or by voice ("Hey Siri, ask HAL, play Glass Meridian").
 
+And now it doesn't even have to download first. **Find a movie on the phone, tap ▶ Stream, and it plays on the TV
+straight from Usenet** in under a minute. Nothing is downloaded and no disk space is used. If you decide it's a
+keeper, one more tap downloads a copy the usual way.
+
 <p align="center">
   <img src="docs/hero/phone-home.png" alt="HAL 9000's main page on the phone" width="230">
 </p>
@@ -29,6 +33,18 @@ our own build of the open-source CleanYourTV launcher, then built on it:
 
 The phone controls it: the volume, turning it on, putting HAL on screen, and knowing what's playing.
 
+**Streaming straight from Usenet.** Every search result in the phone app now has a **▶ Stream** button next to
+**+ Add**. The phone server hands the NZB to **AltMount**, an open-source Usenet streaming server running on the
+same PC. AltMount checks with the Usenet provider that the release is all there and serves it as a stream, and
+Kodi on the TV plays it, turning the TV on first if it's off. It's all automatic, and you always know where a
+movie comes from:
+- a blue **☁ USENET** label means it's streaming from Usenet; a grey **🖥 ON YOUR PC** label means it's from your
+  own movie folders;
+- **Streamed lately** on the Watch tab plays a stream again with one tap;
+- a release that can't be streamed (compressed, or missing pieces) says why, and offers the next release or a
+  normal download instead;
+- HAL knows too: *"You're watching Glass Meridian, streaming from Usenet."*
+
 Nothing goes to a cloud service of its own: the phone talks to the PC over your Wi-Fi (or Tailscale when you're
 out), behind an access code.
 
@@ -49,6 +65,9 @@ pick the best release and send it to SABnzbd, then watch it download. It worked 
    and replaced it with our own build of the open-source CleanYourTV launcher. Then we kept going: Kodi's
    recently watched shelf, the peso rate, the weather, and finally HAL himself on the TV, with his voice in the
    living room.
+6. **Then we stopped waiting for downloads.** Usenet can be streamed: a player only needs the pieces of a release
+   it's about to show, fetched as it plays. We tried it with AltMount on the PC (a 1984 concert film played
+   first time, straight from the provider), then built it into the phone app: **▶ Stream**, then **Play on TV**.
 
 The desktop apps are still here, still work, and still share their settings with everything else. The
 phone app's **Settings › Connections** edits the same SABnzbd and indexer settings the NZB Command Center uses.
@@ -147,6 +166,8 @@ All of it was built here, a step at a time, with a lot of photos of the TV in th
 **Find and download**
 - Search every Usenet indexer at once. Each result shows quality, HDR, source, size, age and grabs, and HAL marks
   the ones you already have.
+- **Stream instead of downloading**: ▶ Stream on any result plays it on the TV straight from Usenet, through
+  AltMount. Labels show what's streaming (blue, Usenet) and what's on the PC (grey). Keep a copy with one more tap.
 - Add with one tap. Watch the queue: pause, resume or remove any download, or pause them all, and see the time
   left and when it'll be done.
 - See what Sonarr and Radarr will fetch next. Find missing episodes from the library and send them off.
@@ -334,6 +355,7 @@ python system_command_center.py
  phone (HAL app, /app)  ──Wi-Fi / Tailscale──▶  mobile_server.py on the PC (port 8765)
                                                   ├─ HAL 9000 (hal_server.py, /hal): watches the PC, alerts, history
                                                   ├─ SABnzbd · Sonarr · Radarr · Prowlarr · your indexers
+                                                  ├─ AltMount (port 8090): streams Usenet releases to Kodi, nothing downloaded
                                                   ├─ Kodi and Jellyfin
                                                   ├─ Pi-hole · Uptime Kuma · the UPS (NUT)
                                                   └─ the TV over ADB (tv-launcher/tools): HAL's screen, volume, what's on
@@ -351,6 +373,7 @@ python system_command_center.py
 | `system_command_center.py` | The System Command Center desktop app |
 | `tv-launcher/` | The Android TV launcher (with HAL's screen) and the scripts that install it |
 | `setup.ps1`, `update_all.ps1`, `backup_settings.ps1` | Set up once, update everything, back up your settings |
+| `try_altmount.ps1`, `setup_altmount_startup.ps1`, `play_altmount.ps1` | Install AltMount (Usenet streaming), start it with Windows, play a stream in VLC on the PC |
 | `tests/` | Tests for the servers, the apps and the desktop apps (`python tests/test_hal.py` etc.) |
 
 ## Getting started
@@ -362,6 +385,8 @@ python system_command_center.py
 3. In the app: **Settings › Connections** for SABnzbd, your indexers, Kodi, Pi-hole and Uptime Kuma (keys are
    stored encrypted for your Windows user and never sent to the phone). Or set them in the NZB Command Center.
 4. Optional: install the TV launcher with `tv-launcher/install-on-tv.ps1`.
+5. Optional: Usenet streaming. Install AltMount with `try_altmount.ps1` (guide: `docs/altmount-streaming-test.md`),
+   then follow `docs/usenet-streaming-setup.md` to switch on the Stream buttons and Play on TV.
 
 **Updating**: **Update everything** in the app (Settings), or `update_all.ps1`. It downloads the newest files from
 GitHub, checks them, restarts what's needed and updates the TV app, without stopping a movie that's playing.
