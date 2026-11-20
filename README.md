@@ -7,9 +7,12 @@ from three screens: **HAL 9000** on your phone, **the TV**, and the original **d
 Find something, put it on the TV, turn it up, pause the ads, check the drives, restart a service, lock the PC: all
 from the couch, by tap or by voice ("Hey Siri, ask HAL, play Glass Meridian").
 
-And now it doesn't even have to download first. **Find a movie on the phone, tap ▶ Stream, and it plays on the TV
-straight from Usenet** in under a minute. Nothing is downloaded and no disk space is used. If you decide it's a
-keeper, one more tap downloads a copy the usual way.
+**New: stream straight from Usenet, with no download at all.** Downloading is now optional. Every search result
+on the phone has two buttons: **+ Add** downloads it the usual way, into your library, and **▶ Stream** plays it on
+the TV straight from Usenet, usually within a minute. Nothing is downloaded and no disk space is used, which is pretty cool.
+Like what you're watching? One more tap downloads a copy to keep. And HAL always knows which is which: a blue
+**USENET** label for streams, a grey **ON YOUR PC** label for your own movies, and *"You're watching Deadpool,
+streaming from Usenet."*
 
 <p align="center">
   <img src="docs/hero/phone-home.png" alt="HAL 9000's main page on the phone" width="230">
