@@ -35,6 +35,29 @@ hs.tv_adb = lambda cmd, timeout=30: (True, "  topResumedActivity=ActivityRecord{
 hs._tv_front_refresh()
 assert hs.tv_front()["app"] == "Netflix"
 
+# what the app says it's playing (media sessions)
+ms = hs._tv_media_parse("""    package=com.google.android.youtube.tv
+      state=PlaybackState {state=3, position=12000, speed=1.0}
+      metadata: size=7, description=How It's Made: Pencils, Science Channel, null
+    package=com.netflix.ninja
+      state=PlaybackState {state=2, position=5}
+      metadata: size=4, description=Stranger Things, Chapter One, null
+    package=com.amazon.amazonvideo.livingroom
+      metadata: size=0, description=null""")
+assert ms["com.google.android.youtube.tv"] == {"title": "How It's Made: Pencils", "sub": "Science Channel", "state": 3}
+assert ms["com.netflix.ninja"]["title"] == "Stranger Things" and ms["com.netflix.ninja"]["state"] == 2
+assert ms["com.amazon.amazonvideo.livingroom"]["title"] == ""
+hs.tv_adb = lambda cmd, timeout=30: (True, "  ResumedActivity: ActivityRecord{1 u0 com.netflix.ninja/.MainActivity t3}\n===MEDIA===\n"
+                                     "    package=com.netflix.ninja\n      state=PlaybackState {state=2, position=5}\n"
+                                     "      metadata: size=4, description=Stranger Things, Chapter One, null")
+hs._tv_front_refresh()
+f = hs.tv_front()
+assert f["app"] == "Netflix" and f["title"] == "Stranger Things" and f["sub"] == "Chapter One" and f["paused"] is True
+hs.tv_adb = lambda cmd, timeout=30: (True, "  ResumedActivity: ActivityRecord{1 u0 com.netflix.ninja/.MainActivity t3}\n===MEDIA===\n"
+                                     "    package=com.netflix.ninja\n      metadata: size=1, description=Netflix, null, null")
+hs._tv_front_refresh()
+assert hs.tv_front()["title"] == ""                              # just the app's name: no title
+
 # Kodi has Short Circuit paused in the background
 movie = {"playerid": 1, "title": "Short Circuit", "paused": True}
 m._kodi_now_playing = lambda: dict(movie)
