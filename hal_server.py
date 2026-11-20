@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.11.2"
+VERSION = "1.12.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2149,14 +2149,71 @@ def _tv_front_parse(out: str) -> tuple[str, str]:
     return m.group(1), (m.group(1) + act if act.startswith(".") else act)
 
 
+# The TV's own "watch an HDMI input" screens (a games console, a cable box): the name then comes from HDMI-CEC.
+TV_INPUT_APPS = {"com.google.android.tv", "com.android.tv", "com.mediatek.wwtv.tvcenter", "com.droidlogic.tvinput",
+                 "com.sony.dtv.tvx", "com.tcl.tv", "com.tcl.tvinput", "org.droidtv.playtv", "com.hisense.tv", "com.xiaomi.mitv.tvplayer",
+                 "com.google.android.apps.tv.launcherx.inputs", "com.nvidia.tvinput", "com.realtek.tv"}
+
+
+def _tv_is_input(pkg: str, act: str) -> bool:
+    if pkg in TV_INPUT_APPS:
+        return True
+    return pkg not in TV_APPS and pkg != TV_PACKAGE and bool(re.search(r"tvinput|tvcenter|livetv|playtv|hdmi|inputsource|tvplayer|passthrough", pkg + " " + act, re.I))
+
+
+def _cec_pretty(name: str) -> str:
+    n = name.strip().strip('"')
+    m = re.fullmatch(r"PS\s?([2-5])", n, re.I)
+    return f"PlayStation {m.group(1)}" if m else n
+
+
+def _tv_hdmi_parse(out: str) -> str:
+    """The name of what's showing on the TV's HDMI input, from `dumpsys hdmi_control` (CEC): the device at the active
+    source's address, else a PlayStation, else the one games console/player that's on. "" if it can't tell."""
+    active, devices = "", []
+    for line in (out or "").splitlines():
+        s = line.strip()
+        if re.search(r"active\s*source", s, re.I) and not active:
+            addrs = re.findall(r"0x([0-9a-fA-F]{4})\b", s)
+            if addrs:
+                active = addrs[-1].lower()
+        m = re.search(r"(?:display_name|displayName|mDisplayName)\s*[:=]\s*(.*?)(?=\s+\w+\s*[:=]\s|,|$)", s)
+        if m and m.group(1).strip() not in ("", "null"):
+            pa = re.search(r"(?:physical_address|physicalAddress|mPhysicalAddress)\s*[:=]\s*0x([0-9a-fA-F]+)", s)
+            ty = re.search(r"(?:device_type|deviceType|mDeviceType)\s*[:=]\s*(\d+)", s)
+            pw = re.search(r"(?:power_status|powerStatus|mDevicePowerStatus)\s*[:=]\s*(-?\d+)", s)
+            devices.append({"name": m.group(1).strip(), "pa": pa.group(1).lower().zfill(4) if pa else "",
+                            "type": int(ty.group(1)) if ty else -1, "power": int(pw.group(1)) if pw else -1})
+    devices = [d for d in devices if d["type"] != 0]          # 0 is the TV itself
+    for d in devices:
+        if active and d["pa"] == active:
+            return _cec_pretty(d["name"])
+    for d in devices:
+        if re.search(r"playstation|\bps[2-5]\b", d["name"], re.I):
+            return _cec_pretty(d["name"])
+    on = [d for d in devices if d["power"] == 0 and d["type"] in (4, 1, 3, 5)]
+    return _cec_pretty(on[0]["name"]) if len(on) == 1 else ""
+
+
 def _tv_front_refresh() -> None:
     try:
         # Two ways to ask, as TVs' Android versions word it differently: the resumed activity, else the focused window.
         ok, out = tv_adb("f=$(dumpsys activity activities | grep -m1 -E 'mResumedActivity|ResumedActivity'); "
                          "if [ -n \"$f\" ]; then echo \"$f\"; else dumpsys window | grep -m1 -E 'mCurrentFocus|mFocusedApp'; fi", timeout=25)
         pkg, act = _tv_front_parse(out) if ok else ("", "")
-        media_out = ""
-        if pkg and pkg not in ("org.xbmc.kodi", TV_PACKAGE) and TV_APPS.get(pkg) != "Home":
+        media_out, inp = "", ""
+        if pkg and _tv_is_input(pkg, act):
+            try:   # an HDMI input: who's on it (the PlayStation says its name over HDMI-CEC)
+                hok, hout = tv_adb("dumpsys hdmi_control", timeout=20)
+                inp = _tv_hdmi_parse(hout) if hok else ""
+                if not inp and _tv_front.get("raw_logged") != "hdmi:" + pkg:
+                    _tv_front["raw_logged"] = "hdmi:" + pkg
+                    bits = [l.strip() for l in (hout or "").splitlines() if re.search(r"active|display|name|device|0x", l, re.I)][:30]
+                    log.info("TV front app: an HDMI input (%s), but no name found. HDMI-CEC said: %s", pkg, " | ".join(bits)[:1500] or "(nothing)")
+            except Exception as exc:  # noqa: BLE001
+                log.info("TV front app: HDMI input, no name (%s)", exc)
+            inp = inp or "HDMI"
+        elif pkg and pkg not in ("org.xbmc.kodi", TV_PACKAGE) and TV_APPS.get(pkg) != "Home":
             try:   # what it's playing: a bonus, so a problem here never loses the app's name
                 mok, mout = tv_adb("dumpsys media_session", timeout=20)
                 media_out = mout if mok else ""
@@ -2173,9 +2230,10 @@ def _tv_front_refresh() -> None:
                 bits = [l.strip() for l in media_out.splitlines() if pkg in l or "metadata" in l.lower() or "description" in l
                         or "PlaybackState" in l or "TITLE" in l][:25]
                 log.info("TV front app: no title found for %s. The TV's media sessions said: %s", pkg, " | ".join(bits)[:1500] or "(nothing)")
-            if pkg != _tv_front.get("pkg") or media.get("title") != (_tv_front.get("media") or {}).get("title"):
-                log.info("TV front app: %s%s", act, f" playing {media['title']!r} ({media.get('sub') or '-'}, state {media.get('state')})" if media.get("title") else "")
-            _tv_front.update({"pkg": pkg, "activity": act, "t": now, "ok_t": now, "error": "", "media": media})
+            if pkg != _tv_front.get("pkg") or media.get("title") != (_tv_front.get("media") or {}).get("title") or inp != _tv_front.get("input"):
+                log.info("TV front app: %s%s%s", act, f" playing {media['title']!r} ({media.get('sub') or '-'}, state {media.get('state')})" if media.get("title") else "",
+                         f" showing {inp}" if inp else "")
+            _tv_front.update({"pkg": pkg, "activity": act, "t": now, "ok_t": now, "error": "", "media": media, "input": inp})
         else:
             # A failed check keeps the last answer (a busy TV answers slowly now and then); it only goes after 3 minutes.
             why = (out or "no answer").strip()
@@ -2199,7 +2257,10 @@ def tv_front(max_age: float = 15) -> dict | None:
     pkg, act = _tv_front["pkg"], _tv_front["activity"]
     hal = act.endswith("HalActivity")
     home = (pkg == TV_PACKAGE and not hal) or TV_APPS.get(pkg) == "Home" or "Dream" in act
-    name = TV_APPS.get(pkg) or ("HAL" if hal else "Home" if home else pkg.rsplit(".", 1)[-1].replace("_", " ").title())
+    inp = _tv_front.get("input") or ""
+    if inp:
+        home = False
+    name = inp if inp else TV_APPS.get(pkg) or ("HAL" if hal else "Home" if home else pkg.rsplit(".", 1)[-1].replace("_", " ").title())
     media = _tv_front.get("media") or {}
     title = media.get("title", "") if media.get("title", "").strip().lower() not in ("", name.lower(), pkg.lower()) else ""
     return {"pkg": pkg, "app": name, "kodi": pkg == "org.xbmc.kodi", "home": home, "hal": hal,
