@@ -51,3 +51,4 @@ hal_settings.json
 hal_state.json
 hal_server.log*
 tv_search_methods.json
+tv-screenshots-*/
