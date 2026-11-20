@@ -56,7 +56,7 @@ h1{font-size:26px;margin:2px 0 10px}
 /* blocks */
 .card{background:var(--card);border-radius:14px;padding:13px 14px;margin-bottom:10px}
 .card h3{margin:0;font-size:14px;display:flex;justify-content:space-between;align-items:center;gap:8px}
-.k{font:700 10px var(--mono);letter-spacing:.14em;color:var(--muted)}
+.k{font:700 10.5px var(--mono);letter-spacing:.14em;color:#8b8b94}
 .sub{font:12px var(--mono);color:var(--soft);margin-top:4px}
 .tt{font-weight:600;font-size:14px;margin-top:8px}
 .bar{height:5px;border-radius:3px;background:#222227;margin-top:9px;overflow:hidden}.bar i{display:block;height:100%;border-radius:3px;background:var(--red2)}
@@ -78,7 +78,7 @@ div.alert{cursor:pointer}.alert .grow{flex:1;min-width:0}
 .row{display:flex;align-items:center;gap:12px;padding:11px 14px;border-top:1px solid var(--line);width:100%;background:none;border-left:0;border-right:0;border-bottom:0;text-align:left}
 .list>.row:first-child{border-top:0}
 .row .t{flex:1;min-width:0}.row .t b{display:block;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.row .t span{display:block;font:12px var(--mono);color:var(--soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .t span{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;font:12px var(--mono);color:var(--soft);overflow:hidden;overflow-wrap:anywhere}
 .row .m{font:600 12px var(--mono);color:var(--soft);text-align:right;flex:none}
 .empty{color:var(--muted);font-size:13px;padding:14px;text-align:center;font-style:italic}
 .pill{display:inline-flex;gap:5px;align-items:center;font:600 10.5px var(--mono);padding:3px 8px;border-radius:999px;background:#0f2a20;color:var(--green);white-space:nowrap;flex:none}
@@ -94,7 +94,7 @@ div.alert{cursor:pointer}.alert .grow{flex:1;min-width:0}
 .search input{flex:1;min-width:0;background:var(--card);border:1px solid #26262b;border-radius:12px;padding:12px 14px;font-size:16px}
 .seg{display:flex;background:var(--card);border-radius:12px;padding:4px;margin:0 0 12px}
 .seg button{flex:1;min-height:38px;border:0;border-radius:9px;background:transparent;color:var(--muted);font-weight:600;font-size:13px}.seg button.on{background:#26262b;color:var(--white)}
-.chiprow{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin:-2px 0 10px;scrollbar-width:none;align-items:center}
+.chiprow{display:flex;gap:6px;overflow-x:auto;padding:0 28px 4px 0;margin:-2px 0 10px;scrollbar-width:none;align-items:center;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}
 .chiprow span{font:700 10px var(--mono);letter-spacing:.14em;color:var(--muted);flex:none;margin-right:2px}
 .chiprow button{flex:none;border:0;border-radius:999px;padding:7px 12px;background:var(--card);color:var(--soft);font-weight:600;font-size:13px}
 .chiprow button.on{background:#3a0d0a;color:#ffd9d2}
@@ -173,8 +173,8 @@ body.noscroll{overflow:hidden}
 .tvchips{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 4px}.tvchips button{border:0;border-radius:999px;padding:9px 13px;background:var(--card);color:var(--text);font-size:14px;font-weight:600}
 .rings>div{display:flex;flex-direction:column;align-items:center;padding:10px 6px 8px}.rg svg{width:58px;height:58px}.rg text{font:600 15px var(--mono);fill:var(--white)}.rg tspan{font-size:9px;fill:var(--soft)}
 .rings .k{margin-top:4px}.rg .spark{width:100%;height:16px;margin-top:6px;display:block}
-.sparkwrap{margin-top:12px}.sparkwrap .spark{width:100%;height:30px;display:block}.sparkwrap span{display:block;text-align:right;font:10px var(--mono);color:var(--muted);margin-bottom:4px}
-.upd{font:500 10px var(--mono);font-style:normal;letter-spacing:.04em;color:var(--muted);margin-left:10px;text-transform:none}.upd.stale{color:var(--amber)}
+.sparkwrap{margin-top:12px}.sparkwrap .spark{width:100%;height:30px;display:block}.sparkwrap span{display:block;text-align:right;font:11px var(--mono);color:var(--soft);margin-bottom:4px}
+.upd{font:500 11px var(--mono);font-style:normal;letter-spacing:.04em;color:var(--muted);margin-left:10px;text-transform:none}.upd.stale{color:var(--amber)}
 #chead{position:fixed;top:0;left:0;right:0;z-index:6;display:flex;align-items:center;gap:10px;padding:calc(env(safe-area-inset-top) + 8px) 16px 8px;background:rgba(5,5,6,.92);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line);transform:translateY(-110%);transition:transform .25s}
 #chead.on{transform:none}#chead .eye.sm{width:28px;height:28px}#chead .eye.sm::before{inset:4px}#chead .brand{font-size:12px}
 @media (min-width:1000px){#chead{display:none}}
@@ -185,6 +185,27 @@ body.noscroll{overflow:hidden}
 .drow{display:flex;align-items:center;gap:10px;margin-top:10px}.drow b{font:700 13px var(--mono);width:26px}.dbar{flex:1;height:6px;border-radius:3px;background:#222227;overflow:hidden}.dbar i{display:block;height:100%;border-radius:3px}
 .dfree{font:12px var(--mono);color:var(--soft);min-width:96px;text-align:right}
 .linkish{background:none;border:0;padding:0;cursor:pointer}
+.tvvol{display:grid;grid-template-columns:auto 1fr 1.4fr 1fr;gap:8px;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.07)}
+.tvvol .k{margin-right:4px}.tvvol button{height:46px;border:0;border-radius:12px;background:rgba(255,255,255,.08);color:var(--white);font-size:22px;font-weight:600}
+.tvvol button[data-tvkey=mute]{font-size:14px}.tvvol button.hit{background:#3a0d0a;color:#ffb4a8}
+/* Bigger tap areas for the small text buttons, without making them look bigger */
+.linkish,.sec button,.hidline button,.snz,.ichips button,.tapx{position:relative}
+.linkish::after,.sec button::after,.hidline button::after,.tapx::after{content:"";position:absolute;inset:-15px -10px}
+.snz{padding:10px 11px}.snz::after{content:"";position:absolute;inset:-6px -4px}
+.ichips button{min-height:36px;padding:8px 13px}.ichips button::after{content:"";position:absolute;inset:-4px -2px}
+/* Search results: the full release name, then badges */
+.rname{font-size:13.5px!important;line-height:1.3;white-space:normal!important;overflow-wrap:anywhere}
+.row .t .badges{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;-webkit-line-clamp:unset}
+.badges i{font:600 11px var(--mono);font-style:normal;padding:2px 7px;border-radius:6px;background:#222227;color:var(--text)}
+.badges i.q{background:#0c1d33;color:var(--sky)}.badges i.q4{background:#2a1210;color:#ffb4a8}.badges i.n{background:#0f2a20;color:var(--green)}.badges i.h{background:#2e2408;color:var(--amber)}
+/* The queue card on Get */
+.qi{display:flex;align-items:center;gap:8px;padding:10px 0 2px;border-top:1px solid var(--line);margin-top:10px}
+.qi .t{flex:1;min-width:0}.qi b{display:block;font-weight:600;font-size:13.5px;line-height:1.3;overflow-wrap:anywhere}
+.qi span{display:block;font:12px var(--mono);color:var(--soft);margin-top:3px}.qi .btn{min-width:40px;min-height:36px}
+.qcur{display:flex;gap:8px;align-items:flex-start;margin-top:8px}.qcur .tt{flex:1;min-width:0;margin-top:0;line-height:1.3;overflow-wrap:anywhere}.qcur .btn{min-width:40px;min-height:36px}
+/* HAL's own pages, opened inside the app */
+#halframe{position:fixed;inset:0;z-index:12;background:var(--bg);padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+#halframe iframe{border:0;width:100%;height:100%;display:block;background:var(--bg)}
 .cbox{background:var(--card);border-radius:14px;padding:12px 14px;margin-bottom:10px}
 .cbox h3{margin:0 0 2px;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:8px}
 .crow{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
@@ -245,7 +266,7 @@ const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:v}catch(
 const LV={ok:0,info:1,warning:2,critical:3};
 // Same address as the NZB app and HAL: use whichever code this phone already saved.
 let token=LS.get('app_token','')||LS.get('nzb_mobile_token','')||LS.get('hal_token','');
-let tab='home',H=null,S=null,Q=null,UP=null,K=null,results=null,getSeg='queue',lastQuote='',busy=false;
+let tab='home',H=null,S=null,Q=null,UP=null,K=null,results=null,getSeg='upcoming',lastQuote='',busy=false;
 // Search: what to look for (Newznab categories: 2000 movies, 5000 TV) and how to sort; remembered on this device.
 let getCat=LS.get('app_cat',''),sortBy=LS.get('app_sort','best'),lastQuery='',searching=false;
 const CATS=[['','All'],['2000','Movies'],['5000','TV']];
@@ -335,11 +356,19 @@ function downloadsCard(){if(!H)return'';if(H.sab_ok===false)return'<div class="c
     '<div class="sub">'+f0(c.pct,'%')+' · '+esc(c.sizeleft||'')+' left'+(s!=null&&!H.paused?' · ready ~'+clock(Date.now()+s*1000):'')+'</div><div class="bar"><i style="width:'+(c.pct||0)+'%"></i></div></div>'}
 function tvCard(full){const k=H&&H.kodi;const p=k&&k.playing;
   if(!p){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span></h3><div class="tt">Nothing\'s playing, '+esc(NAME())+'.</div><div class="sub">'+(k&&k.configured===false?'Kodi isn\'t set up yet.':k&&k.online===false?'Kodi isn\'t answering (the TV may be off).':'Kodi is ready when you are.')+'</div>'+
-    (H&&H.tv_ready?'<button class="btn r wide" style="margin-top:12px" data-tvon>Turn the TV on and open Kodi</button>':'')+'</div>'}
+    (H&&H.tv_ready?'<button class="btn r wide" style="margin-top:12px" data-tvon>Turn the TV on and open Kodi</button>':'')+tvVol()+'</div>'}
   return'<div class="card tvcard"><h3><span class="k">NOW ON THE TV</span>'+(full?'':'<button class="btn" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'▶ Play':'❚❚ Pause')+'</button>')+'</h3>'+
     '<div class="tt" style="font-size:'+(full?17:14)+'px">'+esc(p.title)+'</div><div class="sub">'+esc((p.sub?p.sub+' · ':'')+mmss(p.time)+' / '+mmss(p.total))+'</div><div class="bar"><i style="width:'+(p.pct||0)+'%;background:#ffb4a8"></i></div>'+
     (full?'<div class="remote"><button data-kc="seek_back" data-pid="'+p.playerid+'">⏪</button><button class="on" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'▶':'❚❚')+'</button><button data-kc="seek_fwd" data-pid="'+p.playerid+'">⏩</button><button data-kc="stop" data-pid="'+p.playerid+'">■</button><button data-kc="next" data-pid="'+p.playerid+'">⏭</button></div>'+
-      '<div class="remote" style="grid-template-columns:repeat(3,1fr)"><button data-kc="vol_down" data-pid="'+p.playerid+'">🔉</button><button data-kc="mute" data-pid="'+p.playerid+'">🔇</button><button data-kc="vol_up" data-pid="'+p.playerid+'">🔊</button></div>':'')+'</div>'}
+      tvVol():'')+'</div>'}
+// The TV's own volume (any app, not just Kodi). Quick taps add up and go as one.
+function tvVol(){return'<div class="tvvol"><span class="k">VOLUME</span><button data-tvkey="vol_down" aria-label="Quieter">−</button><button data-tvkey="mute" aria-label="Mute">🔇 Mute</button><button data-tvkey="vol_up" aria-label="Louder">+</button></div>'}
+let tvKeyQ={key:'',n:0,t:0};
+function tvKey(key,btn){if(btn){btn.classList.add('hit');setTimeout(()=>btn.classList.remove('hit'),180)}
+  if(key==='mute'){sendTvKey('mute',1);return}
+  if(tvKeyQ.key&&tvKeyQ.key!==key){clearTimeout(tvKeyQ.t);sendTvKey(tvKeyQ.key,tvKeyQ.n);tvKeyQ.n=0}
+  tvKeyQ.key=key;tvKeyQ.n++;clearTimeout(tvKeyQ.t);tvKeyQ.t=setTimeout(()=>{const k=tvKeyQ.key,n=tvKeyQ.n;tvKeyQ={key:'',n:0,t:0};sendTvKey(k,n)},450)}
+async function sendTvKey(key,n){try{const r=await api('/hal/api/tv/key',{key,steps:n});if(!r.ok)toast(r.message,true)}catch(e){toast(e.message,true)}}
 function arrivedList(n){const a=(H&&H.arrived)||[];if(!a.length)return'';
   return'<div class="sec"><span>JUST ARRIVED</span></div><div class="list">'+a.slice(0,n).map(x=>'<div class="row"><span class="s'+(x.watched?' off':'')+'"></span><span class="t"><b>'+esc(x.title+(x.year?' ('+x.year+')':''))+'</b><span>'+esc([x.quality,ago(x.added),x.watched?'watched':x.in_kodi?'in the library':''].filter(Boolean).join(' · '))+'</span></span><button class="btn r" data-play="'+esc(x.id)+'">▶ '+(DESK?'Play on TV':'TV')+'</button></div>').join('')+'</div>'}
 function upcomingList(n,title){const u=(UP||(H&&H.upcoming)||[]).filter(x=>!x.has_file).slice(0,n);if(!u.length)return'';
@@ -438,30 +467,37 @@ function shownResults(){let r=(results||[]).slice();
   const by={'size_desc':(a,b)=>(b.size_bytes||0)-(a.size_bytes||0),'size_asc':(a,b)=>(a.size_bytes||0)-(b.size_bytes||0),
     'new':(a,b)=>(b.pub_ts||0)-(a.pub_ts||0),'grabs':(a,b)=>(b.grabs||0)-(a.grabs||0)}[sortBy];
   return by?r.sort(by):r}
-// The queue at a glance, at the top of Get: what's downloading now, or that nothing is.
+// The queue, at the top of Get: what's downloading now, with the rest underneath.
+const brk=s=>esc(s).replace(/([._])/g,'$1<wbr>');
+function qBtns(s){const p=String(s.status).toLowerCase()==='paused';return'<button class="btn" data-qi="'+(p?'resume':'pause')+'" data-id="'+esc(s.id)+'" aria-label="'+(p?'Resume':'Pause')+'">'+(p?'▶':'❚❚')+'</button><button class="btn" data-qi="delete" data-id="'+esc(s.id)+'" data-name="'+esc(s.name)+'" aria-label="Remove">✕</button>'}
 function queueTop(){if(H&&H.sab_ok===false)return'<div class="card"><h3><span class="k">QUEUE</span><span class="mono" style="color:var(--amber)">● NOT ANSWERING</span></h3><div class="tt" style="margin-top:8px">SABnzbd isn\'t answering, '+esc(NAME())+'.</div></div>';
-  if(!Q)return'';const slots=Q.slots||[],paused=Q.state==='Paused',cur=slots.find(s=>String(s.status).toLowerCase()==='downloading')||slots[0];
+  if(!Q)return'<div class="card"><h3><span class="k">QUEUE</span></h3><div class="sub" style="margin-top:8px">I\'m checking SABnzbd…</div></div>';
+  const slots=Q.slots||[],paused=Q.state==='Paused',cur=slots.find(s=>String(s.status).toLowerCase()==='downloading')||slots[0];
   const done=H&&H.done_today!=null?H.done_today:null,z=Q.disk_free_gb!=null?Q.disk_free_gb:H&&H.disk_free_gb,free=z!=null&&z>=0?(z>=1024?(z/1024).toFixed(1)+' TB':Math.round(z)+' GB')+' free':'';
   if(!slots.length)return'<div class="card"><h3><span class="k">QUEUE</span><span class="mono" style="color:var(--green)">● READY</span></h3><div class="tt" style="margin-top:8px">Nothing downloading, '+esc(NAME())+'.</div>'+
     '<div class="sub" style="margin-top:6px;font:12px var(--mono);color:var(--soft)">'+esc([done?done+' finished today':'',free].filter(Boolean).join(' · '))+'</div></div>';
-  const s=secsOf(cur.eta),at=s!=null&&s>0&&s<86400*3?'done '+clock(Date.now()+s*1000):'',next=slots.filter(x=>x!==cur).slice(0,2).map(x=>x.name);
-  return'<div class="card"><h3><span class="k">'+(paused?'PAUSED':'DOWNLOADING')+' · '+slots.length+' IN QUEUE</span><button class="btn" data-q="'+(paused?'resume':'pause')+'">'+(paused?'▶ Resume':'❚❚ Pause')+'</button></h3>'+
-    '<div class="tt" style="margin-top:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(cur.name)+'</div><div class="bar"><i style="width:'+(cur.percentage||0)+'%"></i></div>'+
+  const s=secsOf(cur.eta),at=s!=null&&s>0&&s<86400*3?'done '+clock(Date.now()+s*1000):'',left=s!=null&&s>0?(s>=3600?Math.floor(s/3600)+' h '+Math.round(s%3600/60)+' min':Math.max(1,Math.round(s/60))+' min')+' left':'';
+  const rest=slots.filter(x=>x!==cur);
+  return'<div class="card"><h3><span class="k">'+(paused?'PAUSED':'DOWNLOADING')+' · '+slots.length+' IN QUEUE</span><button class="btn" data-q="'+(paused?'resume':'pause')+'">'+(paused?'▶ Resume all':'❚❚ Pause all')+'</button></h3>'+
+    '<div class="qcur"><div class="tt">'+brk(cur.name)+'</div>'+qBtns(cur)+'</div><div class="bar"><i style="width:'+(cur.percentage||0)+'%"></i></div>'+
     '<div class="sub" style="display:flex;justify-content:space-between;gap:10px;margin-top:8px;font:12px var(--mono);color:var(--soft)"><span>'+esc([f0(cur.percentage,'%'),paused?'':Q.speed].filter(Boolean).join(' · '))+'</span><span>'+esc(paused?'paused':at)+'</span></div>'+
-    (next.length?'<div class="sub" style="margin-top:8px;font:12px var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Next: '+esc(next.join(' · '))+'</div>':'')+'</div>'}
+    '<div class="sub" style="margin-top:4px;font:12px var(--mono);color:var(--muted)">'+esc([cur.sizeleft?cur.sizeleft+' to go':'',paused?'':left,cur.cat].filter(Boolean).join(' · '))+'</div>'+
+    rest.map(x=>'<div class="qi"><div class="t"><b>'+brk(x.name)+'</b><span>'+esc([f0(x.percentage,'%'),x.status,x.sizeleft?x.sizeleft+' to go':'',x.cat].filter(Boolean).join(' · '))+'</span></div>'+qBtns(x)+'</div>').join('')+'</div>'}
+// Quality, size, age and grabs as badges: what you choose a release by.
+function resBadges(r){const q=r.res||'',src=(String(r.title).match(/\b(REMUX|BluRay|Blu-Ray|WEB-?DL|WEBRip|WEB|HDTV)\b/i)||[])[1]||'',hdr=/\b(HDR10\+?|HDR|DV|DoVi|Dolby\.?Vision)\b/i.test(r.title);
+  const b=[];if(q)b.push('<i class="q'+(/2160|4k/i.test(q)?' q4':'')+'">'+esc(q)+'</i>');if(hdr)b.push('<i class="q q4">HDR</i>');if(src)b.push('<i>'+esc(src.toUpperCase().replace('BLU-RAY','BLURAY'))+'</i>');
+  if(r.size)b.push('<i>'+esc(r.size)+'</i>');if(r.pub_ts)b.push('<i>'+esc(ago(r.pub_ts))+'</i>');if(r.grabs)b.push('<i class="n">'+esc(r.grabs+' grabs')+'</i>');if(r.in_library)b.push('<i class="h">you have it</i>');
+  return b.length?'<span class="badges">'+b.join('')+'</span>':''}
 function rGet(){let x='<div class="narrow">'+topbar('Get')+queueTop()+'<form class="search" id="sform"><input id="sq" placeholder="'+(getCat==='2000'?'Which movie would you like, ':getCat==='5000'?'Which show would you like, ':'What would you like, ')+esc(NAME())+'?" enterkeyhint="search" autocomplete="off"><button class="btn r">Search</button></form>';
   x+='<div class="chiprow">'+CATS.map(c=>'<button data-cat="'+c[0]+'" class="'+(getCat===c[0]?'on':'')+'">'+c[1]+'</button>').join('')+'</div>';
   if(searching)x+='<div class="list"><div class="empty">I\'m searching your indexers, '+esc(NAME())+'…</div></div>';
   if(results&&!searching){const list=shownResults(),sz=sortBy==='size_desc'?'Size ↓':sortBy==='size_asc'?'Size ↑':'Size';
     x+='<div class="chiprow"><span>SORT</span>'+SORTS.map(o=>{const on=o[0]==='size'?sortBy.startsWith('size'):sortBy===o[0];return'<button data-sort="'+o[0]+'" class="'+(on?'on':'')+'">'+(o[0]==='size'?sz:o[1])+'</button>'}).join('')+'</div>';
     results.shown=list;
-    x+='<div class="sec"><span>'+list.length+' RESULT'+(list.length===1?'':'S')+(getCat?' · '+(getCat==='2000'?'MOVIES':'TV'):'')+'</span><button data-clear>CLEAR</button></div><div class="list">'+(list.length?list.slice(0,80).map(r=>'<div class="row"><span class="t"><b>'+esc(r.title)+'</b><span>'+esc([r.size,r.res,r.indexer,r.grabs?r.grabs+' grabs':'',r.pub_ts?ago(r.pub_ts):''].filter(Boolean).join(' · '))+'</span></span>'+(r.in_library?'<span class="pill o">HAVE IT</span>':'')+(r.added?'<span class="pill">ADDED</span>':'<button class="btn g" data-add="'+esc(r.id)+'">+ Add</button>')+'</div>').join(''):'<div class="empty">Nothing found, '+esc(NAME())+'. Try fewer words.</div>')+'</div>'}
+    x+='<div class="sec"><span>'+list.length+' RESULT'+(list.length===1?'':'S')+(getCat?' · '+(getCat==='2000'?'MOVIES':'TV'):'')+'</span><button data-clear>CLEAR</button></div><div class="list">'+(list.length?list.slice(0,80).map(r=>'<div class="row"><span class="t"><b class="rname">'+brk(r.title)+'</b>'+resBadges(r)+(r.indexer?'<span>'+esc(r.indexer)+'</span>':'')+'</span>'+(r.added?'<span class="pill">ADDED</span>':'<button class="btn g" data-add="'+esc(r.id)+'">+ Add</button>')+'</div>').join(''):'<div class="empty">Nothing found, '+esc(NAME())+'. Try fewer words.</div>')+'</div>'}
   if(results&&!searching&&lastQuery)x+='<button class="btn wide" data-savesearch style="margin:-2px 0 12px">☆ Save this search: tell me when something new turns up</button>';
-  x+='<div class="seg">'+[['queue','Queue'],['upcoming','Coming up'],['history','History'],['saved','Saved']].map(s=>'<button data-seg="'+s[0]+'" class="'+(getSeg===s[0]?'on':'')+'">'+s[1]+'</button>').join('')+'</div>';
-  if(getSeg==='queue'){if(!Q)x+='<div class="list"><div class="empty">I\'m checking SABnzbd…</div></div>';
-    else{x+='<div class="sec"><span>'+esc(Q.state.toUpperCase())+(Q.speed?' · '+esc(Q.speed):'')+'</span><button data-q="'+(Q.state==='Paused'?'resume':'pause')+'">'+(Q.state==='Paused'?'RESUME ALL':'PAUSE ALL')+'</button></div><div class="list">'+
-      (Q.slots.length?Q.slots.map(s=>{const p=String(s.status).toLowerCase()==='paused';return'<div class="row"><span class="t"><b>'+esc(s.name)+'</b><span>'+esc([f0(s.percentage,'%'),s.status,s.sizeleft?s.sizeleft+' left':'',s.eta&&s.eta!=='0:00:00'?s.eta:'',s.cat].filter(Boolean).join(' · '))+'</span></span><button class="btn" data-qi="'+(p?'resume':'pause')+'" data-id="'+esc(s.id)+'">'+(p?'▶':'❚❚')+'</button><button class="btn" data-qi="delete" data-id="'+esc(s.id)+'" data-name="'+esc(s.name)+'">✕</button></div>'}).join(''):'<div class="empty">The queue is empty, '+esc(NAME())+'.</div>')+'</div>'}}
-  else if(getSeg==='history')x+=historyList();
+  x+='<div class="seg">'+[['upcoming','Coming up'],['history','History'],['saved','Saved']].map(s=>'<button data-seg="'+s[0]+'" class="'+(getSeg===s[0]?'on':'')+'">'+s[1]+'</button>').join('')+'</div>';
+  if(getSeg==='history')x+=historyList();
   else if(getSeg==='saved')x+=savedList();
   else x+=UP?(upcomingList(40,'NEXT 14 DAYS')||'<div class="list"><div class="empty">Nothing coming up in the next two weeks.</div></div>'):'<div class="list"><div class="empty">I\'m asking Sonarr and Radarr…</div></div>';
   return x+totals()+'</div>'}
@@ -773,9 +809,14 @@ function rWatch(){if(libView)return rLibrary();let x='<div class="narrow">'+topb
      '<button class="row" data-lib="missing"><span class="t"><b>Missing episodes</b><span>Gaps in your seasons, with Find</span></span><span class="m">›</span></button>'+
      '<a class="row" href="/kodi" style="color:inherit;text-decoration:none"><span class="t"><b>Classic Kodi page</b><span>Full remote, type on TV, Jellyfin details</span></span><span class="m">›</span></a></div>';
   return x+'</div>'}
+// System's top: one line for what needs you (the details are on Home) and one for the readings.
+function sysSummary(){if(!S)return'';const is=issues(),n=is.length,v=S.vitals,g=(v.gpus||[])[0],lv=is.some(i=>i.level==='critical')?'critical':n?'warning':'';
+  const rd=['CPU '+f0(v.cpu.pct,'%'),'RAM '+f0(v.mem.pct,'%'),g&&g.util!=null?'GPU '+f0(g.util,'%'):'',v.cpu.temp!=null?Math.round(v.cpu.temp)+'°C':''].filter(Boolean).join(' · ');
+  return'<div class="list"><button class="row" data-tab="home"><span class="s '+lv+'"></span><span class="t"><b>'+(n?n+(n>1?' things need':' thing needs')+' you':'Nothing needs you')+'</b><span>'+esc(n?is[0].title+(n>1?' · and '+(n-1)+' more':''):'All quiet, '+NAME()+'.')+'</span></span><span class="m">Home ›</span></button>'+
+    '<button class="row" data-hal="vitals"><span class="t"><b>'+esc(rd)+'</b><span>Live graphs: the last hour, day and week</span></span><span class="m">›</span></button></div>'}
 function rSystem(){let x='<div class="narrow">'+topbar('');
   x+='<div class="hero" style="margin-top:0"><div class="eye '+(S?S.hal.level:'')+'" style="width:64px;height:64px"></div><div><div class="g">SYSTEMS</div><div class="q">“'+esc(S?S.hal.quote:'I\'m thinking…')+'”</div></div></div>';
-  x+=vitals()+attention(4)+systemsList();
+  x+=sysSummary()+systemsList();
   x+=recordCard();
   x+='<div class="sec"><span>FOR FUN</span></div><div class="list"><button class="row" data-chess><span class="t"><b>Play chess with HAL</b><span>You\'re white. He\'s quite good.</span></span><span class="m">›</span></button>'+
      '<button class="row" data-wall><span class="t"><b>Wall display</b><span>HAL\'s eye and live readings, full screen, for a spare tablet</span></span><span class="m">›</span></button>'+
@@ -795,6 +836,11 @@ function render(){if(!$('app')||$('app').classList.contains('hidden'))return;if(
     if(fid&&$(fid)){$(fid).focus();try{$(fid).setSelectionRange(pos,pos)}catch(e){}}}
   $('updbar').classList.toggle('hidden',!updating());drawWall();
   if($('seye'))$('seye').className='eye sm '+(S?S.hal.level:'');$('sidefoot').textContent=S?S.host+' · up '+Math.floor((S.uptime||0)/86400)+' d':'';}
+// HAL's own pages (Vitals, Services, Drives, Shield, Log) open over the app, so Back returns to where you were.
+function openHal(u){closeHal(true);document.body.insertAdjacentHTML('beforeend','<div id="halframe"><iframe title="HAL 9000" src="'+esc(u+(u.includes('?')?'&':'?')+'from=app&embed=1')+'"></iframe></div>');document.body.classList.add('noscroll');history.pushState({hal:1},'')}
+function closeHal(quiet){const f=$('halframe');if(!f)return false;f.remove();document.body.classList.remove('noscroll');if(!quiet)refresh();return true}
+window.addEventListener('message',e=>{if(e.origin===location.origin&&e.data&&e.data.hal==='close'){if(history.state&&history.state.hal)history.back();else closeHal()}});
+window.addEventListener('popstate',()=>{closeHal()});
 function show(t){tab=t;['home','get','watch','system'].forEach(k=>$('t-'+k).classList.toggle('hidden',k!==t));document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));
   window.scrollTo(0,0);if(t==='get'){loadQueue();loadUpcoming();if(getSeg==='history')loadHistory();if(getSeg==='saved')loadSaved()}if(t==='watch')loadKodi();render()}
 
@@ -896,7 +942,7 @@ document.addEventListener('click',e=>{const b=e.target.closest('[data-ctest],[da
 function openSettings(){const sw=(id,t,sub,on)=>'<label class="sw"><span>'+t+(sub?'<small>'+sub+'</small>':'')+'</span><input type="checkbox" id="'+id+'"'+(on?' checked':'')+'></label>';
   $('panel').innerHTML='<h2 style="margin:0 0 4px">Settings</h2><p class="hint" style="text-align:left;margin:0 0 10px">“I can give you my complete assurance that everything is connected, '+esc(NAME())+'.”</p>'+
    (CAN_SPEAK?sw('stalk','Talk to me','HAL speaks on this phone after your first tap',talkative()):'')+
-   '<div class="list" style="margin-top:12px"><a class="row" href="/hal/?tab=log&settings=1&from=app" style="color:inherit;text-decoration:none"><span class="t"><b>HAL: name, alerts, UPS, voice</b><span>HAL\'s own settings</span></span><span class="m">›</span></a>'+
+   '<div class="list" style="margin-top:12px"><button class="row" data-halurl="/hal/?tab=log&settings=1"><span class="t"><b>HAL: name, alerts, UPS, voice</b><span>HAL\'s own settings</span></span><span class="m">›</span></button>'+
    '<button class="row" data-update><span class="t"><b>Update everything</b><span>Newest version of the apps, from GitHub'+(S&&S.update&&S.update.result?' · last: '+esc(S.update.result.state==='updated'?'v'+S.update.result.version:S.update.result.state==='uptodate'?'up to date':'failed')+' '+esc(ago(S.update.result.t)):'')+'</span></span><span class="m">›</span></button>'+
    '<a class="row" href="/" style="color:inherit;text-decoration:none"><span class="t"><b>Classic NZB app</b><span>Indexers, saved searches, phone alerts, drives</span></span><span class="m">›</span></a>'+
    '<button class="row" data-conn><span class="t"><b>Connections</b><span>SABnzbd, indexers, Kodi, Pi-hole, Uptime Kuma</span></span><span class="m">›</span></button></div>'+
@@ -919,8 +965,9 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if('update' in d){$('sheet').classList.add('hidden');startUpdate();return}
   if(d.tab){show(d.tab);return}
   if('settings' in d){openSettings();return}
-  if('alerts' in d){location.href='/hal/?tab=log&from=app';return}
-  if(d.hal){location.href='/hal/?tab='+encodeURIComponent(d.hal)+'&from=app';return}
+  if('alerts' in d){openHal('/hal/?tab=log');return}
+  if(d.hal){openHal('/hal/?tab='+encodeURIComponent(d.hal));return}
+  if(d.halurl){$('sheet').classList.add('hidden');openHal(d.halurl);return}
   if('talk' in d){LS.set('hal_talk',talkative()?'off':'on');if(!talkative()&&CAN_SPEAK)speechSynthesis.cancel();else{unlocked=true;talk($('heye'),$('hquote'),'Thank you, '+NAME()+'. I\'ll talk to you from now on.',true)}render();return}
   if(c.id==='heye'){if(voiceOn){speechSynthesis.cancel();voiceOn=false;return}unlocked=true;talk(c,$('hquote'),greeting()+' '+lastQuote,CAN_SPEAK);return}
   if(d.q){act(()=>api('/api/queue/'+d.q,{}),d.q==='pause'?'Downloads paused.':'Downloads resumed.');return}
@@ -944,6 +991,7 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if('pihole' in d){openPihole();return}
   if('kuma' in d){openKuma();return}
   if('tvshow' in d){tvSend('',c);return}
+  if(d.tvkey){tvKey(d.tvkey,c);return}
   if('tvtalk' in d){openTalk();return}
   if(d.tvsay){if(c.dataset.held){delete c.dataset.held;return}tvSend(d.tvsay,c);return}
   if('tvsend' in d){const m=($('tvmsg')&&$('tvmsg').value.trim())||'';if(!m){toast('Type something for HAL to say first.',true);return}tvSend(m,c);return}

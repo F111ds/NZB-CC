@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2086,6 +2086,25 @@ def tv_adb(command: str, timeout: float = 30) -> tuple[bool, str]:
     return r.returncode == 0, out[-400:]
 
 
+TV_KEYS = {"vol_up": 24, "vol_down": 25, "mute": 164}
+
+
+def tv_key(hal, key: str, steps: int = 1) -> dict:
+    """The TV's own volume: up, down (a few steps at once when tapped quickly) or mute. Works whatever app is on."""
+    name = hal.settings["name"]
+    if key not in TV_KEYS:
+        raise ValueError("Volume up, down or mute.")
+    steps = 1 if key == "mute" else max(1, min(10, int(steps or 1)))
+    if hal.monitor.__class__.__name__ == "DemoMonitor":
+        return {"ok": True, "message": "Demo mode: nothing was sent to the TV."}
+    ok, out = tv_adb("input keyevent " + " ".join([str(TV_KEYS[key])] * steps), timeout=15)
+    if not ok:
+        why = out.splitlines()[-1] if out else "no answer"
+        log.info("TV key failed: %s", out[-200:])
+        return {"ok": False, "message": f"I couldn't reach the TV, {name}: {why}"}
+    return {"ok": True, "message": {"vol_up": "Louder.", "vol_down": "Quieter.", "mute": "Mute on or off."}[key]}
+
+
 def tv_show(hal, say: str = "") -> dict:
     """Opens HAL's screen on the TV (over whatever is on), optionally saying a message."""
     name = hal.settings["name"]
@@ -3782,9 +3801,9 @@ HAL: Hal | None = None
 _token_bytes = b""
 
 SECURITY_HEADERS = {
-    "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "SAMEORIGIN", "Referrer-Policy": "no-referrer",
     "Content-Security-Policy": ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; "
-                                "manifest-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"),
+                                "manifest-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"),
 }
 def manifest(base: str = "") -> bytes:
     """The home-screen app description. Under the NZB phone server HAL lives at /hal, so its id, start page
@@ -4053,6 +4072,8 @@ class HalRoutes:
                 self._h_json(200, kuma_settings(hal, body))
             elif path == "/api/tv/show":
                 self._h_json(200, tv_show(hal, str(body.get("say") or "")))
+            elif path == "/api/tv/key":
+                self._h_json(200, tv_key(hal, str(body.get("key") or ""), body.get("steps") or 1))
             elif path == "/api/tv/phrases":
                 text = re.sub(r"\s+", " ", str(body.get("text") or "")).strip()[:120]
                 with hal.lock:
@@ -4189,7 +4210,10 @@ details.ev summary .t{flex:1;min-width:0}details.ev summary b{display:block;font
 details.ev summary span.sub2{display:block;font:12px var(--mono);color:var(--soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 details.ev .body{padding:0 14px 14px 35px;font-size:13px;color:var(--text)}
 details.ev .raw{font:12px var(--mono);color:var(--muted);margin-top:8px;word-break:break-word}
-.chiprow{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:10px;scrollbar-width:none}
+.chiprow{display:flex;gap:6px;overflow-x:auto;padding:0 28px 4px 0;margin-bottom:10px;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}
+.ev .x{font:600 11px var(--mono);color:var(--amber);background:#2e2408;border-radius:6px;padding:1px 6px;margin-left:6px;white-space:nowrap}
+details.ev summary span.sub2{white-space:normal;overflow-wrap:anywhere}
+.ev .times{font:11.5px var(--mono);color:var(--soft);margin-top:8px;line-height:1.6}
 .chiprow button{flex:none;border:0;border-radius:999px;padding:7px 12px;background:var(--card);color:var(--soft);font-weight:600;font-size:13px}
 .chiprow button.on{background:#3a0d0a;color:#ffd9d2}.chiprow button i{font-style:normal;color:var(--muted);margin-left:5px}
 .s.off,.s.ignored,.s.info{background:#3f3f46;box-shadow:none}.s.info{background:var(--sky);box-shadow:0 0 8px var(--sky)}
@@ -4561,7 +4585,7 @@ let events=null;
 function rLog(){
   let x='<div class="top"><button class="back" data-go="status">‹ Status</button><button class="iconbtn" data-settings aria-label="Settings">'+svg('gear','#D4D4D8')+'</button></div><h1>Log &amp; controls</h1>'+updBanner();
   if(S.power.shutdown_at&&S.power.shutdown_at>S.now)x+='<div class="banner"><b>Shutting down in '+Math.max(0,Math.round(S.power.shutdown_at-S.now))+' s</b><button class="btn red" data-act="cancel_shutdown">Cancel</button></div>';
-  x+='<div class="sec" style="margin-top:0"><span>WHAT I NOTICED</span>'+(events&&events.length?'<button class="btn" style="padding:4px 9px;font-size:11px" data-act="clear_log" data-confirm="Clear the log?">Clear</button>':'')+'</div><div class="list">';
+  x+='<div class="sec" style="margin-top:0"><span>WHAT I NOTICED</span>'+(events&&events.length?'<button class="btn" style="padding:8px 14px;font-size:12px;min-height:36px" data-act="clear_log" data-confirm="Clear the log?">Clear</button>':'')+'</div><div class="list">';
   x+=events==null?'<div class="empty">I\'m thinking…</div>':events.length?events.slice(0,40).map(e=>'<div class="row"><span class="s '+e.level+'"></span><span class="t"><b>'+esc(e.title)+'</b><span>'+esc(ago(e.t)+(e.msg?' · '+e.msg:''))+'</span></span></div>').join(''):'<div class="empty">Nothing yet. I\'ve been watching quietly.</div>';
   x+='</div><div class="sec"><span>POD BAY CONTROLS</span></div><div class="grid2">'+
    [['lock','lock','Lock','Lock the PC screen'],['sleep','moon','Sleep','Wake it with the keyboard'],['flush_dns','net','Fix network','Flush DNS, renew address'],['test_push','bell','Test alert','Send one to your phone'],['update','upd','Update','Get the newest version of everything']]
@@ -4660,8 +4684,10 @@ function rEvents(){
   else{const top={};list.forEach(e=>{const k=e.who||e.title;top[k]=(top[k]||0)+1});const w=Object.entries(top).sort((a,b)=>b[1]-a[1])[0];
     q='I\'ve found '+list.length+' thing'+(list.length>1?'s':'')+' worth knowing about '+per+(crit?', '+crit+' of them serious':'')+'. '+(w[1]>1?'Most are about '+w[0]+'.':'')}
   x+='<p class="quote" style="margin:4px 4px 14px;min-height:0;text-align:left">“'+esc(q)+'”</p>';
-  if(list.length){x+='<div class="list">'+list.slice(0,150).map(e=>{const k=evKey(e);return'<details class="ev"'+(evOpen.has(k)?' open':'')+'><summary data-evk="'+esc(k)+'"><span class="s '+e.level+'"></span><span class="t"><b>'+esc(e.title)+'</b><span class="sub2">'+esc(ago(e.t)+(e.who&&!e.title.includes(e.who)?' · '+e.who:'')+' · '+evData.cats[e.cat])+'</span></span></summary>'+
-    '<div class="body">'+(e.explain?esc(e.explain):'')+'<div class="raw">'+esc(e.msg)+'</div><div class="raw">Event '+e.id+' · '+esc(e.src)+' · '+esc(new Date(e.t*1000).toLocaleString())+'</div></div></details>'}).join('')+'</div>'}
+  if(list.length){const groups=[],gi={};list.forEach(e=>{const g=e.level+'|'+e.title;if(gi[g]==null){gi[g]=groups.length;groups.push([e])}else groups[gi[g]].push(e)});
+    x+='<div class="list">'+groups.slice(0,150).map(all=>{const e=all[0],n=all.length,k=evKey(e);return'<details class="ev"'+(evOpen.has(k)?' open':'')+'><summary data-evk="'+esc(k)+'"><span class="s '+e.level+'"></span><span class="t"><b>'+esc(e.title)+(n>1?'<span class="x">×'+n+'</span>':'')+'</b><span class="sub2">'+esc((n>1?'last ':'')+ago(e.t)+(e.who&&!e.title.includes(e.who)?' · '+e.who:'')+' · '+evData.cats[e.cat])+'</span></span></summary>'+
+    '<div class="body">'+(e.explain?esc(e.explain):'')+'<div class="raw">'+esc(e.msg)+'</div><div class="raw">Event '+e.id+' · '+esc(e.src)+' · '+esc(new Date(e.t*1000).toLocaleString())+'</div>'+
+    (n>1?'<div class="times">All '+n+' times: '+all.slice(0,30).map(a=>esc(new Date(a.t*1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}))).join(' · ')+(n>30?' …':'')+'</div>':'')+'</div></details>'}).join('')+'</div>'}
   x+='<button class="btn wide" data-evrefresh style="margin-top:4px">'+(evData.busy?'Reading the logs…':'Check again')+'</button>';
   x+='<p class="hint">Only what you\'d need to see: drive errors and retries, crashes and power losses, hardware errors, services and apps that crashed, failed updates and Defender alerts.'+(evData.t?' Checked '+esc(ago(evData.t))+'.':'')+(S&&S.security.admin===false?' Run HAL as administrator to read everything.':'')+'</p>';
   return x}
@@ -4697,7 +4723,7 @@ async function start(){$('app').classList.remove('hidden');$('tabs').classList.r
   if(QP.get('settings')==='1'&&!start.done)openSettings();
   start.done=true;
   if(!start.t)start.t=setInterval(()=>{if(!document.hidden&&token)refresh()},3000)}
-document.addEventListener('click',e=>{if(e.target.closest('#toapp'))location.href='/app/'});
+document.addEventListener('click',e=>{if(e.target.closest('#toapp')){if(QP.get('embed')==='1'&&window.parent!==window)window.parent.postMessage({hal:'close'},location.origin);else location.href='/app/'}});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&token)refresh()});
 if(token)start();else showPair();
 </script></body></html>

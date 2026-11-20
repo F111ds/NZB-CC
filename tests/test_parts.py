@@ -48,13 +48,17 @@ except urllib.error.HTTPError as e:
     assert e.code == 302 and e.headers["Location"] == "/app/"
 code, body, hdr = get("/app/")
 assert code == 200 and b"<title>HAL 9000</title>" in body and b'href="/app/manifest.webmanifest"' in body
-assert "frame-ancestors 'none'" in hdr["Content-Security-Policy"]
+assert "frame-ancestors 'none'" in hdr["Content-Security-Policy"] and "frame-src 'self'" in hdr["Content-Security-Policy"]
 man = json.loads(get("/app/manifest.webmanifest")[1])
 assert man["start_url"] == "/app/" and man["scope"] == "/app/" and man["id"] == "/app/"
 assert get("/app/icon.png")[1][:4] == b"\x89PNG" and get("/app/icon-512.png")[1][:4] == b"\x89PNG"
 assert get("/api/home")[0] == 401                       # the app's data still needs the code
 # the page's script parses, and every API it calls exists in the server
 script = re.search(r"<script>(.*)</script>", app_page.APP_PAGE, re.S).group(1)
+# review fixes: the queue card is the queue (no Queue tab), HAL's pages open inside the app, TV volume
+assert "['queue','Queue']" not in script and "getSeg='upcoming'" in script
+assert "function openHal(" in script and "location.href='/hal/" not in script and "hal:'close'" not in script.replace("hal==='close'", "")
+assert "'/hal/api/tv/key'" in script and 'data-tvkey="mute"' in script
 node = shutil.which("node")
 if node:
     js = _Path(tempfile.mkdtemp()) / "app.js"

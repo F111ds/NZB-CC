@@ -110,6 +110,20 @@ r = hs.tv_show(h5, "hi")
 assert not r["ok"] and "older app" in r["message"]
 hs.tv_adb = lambda cmd, timeout=30: (False, "The TV didn't answer in time. Is it on?")
 assert "Is it on?" in hs.tv_show(h5, "")["message"]
+# TV volume and mute: the TV's own keys through ADB, several steps in one command
+hs.tv_adb = lambda cmd, timeout=30: (sent.append(cmd), (True, ""))[1]
+assert hs.tv_key(h5, "vol_up", 3)["ok"] and sent[-1] == "input keyevent 24 24 24"
+assert hs.tv_key(h5, "vol_down", 99)["ok"] and sent[-1] == "input keyevent " + " ".join(["25"] * 10)
+assert hs.tv_key(h5, "mute", 5)["ok"] and sent[-1] == "input keyevent 164"
+try:
+    hs.tv_key(h5, "power")
+    raise AssertionError("any key")
+except ValueError:
+    pass
+hs.tv_adb = lambda cmd, timeout=30: (False, "The TV didn't answer in time. Is it on?")
+r = hs.tv_key(h5, "vol_up")
+assert not r["ok"] and "Is it on?" in r["message"]
+assert hs.tv_key(hal, "mute")["ok"]   # demo: nothing sent
 assert hs.siri_intent("show yourself on the TV") == "tv_show" and hs.siri_intent("turn on the tv") == "tv_on"
 sc = hs.tv_screen(hal.status())
 for box in ("pc", "net", "pi"):
