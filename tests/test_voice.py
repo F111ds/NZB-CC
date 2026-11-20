@@ -137,7 +137,26 @@ assert r["ok"] and r["message"] == "Searching YouTube for cat videos & dogs."
 assert "search_query=cat%20videos%20%26%20dogs'" in cmds[-1] and cmds[-1].endswith(" com.google.android.youtube.tv")   # safe for the TV's shell
 r = hs.tv_app(real, "netflix")
 assert r["message"] == "Opening Netflix." and cmds[-1].startswith("monkey -p com.netflix.ninja")
-# a search link the app won't take: it opens the app and says so
+# the web link isn't taken but the app's own link is: the second try wins
+def netflix_like(cmd, timeout=30):
+    cmds.append(cmd)
+    if cmd.startswith("am start") and "nflx://" not in cmd:
+        return True, "Error: Activity not started, unable to resolve Intent"
+    return True, "Starting: Intent"
+hs.tv_adb = netflix_like
+r = hs.tv_app(real, "netflix", "stranger things")
+assert r["message"] == "Searching Netflix for stranger things." and "nflx://www.netflix.com/search?q=stranger%20things" in cmds[-1]
+# nothing app-specific is taken: the TV's own search
+def only_global(cmd, timeout=30):
+    cmds.append(cmd)
+    if "GLOBAL_SEARCH" in cmd or cmd.startswith("dumpsys") or cmd.startswith("monkey"):
+        return True, "Starting: Intent"
+    return True, "Error: Activity not started, unable to resolve Intent"
+hs.tv_adb = only_global
+r = hs.tv_app(real, "prime", "the office")
+assert r["ok"] and "searched the TV for the office" in r["message"] and any(c.startswith("dumpsys package com.amazon") for c in cmds)
+assert any("android.intent.action.SEARCH --es query 'the office' com.amazon" in c for c in cmds)
+# not even that: it opens the app and says so
 hs.tv_adb = lambda cmd, timeout=30: (cmds.append(cmd), (True, "Error: Activity not started, unable to resolve Intent") if cmd.startswith("am start") else (True, "Events injected: 1"))[1]
 r = hs.tv_app(real, "prime", "the office")
 assert r["ok"] and "wouldn't take the search" in r["message"]

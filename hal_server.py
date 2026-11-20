@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.16.0"
+VERSION = "1.16.1"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2695,6 +2695,12 @@ TV_VOICE_APPS = {
     "netflix": ("com.netflix.ninja", "Netflix", "https://www.netflix.com/search?q={q}"),
     "prime": ("com.amazon.amazonvideo.livingroom", "Prime Video", "https://app.primevideo.com/search?phrase={q}"),
 }
+# Other ways to hand an app a search, tried in turn after the web link (TV apps differ in what they accept).
+TV_SEARCH_LINKS = {
+    "youtube": ["vnd.youtube://results?search_query={q}"],
+    "netflix": ["nflx://www.netflix.com/search?q={q}", "netflix://search?q={q}", "https://www.netflix.com/search/{q}"],
+    "prime": ["aiv://aiv/search?phrase={q}", "https://www.primevideo.com/search/ref=atv_nb_sr?phrase={q}"],
+}
 _APP_WORDS = r"(?P<app>you ?tube|net ?flix|amazon prime video|amazon prime|prime video|amazon video|prime)"
 
 
@@ -2726,6 +2732,22 @@ def voice_app(q: str) -> tuple[str, str] | None:
     return None
 
 
+_tv_app_diagnosed: set = set()
+
+
+def _tv_app_diagnose(app: str, pkg: str) -> None:
+    """Once per app: what links and actions it says it accepts, in the log, so its search can be fixed."""
+    if app in _tv_app_diagnosed:
+        return
+    _tv_app_diagnosed.add(app)
+    try:
+        ok, out = tv_adb(f"dumpsys package {pkg} | grep -iE 'scheme|authority|action|Activity Resolver' | head -60", timeout=20)
+        lines = sorted({l.strip() for l in (out or "").splitlines() if l.strip()})
+        log.info("TV app %s: no search link was taken. It accepts: %s", app, " | ".join(lines)[:2500] or "(nothing listed)")
+    except Exception as exc:  # noqa: BLE001
+        log.info("TV app %s: couldn't read what it accepts (%s)", app, exc)
+
+
 def tv_app(hal, app: str, query: str = "") -> dict:
     """Opens YouTube / Netflix / Prime Video on the TV, searching for `query` when there is one. Turns the TV on first
     when it can't be reached, and opens the app once it answers."""
@@ -2735,13 +2757,33 @@ def tv_app(hal, app: str, query: str = "") -> dict:
         return {"ok": True, "message": "Demo mode: nothing was sent to the TV."}
     query = re.sub(r"\s+", " ", query).strip()[:120]
 
+    def taken(ok: bool, out: str) -> bool:
+        return ok and "Error" not in out and "unable to resolve" not in out.lower() and "does not exist" not in out
+
     def launch() -> tuple[bool, str]:
         if query:
-            uri = search.format(q=urllib.parse.quote(query, safe=""))
-            ok, out = tv_adb(f"am start -a android.intent.action.VIEW -d '{uri}' {pkg}", timeout=20)
-            if ok and "Error" not in out and "unable to resolve" not in out.lower():
-                return True, f"Searching {label} for {query}."
-            log.info("TV app %s: search link not taken (%s)", app, (out or "")[-160:])
+            qq = urllib.parse.quote(query, safe="")
+            qs = query.replace("'", "")   # for the shell's single quotes
+            tries = [f"am start -a android.intent.action.VIEW -d '{u.format(q=qq)}' {pkg}"
+                     for u in [search] + TV_SEARCH_LINKS.get(app, [])]
+            tries.append(f"am start -a android.intent.action.SEARCH --es query '{qs}' {pkg}")
+            tries.append(f"am start -a android.intent.action.SEARCH --es query '{qs}' -p {pkg}")
+            unreachable = False
+            for i, cmd in enumerate(tries):
+                ok, out = tv_adb(cmd, timeout=20)
+                if not ok:
+                    unreachable = True
+                    break
+                if taken(ok, out):
+                    if i:
+                        log.info("TV app %s: search taken by try %d (%s)", app, i + 1, cmd.split(" -d ")[-1][:80] if " -d " in cmd else "SEARCH intent")
+                    return True, f"Searching {label} for {query}."
+            if not unreachable:
+                _tv_app_diagnose(app, pkg)
+                # Last resort: the TV's own search, which lists the app's results (pick one with the remote).
+                ok, out = tv_adb(f"am start -a android.search.action.GLOBAL_SEARCH --es query '{qs}'", timeout=20)
+                if taken(ok, out):
+                    return True, f"{label} wouldn't take a search, so I've searched the TV for {query}. Pick it with the remote."
         ok, out = tv_adb(f"monkey -p {pkg} -c android.intent.category.LEANBACK_LAUNCHER 1", timeout=20)
         if not ok:
             return False, out
