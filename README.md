@@ -194,7 +194,7 @@ All of it was built here, a step at a time, with a lot of photos of the TV in th
   then move what you're watching onto the TV.
 - Know what's on the TV: the movie in Kodi, the video on YouTube, Netflix or Prime, or the PlayStation or Switch
   (through the Denon amp).
-- Or just say it: "Hey Siri, ask HAL, play Glass Meridian."
+- Or just say it: "Hey Siri, ask HAL, play Glass Meridian", "open Netflix", or "play cat videos on YouTube".
 
 **HAL on the TV**
 - Put HAL's screen on the TV over whatever is on, and make him say anything (with your own saved phrases).
