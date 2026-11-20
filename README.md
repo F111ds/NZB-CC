@@ -11,11 +11,12 @@ from the couch, by tap or by voice ("Hey Siri, ask HAL, play Glass Meridian").
 on the phone has two buttons: **+ Add** downloads it the usual way, into your library, and **▶ Stream** plays it on
 the TV straight from Usenet, usually within a minute. Nothing is downloaded and no disk space is used, which is pretty cool.
 Like what you're watching? One more tap downloads a copy to keep. And HAL always knows which is which: a blue
-**USENET** label for streams, a grey **ON YOUR PC** label for your own movies, and *"You're watching Deadpool,
+**USENET** label for streams, a grey **ON YOUR PC** label for your own movies, and *"You're watching Glass Meridian,
 streaming from Usenet."*
 
 <p align="center">
   <img src="docs/hero/phone-home.png" alt="HAL 9000's main page on the phone" width="230">
+  <img src="docs/app-screenshots/35-watch-usenet.png" alt="A movie streaming on the TV straight from Usenet, with the blue USENET label" width="230">
 </p>
 <p align="center">
   <img src="docs/hero/tv-hal-screen.png" alt="HAL 9000's screen on the TV" width="640">
@@ -23,7 +24,7 @@ streaming from Usenet."*
 <p align="center">
   <img src="docs/hero/tv-home-screen.png" alt="The custom TV home screen" width="640">
 </p>
-<p align="center"><em>HAL 9000 on the phone, HAL's screen on the TV, and the TV's custom home screen</em></p>
+<p align="center"><em>HAL 9000 on the phone, a movie streaming to the TV straight from Usenet, HAL's screen on the TV, and the TV's custom home screen</em></p>
 
 **The TV runs an interface of our own.** We replaced the Sony's stock home screen, with its ads and promos, with
 our own build of the open-source CleanYourTV launcher, then built on it:
