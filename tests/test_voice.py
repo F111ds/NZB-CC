@@ -169,4 +169,39 @@ r = hs.tv_app(real, "youtube")
 hs.threading.Thread = _T
 assert posted[-1] == ("/api/tv/on", {"kodi": False}) and r["message"].startswith("Turning the TV on") and "YouTube will open" in r["message"]
 assert "YouTube" in real.siri("open youtube")["say"]
+# "Turn the TV off": the phone server's TV control, else Android's sleep key; never mistaken for the PC
+for q_ in ("turn the TV off", "Turn off the TV", "TV off", "switch off the television", "put the tv to sleep", "shut off the TV"):
+    assert hs.siri_intent(q_) == "tv_off", q_
+assert hs.siri_intent("turn off ads") == "ads_off" and hs.siri_intent("go to sleep") == "sleep" and hs.siri_intent("turn the tv on") == "tv_on"
+hs._phone_post = lambda hal, path, body, timeout=20: (posted.append((path, body)), {"ok": True, "already": False})[1]
+assert "Turning the TV off" in real.siri("turn the tv off")["say"] and posted[-1] == ("/api/tv/off", {})
+hs._phone_post = lambda hal, path, body, timeout=20: {"ok": True, "already": True}
+assert "already off" in real.siri("tv off")["say"]
+hs._phone_post = lambda hal, path, body, timeout=20: {"ok": False, "message": "Set up TV control first."}
+hs.tv_adb = lambda cmd, timeout=30: (cmds.append(cmd), (True, ""))[1]
+assert "Turning the TV off" in real.siri("tv off")["say"] and cmds[-1] == "input keyevent KEYCODE_SLEEP"
+hs.tv_adb = lambda cmd, timeout=30: (False, "The TV didn't answer in time.")
+assert "couldn't turn the TV off" in real.siri("tv off")["say"]
+# the phone server: standby only when the TV is on; the remote's power-off code if IP control refuses
+_saved_m = (m.load_settings, m.tv_configured, m.tv_power_state, m.sony_call, m.sony_ircc)
+calls_ = []
+m.load_settings = lambda: {}
+m.tv_configured = lambda s=None: True
+m.tv_power_state = lambda s=None: "standby"
+assert m.tv_off()["already"]
+m.tv_power_state = lambda s=None: "on"
+m.sony_call = lambda *a, **k: calls_.append(("rest", a))
+assert not m.tv_off()["already"] and calls_[-1] == ("rest", ("system", "setPowerStatus", [{"status": False}]))
+def _refuse(*a, **k):
+    raise m.UpstreamError("TV error [3]")
+m.sony_call = _refuse
+m.sony_ircc = lambda code, settings=None, timeout=3: calls_.append(("ircc", code))
+assert m.tv_off()["ok"] and calls_[-1] == ("ircc", m.IRCC_POWER_OFF)
+m.tv_configured = lambda s=None: False
+try:
+    m.tv_off(); raise AssertionError("no TV set up")
+except ValueError:
+    pass
+m.load_settings, m.tv_configured, m.tv_power_state, m.sony_call, m.sony_ircc = _saved_m
+print("tv off ok")
 print("\nALL VOICE TESTS PASSED")
