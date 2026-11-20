@@ -330,14 +330,15 @@ function greeting(){const h=new Date().getHours();return'Good '+(h>=5&&h<12?'mor
 function issues(){return S?S.issues.filter(i=>LV[i.level]>=2):[]}
 // What HAL says on Home: downloads, the TV, and anything that needs you, in one or two sentences.
 function homeLine(){if(!H&&!S)return'I\'m thinking…';const parts=[],iss=issues(),crit=iss.find(i=>i.level==='critical');
-  if(crit)return'I\'m sorry, '+NAME()+'. '+crit.title+'.';
+  const kp=H&&H.kodi&&H.kodi.playing,fa=H&&H.kodi&&H.kodi.front,tvl=kp?'You\'re watching '+kp.title+'.':fa?fa+' is on the TV.':'';
+  if(crit)return'I\'m sorry, '+NAME()+'. '+crit.title+'.'+(tvl?' '+tvl:'');
   const cur=DESK&&H&&H.current,n=H?H.total||0:0;
   if(cur&&!H.paused){const s=secsOf(cur.eta);const at=s!=null&&s<86400?' by '+clock(Date.now()+s*1000):'';parts.push(n>1?n+' downloads are on their way'+(at?', the first one'+at:'')+'.':'One download finishes'+(at||' soon')+'.')}
   else if(DESK&&H&&H.paused)parts.push('Downloads are paused.');
-  const kp=H&&H.kodi&&H.kodi.playing;const fa=H&&H.kodi&&H.kodi.front;parts.push(kp?'You\'re watching '+kp.title+'.':fa?fa+' is on the TV.':'The TV is free.');
+  parts.push(tvl||'The TV is free.');
   if(iss.length===1)parts.push('There\'s one small thing: '+iss[0].title.charAt(0).toLowerCase()+iss[0].title.slice(1)+'.');
   else if(iss.length>1)parts.push(iss.length+' things need your attention.');
-  if(!cur&&!kp&&!iss.length&&S)return S.hal.quote;
+  if(!cur&&!tvl&&!iss.length&&S)return S.hal.quote;
   return parts.join(' ')}
 let showHidden=false;
 // Small things (notes like 'Windows wants a restart'): one card, as in HAL, so what HAL mentions can be seen.
