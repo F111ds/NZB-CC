@@ -81,11 +81,25 @@ if ($inUse) {
 # 3. Start it in its own window (its log scrolls there; closing the window stops it)
 Say "Starting AltMount on port $Port..." Cyan
 $env:PORT = "$Port"
-Start-Process -FilePath $exe.FullName -ArgumentList "serve" -WorkingDirectory $Folder | Out-Null
+# AltMount signs its logins with a secret it won't start without. Made once and kept in the folder, so you stay
+# signed in across restarts.
+$secretFile = Join-Path $Folder "jwt_secret.txt"
+if (-not (Test-Path $secretFile)) {
+    $bytes = New-Object byte[] 48
+    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    [IO.File]::WriteAllText($secretFile, [Convert]::ToBase64String($bytes))
+}
+$env:JWT_SECRET = (Get-Content $secretFile -Raw).Trim()
+$proc = Start-Process -FilePath $exe.FullName -ArgumentList "serve" -WorkingDirectory $Folder -PassThru
 
 $up = $false
 for ($i = 0; $i -lt 60; $i++) {
     Start-Sleep -Seconds 1
+    if ($proc.HasExited) {
+        Say "AltMount stopped straight away. The end of its log:" Red
+        Get-Content (Join-Path $Folder "altmount.log") -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Say "  $_" }
+        exit 1
+    }
     try {
         $r = Invoke-WebRequest -Uri "$base/live" -UseBasicParsing -TimeoutSec 2
         if ($r.StatusCode -eq 200) { $up = $true; break }
