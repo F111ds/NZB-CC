@@ -242,7 +242,12 @@ for v in variants:
 # not in "Streamed lately" (e.g. started from AltMount's own page): the name from the file, not the address
 odd = "http://192.168.68.60:8090/api/files/stream?download_key=abc&path=%2Fcomplete%2FDeadpool.2016.1080p.DSNP.WEB-DL%2FDeadpool.2016.1080p.DSNP.WEB-DL.mkv"
 assert m.stream_title(odd, "stream?download_key=abc&path=...") == ("Deadpool", "2016"), m.stream_title(odd, "x")
+# no name anywhere in what Kodi reports: the stream last sent to the TV (Glass Meridian, played above)
+assert m.stream_title("http://x:8090/api/files/stream?download_key=abc", "stream?download_key=abc") == ("Glass Meridian", "2025")
+_ls = m.load_streams
+m.load_streams = lambda: []
 assert m.stream_title("http://x:8090/api/files/stream?download_key=abc", "http://x:8090/api/files/stream?download_key=abc")[0] == "a stream from Usenet"
+m.load_streams = _ls
 m.kodi_call = fake_kodi(odd, "stream?download_key=abc&path=%2Fcomplete%2FDeadpool")
 p = m._kodi_now_playing()
 assert p["source"] == "usenet" and p["title"] == "Deadpool" and p["sub"] == "2016", p
