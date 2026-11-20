@@ -752,7 +752,30 @@ public class HalActivity extends Activity {
         bl.topMargin = dp(16);
         details.addView(body, bl);
         JSONArray cols = pg == null ? null : pg.optJSONArray("cols");
-        if (cols == null) {
+        JSONArray grid = pg == null ? null : pg.optJSONArray("grid");
+        if (grid != null && grid.length() > 0) {
+            // Rows of cards (newer PC): each row shares the height, each card its row's width by "weight".
+            body.setOrientation(LinearLayout.VERTICAL);
+            bl.topMargin = dp(12);
+            body.setLayoutParams(bl);
+            for (int r = 0; r < grid.length(); r++) {
+                JSONArray cards = grid.optJSONArray(r);
+                if (cards == null) continue;
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-1, 0, 1f);
+                if (r > 0) rl.topMargin = dp(9);
+                body.addView(row, rl);
+                for (int c = 0; c < cards.length(); c++) {
+                    JSONObject card = cards.optJSONObject(c);
+                    if (card == null) continue;
+                    boolean old = card.has("monitors") || card.has("queue");
+                    LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(0, -1, (float) card.optDouble("weight", 1));
+                    if (c > 0) cl.leftMargin = dp(9);
+                    row.addView(old ? detailColumn(card) : gridCard(card), cl);
+                }
+            }
+        } else if (cols == null) {
             TextView wait = text(14, 0xFF71717A, regular);
             wait.setGravity(Gravity.CENTER);
             wait.setText("I'm reading the details, Dave\u2026");
@@ -767,6 +790,304 @@ public class HalActivity extends Activity {
         LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-1, -2);
         hl.topMargin = dp(10);
         details.addView(hint, hl);
+    }
+
+    /** A card on a grid page: heading, big number with a small line after it, a graph that takes the spare height,
+     *  core bars, rows (with an optional bar), drives (two to a line), hourly bars, chips, and a footer graph. */
+    private View gridCard(JSONObject col) {
+        Typeface light = UiFont.get(this, R.string.font_light), regular = UiFont.get(this, R.string.font_regular);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(12), dp(10), dp(12), dp(9));
+        GradientDrawable bg = card();
+        bg.setStroke(Math.max(1, dp(0.5f)), 0xFF1C1C22);
+        box.setBackground(bg);
+        box.addView(cardHead(col.optString("key"), col.optString("badge")), new LinearLayout.LayoutParams(-1, -2));
+        if (!col.optString("big").isEmpty()) {
+            LinearLayout line = new LinearLayout(this);
+            line.setOrientation(LinearLayout.HORIZONTAL);
+            line.setBaselineAligned(true);
+            TextView big = text(29, Color.WHITE, light);
+            big.setSingleLine(true);
+            big.setText(col.optString("big"));
+            line.addView(big);
+            if (!col.optString("bigsub").isEmpty()) {
+                TextView sub = text(11, 0xFFA1A1AA, Typeface.MONOSPACE);
+                sub.setSingleLine(true);
+                sub.setEllipsize(TextUtils.TruncateAt.END);
+                sub.setText(col.optString("bigsub"));
+                LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(-2, -2);
+                sl.leftMargin = dp(7);
+                line.addView(sub, sl);
+            }
+            LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(-1, -2);
+            ll.topMargin = dp(6);
+            box.addView(line, ll);
+        }
+        JSONArray graph = col.optJSONArray("graph");
+        JSONArray hourly = col.optJSONArray("hourly");
+        JSONArray footer = col.optJSONArray("footer_graph");
+        boolean flexGraph = graph != null && graph.length() > 1;
+        boolean flexHourly = !flexGraph && hourly != null && hourly.length() > 0;
+        boolean rowsFill = !flexGraph && !flexHourly && (footer == null || footer.length() < 2);
+        if (flexGraph) {
+            LinearLayout.LayoutParams gl = new LinearLayout.LayoutParams(-1, 0, 1f);
+            gl.topMargin = dp(7);
+            box.addView(new GraphView(this, graph, colorOf(col.optString("graph_color"), 0xFFFF6A4D)), gl);
+        }
+        JSONArray cores = col.optJSONArray("cores");
+        if (cores != null && cores.length() > 0) {
+            LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(-1, dp(15));
+            cl.topMargin = dp(5);
+            box.addView(new CoresView(this, cores), cl);
+        }
+        JSONArray drives = col.optJSONArray("drives");
+        if (drives != null && drives.length() > 0) {
+            LinearLayout pair = null;
+            for (int i = 0; i < drives.length(); i++) {
+                if (i % 2 == 0) {
+                    pair = new LinearLayout(this);
+                    pair.setOrientation(LinearLayout.HORIZONTAL);
+                    LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(-1, -2);
+                    pl.topMargin = dp(8);
+                    box.addView(pair, pl);
+                }
+                LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(0, -2, 1f);
+                if (i % 2 == 1) dl.leftMargin = dp(14);
+                pair.addView(driveView(drives.optJSONObject(i)), dl);
+                if (i % 2 == 0 && i == drives.length() - 1) pair.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+            }
+        }
+        JSONArray rows = col.optJSONArray("rows");
+        for (int i = 0; rows != null && i < rows.length(); i++) {
+            JSONArray row = rows.optJSONArray(i);
+            if (row == null) continue;
+            String lv = row.optString(2, "ok");
+            LinearLayout r = new LinearLayout(this);
+            r.setOrientation(LinearLayout.HORIZONTAL);
+            r.setGravity(Gravity.CENTER_VERTICAL);
+            TextView l = text(11.5f, 0xFFF4F4F5, regular);
+            l.setSingleLine(true);
+            l.setEllipsize(TextUtils.TruncateAt.END);
+            l.setText(row.optString(0));
+            r.addView(l, new LinearLayout.LayoutParams(0, -2, 1f));
+            if (row.length() > 3) {
+                final int pct = Math.max(0, Math.min(100, row.optInt(3)));
+                LinearLayout.LayoutParams bpl = new LinearLayout.LayoutParams(dp(56), dp(4));
+                bpl.leftMargin = dp(8);
+                r.addView(barView(pct, "ok".equals(lv) ? 0xFF34D399 : levelColor(lv)), bpl);
+            }
+            TextView v = text(10.5f, "ok".equals(lv) ? 0xFFD4D4D8 : levelColor(lv), Typeface.MONOSPACE);
+            v.setSingleLine(true);
+            v.setText(row.optString(1));
+            LinearLayout.LayoutParams vl = new LinearLayout.LayoutParams(-2, -2);
+            vl.leftMargin = dp(8);
+            r.addView(v, vl);
+            addDivider(box, i > 0);
+            box.addView(r, rowsFill ? new LinearLayout.LayoutParams(-1, 0, 1f) : rowParams());
+        }
+        if (hourly != null && hourly.length() > 0) {
+            int color = colorOf(col.optString("hourly_color"), 0xFF2A9D74);
+            LinearLayout.LayoutParams hl = flexHourly ? new LinearLayout.LayoutParams(-1, 0, 1f) : new LinearLayout.LayoutParams(-1, dp(46));
+            hl.topMargin = dp(8);
+            box.addView(new HourBars(this, hourly, color), hl);
+            if (!col.optString("hourly_label").isEmpty()) {
+                TextView lab = text(9.5f, 0xFF8B8B94, Typeface.MONOSPACE);
+                lab.setText(col.optString("hourly_label"));
+                LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(-2, -2);
+                ll.topMargin = dp(3);
+                box.addView(lab, ll);
+            }
+        }
+        if (footer != null && footer.length() > 1) {
+            LinearLayout.LayoutParams fh = new LinearLayout.LayoutParams(-1, -2);
+            fh.topMargin = dp(10);
+            box.addView(cardHead(col.optString("footer_key"), col.optString("footer_badge")), fh);
+            LinearLayout.LayoutParams fl = new LinearLayout.LayoutParams(-1, 0, 1f);
+            fl.topMargin = dp(6);
+            box.addView(new GraphView(this, footer, colorOf(col.optString("footer_color"), 0xFF34D399)), fl);
+        }
+        JSONArray chips = col.optJSONArray("chips");
+        if (chips != null && chips.length() > 0) {
+            ChipFlow flow = new ChipFlow(this, dp(5));
+            for (int i = 0; i < chips.length(); i++) {
+                JSONArray ch = chips.optJSONArray(i);
+                if (ch == null) continue;
+                String a = ch.optString(0), b = ch.optString(1), c = ch.optString(2);
+                SpannableString s = new SpannableString(a + b + c);
+                s.setSpan(new ForegroundColorSpan(Color.WHITE), a.length(), a.length() + b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                s.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), a.length(), a.length() + b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                TextView chip = text(10, 0xFFD4D4D8, Typeface.MONOSPACE);
+                chip.setSingleLine(true);
+                chip.setText(s);
+                chip.setPadding(dp(6), dp(3), dp(6), dp(3));
+                GradientDrawable cb = new GradientDrawable();
+                cb.setColor(0xFF16161B);
+                cb.setCornerRadius(dp(5));
+                chip.setBackground(cb);
+                flow.addView(chip);
+            }
+            LinearLayout.LayoutParams fl = new LinearLayout.LayoutParams(-1, -2);
+            fl.topMargin = dp(7);
+            box.addView(flow, fl);
+        }
+        return box;
+    }
+
+    private LinearLayout.LayoutParams rowParams() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.topMargin = dp(3);
+        lp.bottomMargin = dp(3);
+        return lp;
+    }
+
+    private View cardHead(String key, String badge) {
+        LinearLayout kh = new LinearLayout(this);
+        kh.setOrientation(LinearLayout.HORIZONTAL);
+        kh.addView(key(key), new LinearLayout.LayoutParams(0, -2, 1f));
+        if (badge != null && !badge.isEmpty()) {
+            TextView b = key(badge);
+            String up = badge.toUpperCase(Locale.US);
+            b.setTextColor(up.startsWith("CHECK") || up.startsWith("PAUSED") || up.startsWith("NOT ") || up.startsWith("WARM") ? 0xFFFBBF24
+                    : up.startsWith("DOWN") || up.startsWith("HOT") ? 0xFFFF6A4D
+                    : up.contains("HEALTHY") || up.startsWith("ALL") || up.startsWith("ONLINE") || up.startsWith("BLOCKING") || up.startsWith("COOL") ? 0xFF34D399
+                    : 0xFF8B8B94);
+            kh.addView(b);
+        }
+        return kh;
+    }
+
+    private static int colorOf(String hex, int fallback) {
+        try {
+            return hex == null || hex.isEmpty() ? fallback : Color.parseColor(hex);
+        } catch (IllegalArgumentException e) {
+            return fallback;
+        }
+    }
+
+    private View barView(int pct, int color) {
+        FrameLayout bar = new FrameLayout(this);
+        GradientDrawable track = new GradientDrawable();
+        track.setColor(0xFF1F1F25);
+        track.setCornerRadius(dp(2));
+        bar.setBackground(track);
+        View fill = new View(this);
+        GradientDrawable fd = new GradientDrawable();
+        fd.setColor(color);
+        fd.setCornerRadius(dp(2));
+        fill.setBackground(fd);
+        bar.addView(fill, new FrameLayout.LayoutParams(0, -1));
+        bar.post(() -> {
+            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) fill.getLayoutParams();
+            lp.width = Math.round(bar.getWidth() * pct / 100f);
+            fill.setLayoutParams(lp);
+        });
+        return bar;
+    }
+
+    private View driveView(JSONObject d) {
+        Typeface regular = UiFont.get(this, R.string.font_regular);
+        boolean warn = d != null && d.optBoolean("warn");
+        LinearLayout dv = new LinearLayout(this);
+        dv.setOrientation(LinearLayout.VERTICAL);
+        if (d == null) return dv;
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        TextView name = text(11, 0xFFF4F4F5, regular);
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        name.setText(d.optString("mount") + " " + d.optString("name"));
+        top.addView(name, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView val = text(10, warn ? 0xFFFBBF24 : 0xFFD4D4D8, Typeface.MONOSPACE);
+        val.setSingleLine(true);
+        val.setText(d.optInt("pct") + "% \u00b7 " + d.optString("free") + " free");
+        LinearLayout.LayoutParams vl = new LinearLayout.LayoutParams(-2, -2);
+        vl.leftMargin = dp(6);
+        top.addView(val, vl);
+        dv.addView(top);
+        LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(-1, dp(5));
+        bl.topMargin = dp(4);
+        dv.addView(barView(Math.max(0, Math.min(100, d.optInt("pct"))), warn ? 0xFFFBBF24 : 0xFF34D399), bl);
+        TextView info = text(9, 0xFF8B8B94, Typeface.MONOSPACE);
+        info.setSingleLine(true);
+        info.setEllipsize(TextUtils.TruncateAt.END);
+        info.setText(d.optString("info"));
+        LinearLayout.LayoutParams il = new LinearLayout.LayoutParams(-1, -2);
+        il.topMargin = dp(3);
+        dv.addView(info, il);
+        return dv;
+    }
+
+    /** Lays its children out left to right, wrapping onto the next line (the chips under a graph). */
+    static class ChipFlow extends android.view.ViewGroup {
+        private final int gap;
+
+        ChipFlow(Context c, int gap) {
+            super(c);
+            this.gap = gap;
+        }
+
+        @Override
+        protected void onMeasure(int wSpec, int hSpec) {
+            int maxW = MeasureSpec.getSize(wSpec), x = 0, y = 0, lineH = 0;
+            for (int i = 0; i < getChildCount(); i++) {
+                View ch = getChildAt(i);
+                ch.measure(MeasureSpec.makeMeasureSpec(maxW, MeasureSpec.AT_MOST), MeasureSpec.UNSPECIFIED);
+                if (x > 0 && x + ch.getMeasuredWidth() > maxW) {
+                    x = 0;
+                    y += lineH + gap;
+                    lineH = 0;
+                }
+                x += ch.getMeasuredWidth() + gap;
+                lineH = Math.max(lineH, ch.getMeasuredHeight());
+            }
+            setMeasuredDimension(maxW, y + lineH);
+        }
+
+        @Override
+        protected void onLayout(boolean changed, int l, int t, int r, int b) {
+            int maxW = r - l, x = 0, y = 0, lineH = 0;
+            for (int i = 0; i < getChildCount(); i++) {
+                View ch = getChildAt(i);
+                int w = ch.getMeasuredWidth(), h = ch.getMeasuredHeight();
+                if (x > 0 && x + w > maxW) {
+                    x = 0;
+                    y += lineH + gap;
+                    lineH = 0;
+                }
+                ch.layout(x, y, x + w, y + h);
+                x += w + gap;
+                lineH = Math.max(lineH, h);
+            }
+        }
+    }
+
+    /** One bar per hour (Pi-hole's queries over the day). */
+    static class HourBars extends View {
+        private final float[] vals;
+        private final int color;
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        HourBars(Context c, JSONArray a, int color) {
+            super(c);
+            vals = new float[a.length()];
+            for (int i = 0; i < vals.length; i++) vals[i] = (float) a.optDouble(i, 0);
+            this.color = color;
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            int n = vals.length;
+            if (n == 0) return;
+            float max = 1;
+            for (float v : vals) max = Math.max(max, v);
+            float gap = getResources().getDisplayMetrics().density * 2, w = (getWidth() - gap * (n - 1)) / n, h = getHeight();
+            p.setColor(color);
+            for (int i = 0; i < n; i++) {
+                float bh = Math.max(h * 0.04f, h * vals[i] / max), x = i * (w + gap);
+                c.drawRoundRect(x, h - bh, x + w, h, gap / 2, gap / 2, p);
+            }
+        }
     }
 
     private LinearLayout.LayoutParams colParams(int index) {
