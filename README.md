@@ -5,7 +5,7 @@
 NZB-CC runs on a Windows PC at home and pulls the house's downloads, media, PC and network into one place. You use it
 from three screens: **HAL 9000** on your phone, **HAL on the TV**, and the original **desktop command centers** on
 the PC. Find something, put it on the TV, turn it up, pause the ads, check the drives, restart a service, lock the
-PC: all from the couch. Nothing goes to a cloud service of its own: the phone talks to the PC over your Wi-Fi (or Tailscale when
+PC: all from the couch, by tap or by voice ("Hey Siri, ask HAL, play Glass Meridian"). Nothing goes to a cloud service of its own: the phone talks to the PC over your Wi-Fi (or Tailscale when
 you're out), behind an access code.
 
 | On the phone | On the TV | On the PC |
@@ -92,6 +92,7 @@ All of it was built here, step by step, from the TV in the living room and a lot
   then move what you're watching onto the TV.
 - Know what's on the TV: the movie in Kodi, the video on YouTube, Netflix or Prime, or the PlayStation or Switch
   (through the Denon amp).
+- Or just say it: "Hey Siri, ask HAL, play Glass Meridian."
 
 **HAL on the TV**
 - Put HAL's screen on the TV over whatever is on, and make him say anything (with your own saved phrases).
@@ -117,7 +118,11 @@ All of it was built here, step by step, from the TV in the living room and a lot
 - One line about your evening, in HAL's voice if you like.
 - Phone alerts when something needs you and when it's fine again; hide an alert for a day.
 - A morning briefing and a weekly summary.
-- "Hey Siri, ask HAL…", a home-screen widget, a wall display for a spare tablet, chess, a song.
+- **Voice control through Siri**: "Hey Siri, ask HAL, play Glass Meridian" starts it on the TV (turning the TV on
+  if it's off), "play Night Harbor" plays the next episode, plus pause, resume, stop, skip, turn it up or down,
+  mute, "what's on?" and "what's new?". The status, the ads, lock and sleep, the drives and the briefings work by
+  voice too ([how to set it up](docs/siri-and-widget.md)).
+- A home-screen widget, a wall display for a spare tablet, chess, a song.
 - HAL's record (ads blocked, data downloaded, days on duty) with milestones.
 
 **Keep it all up to date**
