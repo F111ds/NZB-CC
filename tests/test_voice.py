@@ -137,10 +137,21 @@ assert r["ok"] and r["message"] == "Searching YouTube for cat videos & dogs."
 assert "search_query=cat%20videos%20%26%20dogs'" in cmds[-1] and cmds[-1].endswith(" com.google.android.youtube.tv")   # safe for the TV's shell
 r = hs.tv_app(real, "netflix")
 assert r["message"] == "Opening Netflix." and cmds[-1].startswith("monkey -p com.netflix.ninja")
-# Netflix and Prime: straight to the TV's own search
+# Netflix and Prime: the way try-tv-search.ps1 saved (nothing saved yet: open the app and say how to set it up)
+import tempfile as _tf, pathlib as _pl, json as _json
+hs.TV_SEARCH_FILE = _pl.Path(_tf.mkdtemp()) / "tv_search_methods.json"
 hs.tv_adb = lambda cmd, timeout=30: (cmds.append(cmd), (True, "Starting: Intent"))[1]
 r = hs.tv_app(real, "netflix", "stranger things")
-assert "GLOBAL_SEARCH --es query 'stranger things'" in cmds[-1] and r["message"].startswith("Searching the TV for stranger things") and "opens in Netflix" in r["message"]
+assert cmds[-1].startswith("monkey -p com.netflix.ninja") and "try-tv-search.ps1" in r["message"]
+hs.TV_SEARCH_FILE.write_text("\ufeff" + _json.dumps({"netflix": "am start -a android.intent.action.VIEW -d 'nflx://www.netflix.com/search?q={q}' com.netflix.ninja",
+                                                      "global": "am start -a android.intent.action.WEB_SEARCH --es query '{qs}'"}), encoding="utf-8")
+r = hs.tv_app(real, "netflix", "stranger things")
+assert "nflx://www.netflix.com/search?q=stranger%20things" in cmds[-1] and r["message"] == "Searching Netflix for stranger things."
+r = hs.tv_app(real, "prime", "the office")
+assert "WEB_SEARCH --es query 'the office'" in cmds[-1] and "opens in Prime Video" in r["message"]
+hs.TV_SEARCH_FILE.write_text(_json.dumps({"netflix": "am start -d x; reboot"}), encoding="utf-8")
+assert hs.tv_search_method("netflix") == ""                                   # nothing that could run a second command
+hs.TV_SEARCH_FILE.write_text(_json.dumps({"global": "am start -a android.search.action.GLOBAL_SEARCH --es query '{qs}'"}), encoding="utf-8")
 # YouTube: its own search link
 r = hs.tv_app(real, "youtube", "lofi")
 assert "youtube.com/results?search_query=lofi" in cmds[-1]

@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.16.2"
+VERSION = "1.17.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2732,7 +2732,20 @@ def voice_app(q: str) -> tuple[str, str] | None:
     return None
 
 
-TV_GLOBAL_SEARCH_APPS = {"netflix", "prime"}   # searched through the TV's own search (they ignore outside searches)
+TV_GLOBAL_SEARCH_APPS = {"netflix", "prime"}   # never sent a guessed search (they accept one and ignore it)
+TV_SEARCH_FILE = BASE_DIR / "tv_search_methods.json"   # written by tv-launcher/try-tv-search.ps1
+
+
+def tv_search_method(app: str) -> str:
+    """The search command try-tv-search.ps1 found works for this app on this TV ("" if none). Only a plain
+    'am start' with {q}/{qs} is used, nothing the TV's shell could read as a second command."""
+    try:
+        way = str((json.loads(TV_SEARCH_FILE.read_text(encoding="utf-8-sig")) or {}).get(app) or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    if not way.startswith("am start ") or re.search(r"[;&|`$<>\n\\]", way):
+        return ""
+    return way
 _tv_app_diagnosed: set = set()
 
 
@@ -2762,16 +2775,24 @@ def tv_app(hal, app: str, query: str = "") -> dict:
         return ok and "Error" not in out and "unable to resolve" not in out.lower() and "does not exist" not in out
 
     def launch() -> tuple[bool, str]:
-        if query and app in TV_GLOBAL_SEARCH_APPS:
-            # Netflix and Prime accept a search from another app and then ignore it, so use the TV's own search:
-            # its results include theirs, and picking one opens it in the app.
-            qs = query.replace("'", "")
-            ok, out = tv_adb(f"am start -a android.search.action.GLOBAL_SEARCH --es query '{qs}'", timeout=20)
+        if query and (app in TV_GLOBAL_SEARCH_APPS or tv_search_method(app)):
+            # The way try-tv-search.ps1 found works on this TV: the app's own, else (Netflix, Prime) the TV's search.
+            qq, qs = urllib.parse.quote(query, safe=""), query.replace("'", "")
+            own = tv_search_method(app)
+            way = own or tv_search_method("global")
+            if not way:
+                ok, out = tv_adb(f"monkey -p {pkg} -c android.intent.category.LEANBACK_LAUNCHER 1", timeout=20)
+                if not ok:
+                    return False, out
+                return True, (f"I opened {label}. I can't search it yet: run try-tv-search.ps1 on the PC once, "
+                              f"and I'll know how.")
+            ok, out = tv_adb(way.replace("{q}", qq).replace("{qs}", qs), timeout=20)
             if not ok:
                 return False, out
             if taken(ok, out):
-                return True, f"Searching the TV for {query}. Pick it with the remote and it opens in {label}."
-            log.info("TV app %s: the TV's search wasn't taken (%s)", app, (out or "")[-160:])
+                return True, (f"Searching {label} for {query}." if own else
+                              f"Searching the TV for {query}. Pick it with the remote and it opens in {label}.")
+            log.info("TV app %s: the saved search way was refused (%s)", app, (out or "")[-160:])
         elif query:
             qq = urllib.parse.quote(query, safe="")
             qs = query.replace("'", "")   # for the shell's single quotes
