@@ -633,7 +633,11 @@ Pair with the **same access code as the NZB phone app**, then add it to your hom
   whenever something changes and answers when you press a button. The speaker button turns that off; Settings >
   HAL's voice picks the voice, speed and pitch (on an iPhone, download an Enhanced voice such as Daniel for the best one).
 - **Vitals**: CPU, memory and GPU with live / 1 h / 24 h / 7 d graphs, per-core load, temperatures and fans
-  (LibreHardwareMonitor, as for the System Command Center), busiest apps.
+  (LibreHardwareMonitor, as for the System Command Center), busiest apps. HAL warns you when a fan that normally
+  spins stops (graphics card fans, which stop by design, are left out), and when the graphics card hot spot or memory,
+  the motherboard's power circuits (VRM), the chipset or an NVMe drive runs hot (limits in `hal_settings.json`:
+  `gpu_hot_alert` 100, `gpu_mem_alert` 100, `vrm_temp_alert` 100, `chipset_temp_alert` 90, `nvme_temp_alert` 80 °C;
+  `fan_alert` turns the fan check off), on top of the CPU, graphics card, drive and Raspberry Pi temperatures.
 - **Services**: SABnzbd, Jellyfin, Sonarr, Radarr, Prowlarr and the NZB phone server: answering, response time and
   what each is doing. **Restart / Start** from the phone (through its Task Scheduler task, its Windows service, or
   the command line it was last running with). Optional: HAL restarts a service by himself when it stops answering
