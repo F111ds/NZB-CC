@@ -1195,7 +1195,7 @@ if(token)start();else showPair();
 function halGaze(t){const sm=x=>x<=0?0:x>=1?1:x*x*(3-2*x),r=i=>{const x=Math.sin(i*12.9898)*43758.5453;return x-Math.floor(x)};
  const rc=t%40;if(rc<4.4){const k=[[0,0,0],[.4,-1,.05],[1.3,-1,.05],[1.6,1,.05],[2.5,1,.05],[2.8,-.5,0],[3.3,-.5,0],[3.7,0,0],[4.4,0,0]];
   for(let i=0;i<k.length-1;i++){const[a,ax,ay]=k[i],[b,bx,by]=k[i+1];if(rc>=a&&rc<=b){const e=sm((rc-a)/Math.min(.3,b-a));return[ax+(bx-ax)*e,ay+(by-ay)*e]}}}
- const n=Math.floor(t/2.4),f=t/2.4-n,e=sm(f/.25),to=[(r(n)-.5)*1.5,(r(n+.5)-.5)*1.1],fr=[(r(n-1)-.5)*1.5,(r(n-.5)-.5)*1.1];return[fr[0]+(to[0]-fr[0])*e,fr[1]+(to[1]-fr[1])*e]}
+ const n=Math.floor(t/4),f=t/4-n,e=sm(f/.25),to=[(r(n)-.5)*.9,(r(n+.5)-.5)*.7],fr=[(r(n-1)-.5)*.9,(r(n-.5)-.5)*.7];return[fr[0]+(to[0]-fr[0])*e,fr[1]+(to[1]-fr[1])*e]}
 // A few motes of light drifting in from round the dial into the eye.
 const HSP=Array.from({length:10},(_,i)=>({a:i/10*6.283+Math.sin(i*7)*.4,o:(i*.37)%1,v:.28+(i%4)*.06,r:2+(i%3)}));
 function halSparks(t){const c=document.getElementById('hsparks');if(!c)return;const x=c.getContext('2d'),C=316,W=632;x.clearRect(0,0,W,W);
@@ -1224,7 +1224,7 @@ function halSparks(t){const c=document.getElementById('hsparks');if(!c)return;co
  function frame(now){if(!document.hidden&&now-last>40){last=now;const t=(now-t0)/1000+30;
    const home=document.getElementById('heye'),hv=home&&home.offsetParent?home.getBoundingClientRect():null;
    gl.uniform1f(uc,hv?1-((hv.top+hv.height/2)/innerHeight):.78);gl.uniform1f(ut,still?30:t);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
-   if(home&&hv&&!still){const g=halGaze(t);home.style.setProperty('--gx',(g[0]*20).toFixed(2)+'px');home.style.setProperty('--gy',(g[1]*15).toFixed(2)+'px');halSparks(t)}
+   if(home&&hv&&!still){const g=halGaze(t);home.style.setProperty('--gx',(g[0]*9).toFixed(2)+'px');home.style.setProperty('--gy',(g[1]*7).toFixed(2)+'px');halSparks(t)}
    const wv=document.getElementById('hwave');if(wv&&wv.offsetParent){const talking=home&&home.classList.contains('talking');
     [...wv.children].forEach((el,i)=>{const v=Math.abs(Math.sin(t*6+i*.45)*.5+Math.sin(t*2.9+i*1.7)*.3+Math.sin(t*12.1+i*2.3)*.2);el.style.height=(3+(talking?18:3)*(still?0:v))+'px'})}}
   if(!still)requestAnimationFrame(frame)}
