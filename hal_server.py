@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.32.1"
+VERSION = "1.32.2"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1598,7 +1598,8 @@ def fc_profile(cfg: dict, mode: str) -> dict:
     """A copy of the owner's configuration with each motherboard fan at the mode's fixed % (with the floors);
     pumps and the graphics card keep the owner's curves."""
     cfg = json.loads(json.dumps(cfg))
-    gpu = lambda c: str(c.get("Identifier", "")).lower().startswith("/gpu")
+    gpu = lambda c: (str(c.get("Identifier", "")).lower().startswith("/gpu") or "nvidia" in str(c.get("Identifier", "")).lower()
+                     or re.search(r"\bgpu\b|graphics|nvidia|geforce|radeon", str(c.get("Name", "")), re.I) is not None)
     ctrls = [c for c in fc_controls(cfg) if not gpu(c) and "pump" not in str(c.get("Name", "")).lower()]
     fans = [{"name": str(c.get("Name") or ""), "control_id": str(c.get("Identifier"))} for c in ctrls]
     want = fan_targets(fans, mode)
@@ -1612,6 +1613,8 @@ def fc_profile(cfg: dict, mode: str) -> dict:
             if gpu(c):
                 c["ManualControl"] = True
                 c["ManualControlValue"] = FAN_MODES[mode]
+                if "Enable" in c:
+                    c["Enable"] = True   # Fan Control only drives a control that's switched on (often off for graphics cards)
     return cfg
 
 

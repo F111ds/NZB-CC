@@ -318,6 +318,11 @@ assert not hs.fc_controls(_cfg)[0]["ManualControl"]                             
 mx = {c["Name"]: c for c in hs.fc_controls(hs.fc_profile(_cfg, "max"))}
 assert mx["GPU Fan"]["ManualControl"] and mx["GPU Fan"]["ManualControlValue"] == 100 and not mx["AIO Pump"]["ManualControl"]   # Max: graphics card too
 assert {c["ManualControlValue"] for c in mx.values() if c["ManualControl"]} == {100}
+# a graphics card control left switched off in Fan Control is switched on for Cool / Max (and found by its name too)
+_cfg2 = {"Main": {"Controls": [{"Name": "GPU Fan 1", "Identifier": "NvAPI/0/fan/0", "ManualControl": False, "ManualControlValue": 30, "Enable": False}]}}
+g1 = hs.fc_controls(hs.fc_profile(_cfg2, "max"))[0]
+assert g1["Enable"] and g1["ManualControl"] and g1["ManualControlValue"] == 100, g1
+assert not hs.fc_controls(hs.fc_profile(_cfg2, "quiet"))[0]["Enable"]
 d = _tf.mkdtemp(); conf = _os.path.join(d, "Configurations"); _os.makedirs(conf)
 with open(_os.path.join(conf, "userConfig.json"), "w") as f:
     _json.dump(_cfg, f)
