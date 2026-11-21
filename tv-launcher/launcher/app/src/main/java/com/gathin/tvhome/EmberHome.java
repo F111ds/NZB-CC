@@ -84,6 +84,13 @@ final class EmberHome {
 
     private final class FloorDrawable extends Drawable {
         float floorY = -1;
+        /** HAL's own backdrop (no movie art): deep red-black space, faint stars, his glow at halY. */
+        boolean hal;
+        float halY = -1;
+        private final android.graphics.Paint base = new android.graphics.Paint(), halGlow = new android.graphics.Paint(),
+                lowGlow = new android.graphics.Paint(), star = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private float[] stars;
+        private float madeHalY = -2;
         private final android.graphics.Paint shade = new android.graphics.Paint(), sheen = new android.graphics.Paint(),
                 line = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
         private int madeH = -1;
@@ -98,14 +105,43 @@ final class EmberHome {
                 madeH = h;
                 madeFloor = floorY;
                 shade.setShader(new android.graphics.LinearGradient(0, 0, 0, h,
-                        new int[]{0xC7040208, 0x40040208, 0x26040208, 0x8C040208, 0xF0030105},
-                        new float[]{0f, 0.22f, 0.45f, 0.68f, 1f}, android.graphics.Shader.TileMode.CLAMP));
+                        hal ? new int[]{0x59000000, 0x00000000, 0x00000000, 0x00000000, 0x99000000}
+                                : new int[]{0xC7040208, 0x40040208, 0x26040208, 0x8C040208, 0xF0030105},
+                        new float[]{0f, 0.25f, 0.45f, 0.66f, 1f}, android.graphics.Shader.TileMode.CLAMP));
+                if (hal) {
+                    base.setShader(new android.graphics.LinearGradient(0, 0, 0, h, new int[]{0xFF0B0306, 0xFF120408, 0xFF06020A},
+                            new float[]{0f, 0.45f, 1f}, android.graphics.Shader.TileMode.CLAMP));
+                    lowGlow.setShader(new android.graphics.RadialGradient(w / 2f, h * 1.2f, w * 0.75f,
+                            0x73781440, 0x00781440, android.graphics.Shader.TileMode.CLAMP));
+                    java.util.Random r = new java.util.Random(2001);
+                    stars = new float[160 * 3];
+                    for (int i = 0; i < 160; i++) {
+                        stars[i * 3] = r.nextFloat() * w;
+                        stars[i * 3 + 1] = r.nextFloat() * h * 0.66f;
+                        stars[i * 3 + 2] = (0.3f + r.nextFloat() * 1.4f) * density / 2f;
+                    }
+                }
                 if (floorY > 0) {
                     sheen.setShader(new android.graphics.LinearGradient(0, floorY, 0, floorY + h * 0.3f, 0x1AFFAA8C, 0x00FFAA8C,
                             android.graphics.Shader.TileMode.CLAMP));
                     line.setShader(new android.graphics.LinearGradient(w * 0.1f, 0, w * 0.9f, 0,
                             new int[]{0x00FFBEA0, 0x73FFBEA0, 0x00FFBEA0}, null, android.graphics.Shader.TileMode.CLAMP));
                 }
+            }
+            if (hal) {
+                if (madeHalY != halY) {
+                    madeHalY = halY;
+                    float gy = halY > 0 ? halY : h * 0.23f;
+                    halGlow.setShader(new android.graphics.RadialGradient(w / 2f, gy, w * 0.4f,
+                            0x4DFF280F, 0x00FF280F, android.graphics.Shader.TileMode.CLAMP));
+                }
+                c.drawRect(b, base);
+                c.drawRect(b, lowGlow);
+                for (int i = 0; stars != null && i < stars.length; i += 3) {
+                    star.setColor(Color.argb(40 + (i * 37) % 110, 255, 215, 205));
+                    c.drawCircle(stars[i], stars[i + 1], Math.max(0.6f, stars[i + 2]), star);
+                }
+                c.drawRect(b, halGlow);
             }
             c.drawRect(b, shade);
             if (floorY > 0) {
@@ -127,6 +163,23 @@ final class EmberHome {
         public int getOpacity() {
             return android.graphics.PixelFormat.TRANSLUCENT;
         }
+    }
+
+    /** HAL's own backdrop behind everything instead of the movie's art (the HAL-style home with his big eye). */
+    void useHalBackdrop(boolean on) {
+        floor.hal = on;
+        floor.madeH = -1;
+        artBox.setVisibility(on ? View.GONE : View.VISIBLE);
+        if (on) backdrop.setImageDrawable(null);
+        floor.invalidateSelf();
+    }
+
+    /** Where HAL's eye is (root y): his glow on the backdrop is centred there. */
+    void setHalY(float y) {
+        if (floor.halY == y) return;
+        floor.halY = y;
+        floor.invalidateSelf();
+        scrim.invalidate();
     }
 
     /** The posters' foot (root y): the floor's horizon line. */
@@ -344,7 +397,7 @@ final class EmberHome {
         left.setText(mins > 0 ? KodiRow.Item.duration(mins) + " left" : "");
         resume.setText(partway ? "▶  Resume" : "▶  Play");
         restart.setVisibility(partway ? View.VISIBLE : View.GONE);
-        if (!same) setArt(it);
+        if (!same && !floor.hal) setArt(it);
     }
 
     static String metaLine(KodiRow.Item it) {

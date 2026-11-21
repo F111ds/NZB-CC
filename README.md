@@ -129,8 +129,8 @@ experience on top of it, piece by piece, checking each change on the real TV.
 - **A calm dock**: one glass band along the bottom with just the apps we use, each as its own icon: Netflix, Prime
   Video and Kodi (HAL is the big eye above the posters). Everything else is behind the library button, and the dock keeps the order
   you set.
-- **The look, in HAL's red style**: behind the posters, the background art of the movie or show you're on fills
-  the screen, dimmed so the posters stand out, and fades to the next one as you move along the row. HAL's red glow
+- **The look, in HAL's red style**: behind everything, HAL's own backdrop: deep red-black space with faint stars
+  and his glow behind his eye, so his words and the posters read cleanly. HAL's red glow
   rises from under the dock and gently breathes, a few embers drift slowly up the screen, and the art slowly
   drifts in and out. The posters' bars, the KODI tag and the dock's glass are HAL red; the top line keeps its own
   look. The glow and the embers take the colour of the poster you're on (a little warmer in the evening, cooler in

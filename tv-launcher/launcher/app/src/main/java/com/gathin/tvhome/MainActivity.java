@@ -699,6 +699,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             if (!cinemaLayout) {
                 AppAdapter.halInDock = false;
                 DockDecoration.polish = true;
+                ember.useHalBackdrop(true);   // HAL's own background: his words read cleanly over it
                 bigHal = new BigHal(this, root, root.indexOfChild(findViewById(R.id.glass)), this);
                 ember.halLine = bigHal::setLine;
                 bigHal.setLine("");
@@ -3502,7 +3503,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         }
         kodiBlock.setY(kodiBaseY);
         kodiCount.setVisibility(View.GONE);
-        if (ember != null) ember.setFloor(headTop + headH + (int) (8 * density) + posterH);
+        if (ember != null) {
+            ember.setFloor(headTop + headH + (int) (8 * density) + posterH);
+            ember.setHalY(top + g + halH / 2f);
+        }
         if (kodiBlock.getVisibility() != View.VISIBLE) {
             kodiBlock.setVisibility(View.VISIBLE);
             ViewGroup bar = findViewById(R.id.topButtons);
