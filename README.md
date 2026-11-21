@@ -22,7 +22,7 @@ streaming from Usenet."*
   <img src="docs/hero/hal-tv-radar.gif" alt="HAL 9000's screen on the TV, animated: HAL boots up and the panels unfold" width="640">
 </p>
 <p align="center">
-  <img src="docs/hero/tv-home.gif" alt="The custom TV home screen, animated: HAL wakes up, his eye follows the selection along the posters, and OK on him opens his screens" width="640">
+  <img src="docs/hero/tv-home-status.gif" alt="The custom TV home screen, animated: HAL wakes up, his eye follows the selection along the posters, and OK on him opens his screens" width="640">
 </p>
 <p align="center"><em>HAL 9000 on the phone, a movie streaming to the TV straight from Usenet, HAL's screen on the TV, and the TV's custom home screen</em></p>
 
