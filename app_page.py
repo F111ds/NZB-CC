@@ -292,11 +292,57 @@ nav.tabs button.on{color:#ffb59a;text-shadow:0 0 12px rgba(255,90,40,.9)}nav.tab
 .ic-back10{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M4 12a8 8 0 1 0 2.4-5.7%22/%3E%3Cpath d=%22M4 4v4.5h4.5%22/%3E%3C/svg%3E")}
 .ic-fwd30{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M20 12a8 8 0 1 1-2.4-5.7%22/%3E%3Cpath d=%22M20 4v4.5h-4.5%22/%3E%3C/svg%3E")}
 .qb span .ic{width:22px;height:22px}.qb span{display:grid;place-items:center;height:24px}.remote .ic{width:20px;height:20px}.tvvol .ic{width:17px;height:17px;margin-right:4px}
+
+/* ---- the polished Home (the owner's reference): HAL's dial, red-edged glass, a capsule tab bar ---- */
+.ic-globe{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Ccircle cx=%2212%22 cy=%2212%22 r=%229%22/%3E%3Cpath d=%22M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18%22/%3E%3C/svg%3E")}
+.ic-bell{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z%22/%3E%3Cpath d=%22M10 20a2 2 0 0 0 4 0%22/%3E%3C/svg%3E")}
+#hsweep{display:none}
+.hero.center .eyewrap{width:300px;height:300px;margin-top:-6px}
+.hflare{position:absolute;left:-70px;right:-70px;top:50%;height:2px;margin-top:-1px;pointer-events:none;
+ background:linear-gradient(90deg,transparent,rgba(255,70,40,.85) 30%,rgba(255,205,180,1) 50%,rgba(255,70,40,.85) 70%,transparent);filter:blur(.6px)}
+.hflare.s1{top:37%;left:10px;right:10px;opacity:.3}.hflare.s2{top:63%;left:10px;right:10px;opacity:.3}
+.hero.center .eyewrap .eye{width:150px;height:150px;z-index:1;
+ background:radial-gradient(circle closest-side,#050505 0 84%,transparent 85%),conic-gradient(from 210deg,#f4f6f8,#7c828a 15%,#2a2d32 30%,#d8dce0 48%,#5c6168 62%,#1e2024 78%,#e9ecef 92%,#f4f6f8);
+ box-shadow:0 0 0 2px rgba(0,0,0,.6),0 0 60px 16px rgba(255,30,10,.45)}
+.hero.center .eyewrap .eye::before{inset:16%;box-shadow:inset 0 0 14px 4px rgba(0,0,0,.95);
+ background:radial-gradient(ellipse 50% 50% at calc(50% + var(--gx,0px)) calc(50% + var(--gy,0px)),#fff3c4 0,#ffb060 5%,#ff4a1a 14%,#d4140a 32%,#6a0603 58%,#140000 85%,#000 100%)}
+.hero.center .eyewrap .eye::after{content:"";position:absolute;inset:16%;border-radius:50%;pointer-events:none;background:radial-gradient(ellipse 38% 20% at 38% 22%,rgba(255,255,255,.35),transparent 70%)}
+.hero.center .g{margin-top:6px;font:500 12px var(--mono);letter-spacing:.32em;color:rgba(255,235,228,.75)}
+.hero.center .q{font-size:19px;font-weight:300;color:#ffe9e0;margin-top:10px}
+#hquote::after{content:"";display:inline-block;width:2px;height:1.05em;background:#ff3a1e;margin-left:4px;vertical-align:-3px}
+.hrule{height:1px;margin:2px 0 12px;background:linear-gradient(90deg,transparent,rgba(255,60,30,.85),transparent);box-shadow:0 0 8px rgba(255,40,20,.8)}
+.hidline{font-family:inherit;font-size:13px;color:rgba(255,235,228,.85);margin:0 2px 12px}
+.hidline span{display:flex;align-items:center;gap:10px}.hidline .ic{color:#ff4a3a;width:17px;height:17px}
+.hidline button{color:#ff4a3a;font:700 12.5px inherit;font-family:inherit;letter-spacing:.04em}
+@media (max-width:899px){
+ .card{background:linear-gradient(170deg,rgba(60,16,14,.78),rgba(18,6,7,.88));border:1px solid rgba(255,90,60,.35);box-shadow:0 0 24px rgba(255,40,20,.16),inset 0 1px 0 rgba(255,255,255,.1)}
+ .card h3 .k .ic{width:17px;height:17px;vertical-align:-3px;margin-right:4px;color:#ddd}
+ nav.tabs{bottom:calc(10px + env(safe-area-inset-bottom));padding:8px 0;border:1px solid rgba(255,90,60,.35);background:linear-gradient(180deg,rgba(62,16,14,.98),rgba(18,6,7,.99));box-shadow:0 0 18px rgba(255,40,20,.2),0 14px 34px rgba(0,0,0,.45)}
+ nav.tabs button{position:relative;font-size:11px}nav.tabs button+button::before{content:"";position:absolute;left:0;top:4px;bottom:4px;width:1px;background:rgba(255,255,255,.1)}
+ nav.tabs button.on{color:#ff6a4a}nav.tabs button.on::after{content:"";position:absolute;left:24%;right:24%;bottom:-9px;height:2px;border-radius:2px;background:#ff3a1e;box-shadow:0 0 8px #ff3a1e}
+ nav.tabs button.on .house{fill:currentColor}
+ body.withpi nav.tabs{bottom:calc(38px + env(safe-area-inset-bottom))}
+ body.withpi main{padding-bottom:calc(128px + env(safe-area-inset-bottom))}
+ #pistrip{position:fixed;left:0;right:0;bottom:calc(8px + env(safe-area-inset-bottom));z-index:5;display:flex;justify-content:center;align-items:center;gap:10px;font-size:11.5px;color:rgba(255,235,228,.72)}
+ #pistrip span{display:flex;align-items:center;gap:6px}#pistrip .ic{width:15px;height:15px}#pistrip b{font-weight:600}#pistrip .sep{width:1px;height:12px;background:rgba(255,255,255,.2)}
+ #pistrip.hidden{display:none}
+ body.withpi::after{content:"";position:fixed;left:0;right:0;bottom:0;height:calc(120px + env(safe-area-inset-bottom));z-index:4;pointer-events:none;background:linear-gradient(rgba(6,2,3,0),rgba(6,2,3,.92) 45%,#060203)}
+}
+.netg .k{display:flex;align-items:center;gap:5px}
+.na{width:12px;height:12px;display:inline-block;background:currentColor;-webkit-mask:var(--m) center/contain no-repeat;mask:var(--m) center/contain no-repeat}
+.na.dn{color:#4aa8ff;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 4v14M6 12l6 6 6-6'/%3E%3C/svg%3E")}
+.na.up{color:#5eea9b;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 20V6M6 12l6-6 6 6'/%3E%3C/svg%3E")}
+.na.pg{color:#b07aff;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 16a8 8 0 0 1 16 0M12 16l4-5'/%3E%3C/svg%3E")}
+.netg b{font-size:17px}
+.netbars{position:relative;border-top:1px solid rgba(255,255,255,.07);padding-top:16px}.netbars>span{position:absolute;right:0;top:3px;font:500 10px var(--mono);color:rgba(255,255,255,.7)}
+.netbars .vbars i{opacity:1!important}
+.netfoot{margin-top:8px;color:rgba(255,235,228,.7);font-size:12.5px;display:flex;align-items:center;gap:8px}
+.netfoot::before{content:"";width:17px;height:17px;flex:none;background:#bbb;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round'%3E%3Crect x='3' y='12' width='18' height='7' rx='2'/%3E%3Cpath d='M7 12V7M17 12V7M7 15.5h.01M11 15.5h.01'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round'%3E%3Crect x='3' y='12' width='18' height='7' rx='2'/%3E%3Cpath d='M7 12V7M17 12V7M7 15.5h.01M11 15.5h.01'/%3E%3C/svg%3E") center/contain no-repeat}
 </style><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet"></head><body><canvas id="ember" aria-hidden="true"></canvas>
 
 <aside class="side" id="side">
   <div style="display:flex;align-items:center;gap:12px;padding:4px 8px 22px"><div class="eye sm" id="seye"></div><span class="brand"><b>HAL</b> 9000</span></div>
-  <button data-tab="home" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg>Home</button>
+  <button data-tab="home" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path class="house" d="M3 11 12 4l9 7v9h-6v-6H9v6H3z"/></svg>Home</button>
   <button data-tab="get"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5M4 19h16"/></svg>Get</button>
   <button data-tab="watch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M10 9l5 2-5 2z"/></svg>Watch</button>
   <button data-tab="system"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>System</button>
@@ -321,11 +367,12 @@ nav.tabs button.on{color:#ffb59a;text-shadow:0 0 12px rgba(255,90,40,.9)}nav.tab
 </main>
 
 <nav class="tabs hidden" id="tabs">
-  <button data-tab="home" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg>Home</button>
+  <button data-tab="home" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path class="house" d="M3 11 12 4l9 7v9h-6v-6H9v6H3z"/></svg>Home</button>
   <button data-tab="get"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5M4 19h16"/></svg>Get</button>
   <button data-tab="watch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M10 9l5 2-5 2z"/></svg>Watch</button>
   <button data-tab="system"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>System</button>
 </nav>
+<div id="pistrip" class="hidden"></div>
 <div id="chead"><div class="eye sm"></div><span class="brand"><b>HAL</b> 9000</span><em class="upd" data-upd></em></div>
 <div id="player" class="hidden"></div>
 <div id="chess" class="hidden"></div>
@@ -427,7 +474,7 @@ function notesCard(){const n=S?S.issues.filter(i=>i.level==='info'):[];if(!n.len
 function attention(max){const list=issues().slice(0,max).map(i=>'<div class="alert '+i.level+'" data-hal="'+esc(i.tab)+'"><span class="s '+i.level+'"></span><span class="grow"><b>'+esc(i.title)+'</b>'+(i.detail?'<p>'+esc(i.detail)+'</p>':'')+'</span>'+(i.key.startsWith('newdev:')?'<button class="snz" data-devok="'+esc(i.key.slice(7))+'">It\'s mine</button>':'<button class="snz" data-snooze="'+esc(i.key)+'" aria-label="Hide for 24 hours">Hide 24 h</button>')+'</div>').join('')+notesCard();
   const h=(S&&S.snoozed)||[];if(!h.length)return list;
   const until=Math.min(...h.map(i=>i.until));
-  let x=list+'<div class="hidline"><span>'+h.length+' alert'+(h.length>1?'s':'')+' hidden until '+esc((new Date(until*1000).toDateString()===new Date().toDateString()?'':new Date(until*1000).toDateString()===new Date(Date.now()+864e5).toDateString()?'tomorrow ':new Date(until*1000).toLocaleDateString([],{weekday:'short'})+' ')+clock(until*1000))+'</span><button data-showhidden>'+(showHidden?'CLOSE':'SHOW')+'</button></div>';
+  let x=list+'<div class="hidline"><span><i class="ic ic-bell"></i>'+h.length+' alert'+(h.length>1?'s':'')+' hidden until '+esc((new Date(until*1000).toDateString()===new Date().toDateString()?'':new Date(until*1000).toDateString()===new Date(Date.now()+864e5).toDateString()?'tomorrow ':new Date(until*1000).toLocaleDateString([],{weekday:'short'})+' ')+clock(until*1000))+'</span><button data-showhidden>'+(showHidden?'CLOSE':'SHOW ›')+'</button></div>';
   if(showHidden)x+='<div class="list">'+h.map(i=>'<div class="row"><span class="s '+i.level+'"></span><span class="t"><b>'+esc(i.title)+'</b><span>Hidden until '+esc(new Date(i.until*1000).toLocaleString([],{weekday:'short',hour:'numeric',minute:'2-digit'}))+'</span></span><button class="btn" data-unsnooze="'+esc(i.key)+'">Show again</button></div>').join('')+'</div>';
   return x}
 function downloadsCard(){if(!H)return'';if(H.sab_ok===false)return'<div class="card"><h3><span class="k">DOWNLOADS</span><span class="pill w">OFFLINE</span></h3><div class="sub">SABnzbd isn\'t answering: '+esc(H.sab_error||'')+'</div></div>';
@@ -497,10 +544,10 @@ function upsCard(){const u=S&&S.power&&S.power.ups;if(!u||!u.on_battery)return''
     '<div class="sub" style="margin-top:8px;color:var(--soft);font-size:13px">'+(S.power.auto_shutdown?'I\'ll shut the PC down safely at '+S.power.shutdown_pct+'% or '+S.power.shutdown_min+' min left.':'Automatic shutdown is off.')+'</div></div>'}
 function netCard(){if(!S)return'';const n=S.net,keys=(S.issues||[]).map(i=>i.key),down=keys.includes('internet')||keys.includes('router'),shaky=keys.includes('loss')||keys.includes('dns');
   const st=down?['red2','DOWN']:shaky?['amber','SHAKY']:n.ping_ms==null?['soft','CHECKING']:['green','ONLINE'];
-  return'<button class="card cardbtn" data-hal="shield"><h3><span class="k">INTERNET</span><span class="mono" style="color:var(--'+st[0]+')">● '+st[1]+'</span></h3>'+
-    '<div class="wgrid" style="margin-top:10px"><div><span class="k">DOWN NOW</span><b>'+(n.down==null?'—':fb(n.down,1)+'/s')+'</b></div><div><span class="k">UP NOW</span><b>'+(n.up==null?'—':fb(n.up,1)+'/s')+'</b></div><div><span class="k">PING</span><b>'+f0(n.ping_ms,' ms')+'</b></div></div>'+
-    (HHIST&&HHIST.net_down&&HHIST.net_down.length>1?'<div class="sparkwrap"><span>download · last hour</span>'+bars(HHIST.net_down,'#34D399')+'</div>':'')+
-    '<div class="sub" style="margin-top:8px;color:var(--soft);font-size:13px">'+esc([n.loss?Math.round(n.loss)+'% packets lost':'No packet loss',n.gateway?'router '+n.gateway:'',n.tailscale?'Tailscale on':''].filter(Boolean).join(' · '))+'</div></button>'}
+  return'<button class="card cardbtn" data-hal="shield"><h3><span class="k"><i class="ic ic-globe"></i> INTERNET</span><span class="mono" style="color:var(--'+st[0]+')">● '+st[1]+'</span></h3>'+
+    '<div class="wgrid netg" style="margin-top:10px"><div><span class="k"><i class="na dn"></i>DOWNLOAD</span><b>'+(n.down==null?'—':fb(n.down,1)+'/s')+'</b></div><div><span class="k"><i class="na up"></i>UPLOAD</span><b>'+(n.up==null?'—':fb(n.up,1)+'/s')+'</b></div><div><span class="k"><i class="na pg"></i>PING</span><b>'+f0(n.ping_ms,' ms')+'</b></div></div>'+
+    (HHIST&&HHIST.net_down&&HHIST.net_down.length>1?'<div class="sparkwrap netbars"><span>↓ '+(n.down==null?'—':fb(n.down,1)+'/s')+' &nbsp; ↑ '+(n.up==null?'—':fb(n.up,1)+'/s')+'</span>'+bars(HHIST.net_down,'linear-gradient(#5ff2e0,#16a99a)')+'</div>':'')+
+    '<div class="sub netfoot">'+esc([n.loss?Math.round(n.loss)+'% packets lost':'No packet loss',n.gateway?'Router '+n.gateway:'',n.tailscale?'Tailscale on':''].filter(Boolean).join(' · '))+'</div></button>'}
 function restartCard(){if(!S||!S.boot)return'';const pend=S.security&&S.security.pending_reboot,days=Math.floor((Date.now()/1000-S.boot)/86400);
   return'<div class="card" style="display:flex;align-items:center;gap:12px"><div style="flex:1"><span class="k">LAST RESTART</span><div style="font-weight:600;margin-top:4px">'+(days<1?'Today':days===1?'Yesterday':days+' days ago')+'</div>'+
     (pend?'<div class="sub" style="color:var(--amber);font-size:13px">Windows is waiting for a restart to finish updates.</div>':'')+'</div>'+
@@ -534,6 +581,12 @@ function piholeCard(){const p=S&&S.pihole;if(!p||!p.found)return'';
     piLine(p.hw)+(on?'':'<button class="btn r wide" style="margin-top:12px" data-phresume>Turn ad blocking back on</button>')+'</div>'}
 const upFor=s=>!s?'—':s>=86400?Math.floor(s/86400)+' d '+Math.floor(s%86400/3600)+' h':Math.floor(s/3600)+' h '+Math.floor(s%3600/60)+' min';
 const piTempCol=t=>t==null?'var(--soft)':t>=75?'var(--red2)':t>=65?'var(--amber)':'var(--green)';
+// The Raspberry Pi's temperature, CPU and memory in a strip under the tab bar (phone).
+function piStrip(){const el=$('pistrip');if(!el)return;const hw=S&&S.pihole&&S.pihole.hw;
+  if(DESK||!hw||(hw.temp==null&&hw.cpu_pct==null)){el.classList.add('hidden');document.body.classList.remove('withpi');return}
+  el.innerHTML='<span><i class="ic ic-chip"></i>'+esc(hw.model?hw.model.replace(/ Model /,' ').replace(/ Rev [\d.]+$/,''):'Raspberry Pi')+'</span>'+
+    (hw.temp!=null?'<i class="sep"></i><b style="color:'+piTempCol(hw.temp)+'">'+Math.round(hw.temp)+'°C</b>':'')+(hw.cpu_pct!=null?'<i class="sep"></i><span>CPU '+Math.round(hw.cpu_pct)+'%</span>':'')+(hw.mem_pct!=null?'<i class="sep"></i><span>RAM '+Math.round(hw.mem_pct)+'%</span>':'');
+  el.classList.remove('hidden');document.body.classList.add('withpi')}
 function piLine(hw){if(!hw||(hw.temp==null&&hw.cpu_pct==null))return'';
   return'<div class="piline"><span><i class="ic ic-chip"></i></span><span class="grow">'+esc(hw.model?hw.model.replace(/ Model /,' ').replace(/ Rev [\d.]+$/,''):'Raspberry Pi')+'</span>'+
     (hw.temp!=null?'<b style="color:'+piTempCol(hw.temp)+'">'+Math.round(hw.temp)+'°C</b>':'')+(hw.cpu_pct!=null?'<b>CPU '+Math.round(hw.cpu_pct)+'%</b>':'')+(hw.mem_pct!=null?'<b>RAM '+Math.round(hw.mem_pct)+'%</b>':'')+'</div>'}
@@ -544,11 +597,12 @@ function piCard(hw){if(!hw||(hw.temp==null&&hw.cpu_pct==null&&!hw.model))return'
     '<div class="wgrid" style="margin-top:10px"><div><span class="k">UP FOR</span><b>'+upFor(hw.uptime)+'</b></div><div><span class="k">LOAD</span><b>'+(hw.load&&hw.load.length?hw.load[0].toFixed(2):'—')+'</b></div><div><span class="k">UPDATES</span><b style="color:var(--'+(hw.update?'sky':'green')+')">'+(hw.update?'yes':'none')+'</b></div></div>'+
     (hw.update?'<div class="sub" style="color:var(--soft);font-size:13px;margin-top:10px">To update, on the Pi: sudo pihole -up</div>':'')+'</div>'}
 function renderHome(){const el=$('t-home');
-  if(!$('heye'))el.innerHTML='<div id="hhead"></div><div class="hero'+(DESK?'':' center')+'">'+(DESK?'<button class="eye big" id="heye" aria-label="Hear HAL"></button>':'<div class="eyewrap"><div id="hsweep"></div><button class="eye" id="heye" aria-label="Hear HAL"></button></div>')+'<div><div class="g" id="hgreet"></div><div class="q" id="hquote"></div>'+'</div></div><div id="hbody"></div>';
+  if(!$('heye'))el.innerHTML='<div id="hhead"></div><div class="hero'+(DESK?'':' center')+'">'+(DESK?'<button class="eye big" id="heye" aria-label="Hear HAL"></button>':'<div class="eyewrap"><i class="hflare"></i><i class="hflare s1"></i><i class="hflare s2"></i><svg id="hrings" viewBox="0 0 236 236"></svg><button class="eye" id="heye" aria-label="Hear HAL"></button></div>')+'<div><div class="g" id="hgreet"></div><div class="q" id="hquote"></div>'+'</div></div>'+(DESK?'':'<div class="hrule"></div>')+'<div id="hbody"></div>';
   if(!DESK&&!el.dataset.intro){el.dataset.intro=1;el.classList.add('intro');setTimeout(()=>el.classList.remove('intro'),3200)}
   $('hhead').innerHTML=topbar('',true);$('hbody').innerHTML=homeBody();$('hgreet').textContent=greeting();
   const eye=$('heye');eye.className='eye'+(DESK?' big':'')+' '+(S?S.hal.level:'')+(eye.classList.contains('talking')?' talking':'');
   if($('hrings'))$('hrings').innerHTML=heroRings();
+  piStrip();
   const line=homeLine();if(line!==lastQuote){const first=!lastQuote;lastQuote=line;talk(eye,$('hquote'),line,!first&&talkative()&&unlocked)}}
 // HAL's gauges round his eye on Home: CPU, temperature and memory, with a ring of ticks and a slow sweep.
 function heroRings(){const v=S&&S.vitals,c=118,arc=(r,frac,g)=>{const L=2*Math.PI*r,f=Math.max(0,Math.min(1,frac||0));
