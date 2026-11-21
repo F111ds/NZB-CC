@@ -222,7 +222,7 @@ const T0=performance.now(),now=()=>(performance.now()-T0)/1000;
 let tk='';for(let i=0;i<72;i++){const a=i*5*Math.PI/180,r1=139,r2=i%6?143:147;tk+=`<line x1="${(150+r1*Math.sin(a)).toFixed(1)}" y1="${(150-r1*Math.cos(a)).toFixed(1)}" x2="${(150+r2*Math.sin(a)).toFixed(1)}" y2="${(150-r2*Math.cos(a)).toFixed(1)}" stroke="rgba(255,210,190,${i%6?.25:.55})" stroke-width="1.2"/>`}
 $('ticks').innerHTML=tk;const tickEls=[...$('ticks').children];
 $('wave').innerHTML='<i></i>'.repeat(34);const waveEls=[...$('wave').children];
-const cards=[...document.querySelectorAll('#main .card')];cards.forEach(c=>{const s=document.createElement('i');s.className='sheen';c.appendChild(s)});
+const cards=[...document.querySelectorAll('#main .card')];
 // WebGL smoke + god rays
 const gl=$('gl').getContext('webgl',{preserveDrawingBuffer:false,antialias:false});let glOK=false,ut,W=$('gl').width,H=$('gl').height;
 if(gl){try{
@@ -289,8 +289,6 @@ function render(t){
  waveEls.forEach((el,i)=>{const v=Math.abs(nz(t*7+i*.45,i));el.style.height=(3+(speaking?20:2)*v).toFixed(1)+'px'});
  
  const g=gaze(t);$('iris').setAttribute('transform',`translate(${(g[0]*17).toFixed(2)} ${(g[1]*17).toFixed(2)})`);
- // light sheen across the cards every 6 s
- cards.forEach((c,i)=>{const w=c.offsetWidth,ph=((t-1.5-i*.18)%6+6)%6,s=c.querySelector('.sheen');s.style.transform=`translateX(${(-120+ph/1.2*(w+240)).toFixed(0)}px) skewX(-14deg)`;s.style.opacity=ph<1.2?1:0});
  document.querySelectorAll('.dv').forEach((b,i)=>b.style.width=(+b.dataset.w*ease((t-.6-i*.12)/1.2))+'%');
  // PC graph from the last hour, flowing
  const ch=(HIST&&HIST.cpu||[]).filter(v=>v!=null).slice(-60);if(ch.length>1){const lo=0,hi=Math.max(20,...ch)*1.15,d=pathD(ch.map((v,i)=>v+1.5*nz((i+t*2)*.4,2)),254,34,lo,hi);$('pcln').setAttribute('d',d);$('pcf').setAttribute('d',d+' V34 H0Z')}
