@@ -197,20 +197,21 @@ function applyDet(){try{const pi=(DET.pages||[]).find(p=>p.title==='Raspberry Pi
 let say={text:'',start:-1,frac:-1,speaking:false,target:null,look:null};
 function setText(text){if(text!==say.text){say.text=text;say.start=now();say.target=whereFor(text);say.look=/are you there/i.test(text)?'room':null}}
 // spoken by the TV: frac is how far the voice has got
-window.halSay=function(text,frac){setText(text);say.selfEnd=0;say.silent=false;say.frac=frac;say.speaking=frac<1};
+window.halSay=function(text,frac){lastFromApp=now();setText(text);say.selfEnd=0;say.silent=false;say.frac=frac;say.speaking=frac<1};
 // shown without speaking: typed out here
 function typeLine(text,silent){say.text='';setText(text);say.frac=0;say.selfEnd=now()+.6+String(text).length/22;say.silent=silent}
-window.halLine=function(text){if(say.speaking&&!say.selfEnd)return;typeLine(text,true)};
+window.halLine=function(text){lastFromApp=now();if(say.speaking&&!say.selfEnd)return;typeLine(text,true)};
 window.halVoice=function(on){say.speaking=!!on;if(!on)say.frac=1};
 function whereFor(t){t=String(t||'');if(/finished|download|queue|SABnzbd/i.test(t))return'strip';if(/drive|CPU|temperature|memory|graphics|restart|Windows|PC\b/i.test(t))return'pc';
  if(/Pi-hole|ads|internet|network|device|router|security/i.test(t))return'net';if(/Kuma|monitor|down\b|answering/i.test(t))return'kuma';if(/Raspberry|the Pi\b/i.test(t))return'pi';return null}
 const where={pc:[-.95,-.35],net:[-.95,.45],kuma:[.95,-.35],pi:[.95,.45],strip:[-.1,.95]};
 // without the app, HAL reads his own lines (silently); every few minutes he checks the room
 let li=0,nextLineAt=4.2,roomAt=95;
+let lastFromApp=-99;
 function speakSelf(t){
- if(!APP){
-  if(t>nextLineAt&&!say.speaking&&!say.selfEnd){const L=lines[li++%lines.length];typeLine(L.text||L.say||'',false);nextLineAt=t+12}
-  if(t>roomAt&&!say.speaking&&!say.selfEnd){typeLine('Dave… are you there?',false);roomAt=t+240}}
+ const idle=!say.speaking&&!say.selfEnd&&t-lastFromApp>20;
+ if(idle&&t>nextLineAt){const L=lines[li++%lines.length];typeLine(L.text||L.say||'',APP);nextLineAt=t+15}
+ if(!APP&&t>roomAt&&!say.speaking&&!say.selfEnd){typeLine('Dave… are you there?',false);roomAt=t+240}
  if(say.selfEnd&&t<say.selfEnd){say.frac=Math.min(.999,Math.max(0,(t-say.start-.6)/(say.selfEnd-say.start-.6)));say.speaking=!say.silent}
  else if(say.selfEnd){say.speaking=false;say.frac=1;say.selfEnd=0}}
 // in the app, the room check goes through the TV's voice
@@ -232,8 +233,7 @@ float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<5;i++){v+=a*n(p);p=p*2.03+vec2(1
 void main(){vec2 uv=gl_FragCoord.xy/r;vec2 p=uv*vec2(r.x/r.y,1.)*2.2;vec2 q=vec2(fbm(p+vec2(0.,t*.04)),fbm(p+vec2(5.2,1.3)-t*.03));float w=fbm(p+1.9*q+vec2(t*.02,-t*.06));
  vec2 c=(uv-vec2(.5,.71))*vec2(r.x/r.y,1.);float d=length(c);float pulse=.88+.12*sin(t*1.6);vec3 col=vec3(.035,.008,.01);
  col+=vec3(.42,.05,.02)*pow(w,2.2)*1.6;col+=vec3(.95,.38,.05)*smoothstep(.62,.95,w)*.35*(1.-uv.y*.6);col+=vec3(1.,.22,.05)*exp(-d*d*9.)*.62*pulse;col+=vec3(1.,.55,.2)*exp(-d*d*60.)*.25*pulse;
- float bt=clamp((t-40.)/2.6,0.,1.);float an=atan(c.y,c.x);float ray=pow(abs(sin(an*9.+t*.12+fbm(vec2(an*3.,t*.1))*2.)),14.)+pow(abs(sin(an*5.-t*.07)),22.)*.7;
- col+=vec3(1.,.42,.15)*ray*exp(-d*2.2)*.28*bt;col*=1.-.55*smoothstep(.45,1.1,length((uv-.5)*vec2(1.2,1.5)));col*=.15+.85*bt;gl_FragColor=vec4(col,1.);}`;
+ float bt=clamp((t-40.)/2.6,0.,1.);col*=1.-.55*smoothstep(.45,1.1,length((uv-.5)*vec2(1.2,1.5)));col*=.15+.85*bt;gl_FragColor=vec4(col,1.);}`;
  const sh=(ty,src)=>{const s=gl.createShader(ty);gl.shaderSource(s,src);gl.compileShader(s);return s};
  const pr=gl.createProgram();gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs));gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(pr);
  if(gl.getProgramParameter(pr,gl.LINK_STATUS)){gl.useProgram(pr);const bf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,bf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
@@ -311,10 +311,7 @@ function render(t){
   const x=(1-p)*(1-p)*sx+2*(1-p)*p*cx+p*p*EX,y=(1-p)*(1-p)*sy+2*(1-p)*p*cy+p*p*EY,al=a*Math.sin(p*Math.PI)*.85*(p<.92?1:0);
   const gg=fx.createRadialGradient(x,y,0,x,y,m.r*5);gg.addColorStop(0,`rgba(255,215,160,${al})`);gg.addColorStop(1,'rgba(255,90,30,0)');fx.fillStyle=gg;fx.beginPath();fx.arc(x,y,m.r*5,0,7);fx.fill()}}
 
- const bp=((t-5)%9+9)%9,beam=t>5&&bp<2.4&&!detOn,ba=beam?(bp/2.4)*Math.PI*2-Math.PI/2:-9;
- if(beam){const gg=fx.createRadialGradient(EX,EY,40,EX,EY,1300);gg.addColorStop(0,'rgba(255,170,110,.32)');gg.addColorStop(1,'rgba(255,90,40,0)');fx.save();fx.globalCompositeOperation='lighter';fx.fillStyle=gg;fx.beginPath();fx.moveTo(EX,EY);fx.arc(EX,EY,1300,ba-.22,ba);fx.closePath();fx.fill();fx.restore()}
- cards.slice(0,4).forEach((c,i)=>{const ca=Math.atan2(srcPts[i][1]-EY,srcPts[i][0]-EX),dd=Math.abs(((ba-ca)%(2*Math.PI)+3*Math.PI)%(2*Math.PI)-Math.PI),lit=beam?Math.max(0,1-dd/.5):0;
-  c.style.borderColor=`rgba(255,${190+40*lit|0},${160+60*lit|0},${(.14+.6*lit).toFixed(2)})`});
+
 }
 // ---------- details pages ----------
 let detOn=false,detAt=0;
