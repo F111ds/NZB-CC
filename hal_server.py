@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.28.0"
+VERSION = "1.29.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -3980,7 +3980,8 @@ class Hal(FunMixin):
     def _kuma_loop(self) -> None:
         while not self.stop_evt.is_set():
             self.check_kuma()
-            self.stop_evt.wait(30)
+            # every 15 s while the TV's details pages are open (new checks show within seconds), else 30 s
+            self.stop_evt.wait(15 if time.time() - getattr(self, "tv_det_seen", 0) < 30 else 30)
 
     def check_kuma(self) -> None:
         s = self.settings
@@ -4173,7 +4174,13 @@ class Hal(FunMixin):
         def pairs(key):
             vals = [x for x in (m.hist(key) if m else []) if isinstance(x, (int, float))][-120:]
             return [round((vals[i] + vals[i + 1]) / 2 if i + 1 < len(vals) else vals[i], 1) for i in range(len(vals) % 2, len(vals), 2)]
-        return {"cpu": pairs("cpu"), "net_down": pairs("net_down"), "net_up": pairs("net_up"), "every_s": 2, "t": time.time()}
+        snap = m.snapshot() if m else {}
+        gpus = snap.get("gpus") or []
+        rd, wr = pairs("disk_read"), pairs("disk_write")
+        n = min(len(rd), len(wr))
+        disk = [round(a + b, 1) for a, b in zip(rd[-n:], wr[-n:])] if n else []
+        return {"cpu": pairs("cpu"), "mem": pairs("mem"), "cpu_temp": pairs("cpu_temp"), "gpu": pairs(f"gpu:{gpus[0]['key']}") if gpus else [],
+                "disk": disk, "ping": pairs("ping"), "net_down": pairs("net_down"), "net_up": pairs("net_up"), "every_s": 2, "t": time.time()}
 
     def history(self, rng: str) -> dict:
         with self.lock:
@@ -5400,6 +5407,7 @@ class HalRoutes:
                                    "fullest": {"mount": full["mount"], "pct": full["pct"], "free": full["free"]} if full else None,
                                    "record": st["record"], **tv_brief_with_history(hal, st)})
             elif path == "/api/tv/details":
+                hal.tv_det_seen = time.time()   # the details pages are open: Kuma is asked more often
                 self._h_json(200, tv_details(hal))
             elif path == "/api/tv/phrases":
                 self._h_json(200, {"phrases": list(hal.tv_phrases), "open": time.time() - hal.tv_seen < 45})

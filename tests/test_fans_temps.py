@@ -107,10 +107,14 @@ assert hs.tv_fan_card({"fans": [], "gpus": []}) is None
 class _M:
     def hist(self, key):
         return list(range(121)) if key == "cpu" else [1.0, None, 3.0]
+
+    def snapshot(self):
+        return {"gpus": [{"key": "g0"}]}
 hl = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=_M(), start_threads=False)
 lv = hl.live()
 assert len(lv["cpu"]) == 60 and lv["cpu"][-1] == 119.5 and lv["every_s"] == 2, lv["cpu"][-3:]
 assert lv["net_down"] == [2.0]          # gaps dropped, then averaged in pairs
+assert lv["disk"] == [4.0] and lv["gpu"] == [2.0] and lv["ping"] == [2.0] and lv["mem"] == [2.0], lv   # disk = read + write
 grid = hs.tv_grids(h, h.status(), hs.tv_screen(h.status()), h.history("1h"))
 row2 = [x["key"] for x in grid["The PC"][1]]
 assert row2 == ["DRIVES", "FANS", "BUSIEST NOW"], row2
