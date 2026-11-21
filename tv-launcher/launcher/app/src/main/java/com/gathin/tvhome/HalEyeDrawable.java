@@ -71,7 +71,8 @@ final class HalEyeDrawable extends Drawable implements Animatable, Runnable {
         gx += (g[0] - gx) * 0.25f;
         gy += (g[1] - gy) * 0.25f;
         float lr = r * 0.74f;
-        float lx = cx + gx * lr * 0.16f, ly = cy + gy * lr * 0.12f;
+        // the light travels well across the lens so the glances read from the couch
+        float lx = cx + gx * lr * 0.34f, ly = cy + gy * lr * 0.26f;
         float bright = 0.85f + 0.15f * glow;
         lens.setShader(new RadialGradient(lx, ly, lr * (1f + 0.08f * glow),
                 new int[]{0xFFFFFBE0, 0xFFFFD27A, 0xFFFF5A1F, 0xFFD4140A, 0xFF5A0402, 0xFF120000, 0xFF000000},

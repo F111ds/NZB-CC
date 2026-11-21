@@ -1305,7 +1305,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (ember != null) {
             ember.resumeMotion();
             ember.refreshHal();
-            if (bigHal != null) bigHal.motion(animations && !reducedMotion);
+            if (bigHal != null) {
+                bigHal.motion(animations && !reducedMotion);
+                bigHal.live(true);   // his eye always moves on Home
+            }
             restartIdleClock();
             if (perf != null) perf.homeShown(getWindow());
             if (wakeNext) {
@@ -1534,7 +1537,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         resumed = false;
         if (newsTicker != null) newsTicker.stop();
         if (ember != null) ember.pause();
-        if (bigHal != null) bigHal.motion(false);
+        if (bigHal != null) {
+            bigHal.motion(false);
+            bigHal.live(false);
+        }
         if (perf != null) perf.homeShown(null);
         // No UP reaches a paused Home, so a vendor-key hold it saw go down would still open its app later.
         // Only Home's own share is dropped: a key service that saw the same DOWN keeps its hold.
