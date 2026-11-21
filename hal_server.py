@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.32.0"
+VERSION = "1.32.1"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1598,13 +1598,20 @@ def fc_profile(cfg: dict, mode: str) -> dict:
     """A copy of the owner's configuration with each motherboard fan at the mode's fixed % (with the floors);
     pumps and the graphics card keep the owner's curves."""
     cfg = json.loads(json.dumps(cfg))
-    ctrls = [c for c in fc_controls(cfg) if not str(c.get("Identifier", "")).lower().startswith("/gpu") and "pump" not in str(c.get("Name", "")).lower()]
+    gpu = lambda c: str(c.get("Identifier", "")).lower().startswith("/gpu")
+    ctrls = [c for c in fc_controls(cfg) if not gpu(c) and "pump" not in str(c.get("Name", "")).lower()]
     fans = [{"name": str(c.get("Name") or ""), "control_id": str(c.get("Identifier"))} for c in ctrls]
     want = fan_targets(fans, mode)
     for c in ctrls:
         if str(c.get("Identifier")) in want:
             c["ManualControl"] = True
             c["ManualControlValue"] = want[str(c.get("Identifier"))]
+    if mode in ("cool", "max"):
+        # the graphics card's fans join in only to go faster (Quiet and Normal leave them on the card's curve)
+        for c in fc_controls(cfg):
+            if gpu(c):
+                c["ManualControl"] = True
+                c["ManualControlValue"] = FAN_MODES[mode]
     return cfg
 
 
@@ -1672,20 +1679,27 @@ class FanControlApp:
         except Exception:  # noqa: BLE001
             return ""
 
-    def switch(self, mode: str) -> tuple[bool, str]:
+    def switch(self, mode: str, readback=None) -> tuple[bool, str]:
+        """Loads the mode's configuration. Confirmed by Fan Control's title bar showing it, or (if the title doesn't
+        say) by the fan controller's readings reaching the mode's %; failed only when both say it didn't happen."""
         path = self.path_for(mode) if mode == "auto" else self.write_profile(mode)
         flags = 0x08000000 if IS_WINDOWS else 0   # no console window
         subprocess.Popen([self.exe, "-c", path], cwd=os.path.dirname(self.exe), creationflags=flags,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         name = os.path.basename(path).lower()
+        t = ""
         for _ in range(16):   # up to 8 s for Fan Control to load it
             time.sleep(0.5)
             t = self.title().lower()
             if name in t:
                 return True, ""
-            if not t:
-                break
-        return (not self.title()), ("" if not self.title() else "Fan Control didn't switch to " + os.path.basename(path))
+            if readback is not None and readback() is True:
+                return True, ""
+        if ".json" not in t:      # no title naming a configuration: nothing says it failed
+            return True, ""
+        if readback is not None and readback() is None:
+            return True, ""       # the fan readings can't tell either
+        return False, "Fan Control didn't switch to " + os.path.basename(path)
 
 
 class FanControl:
@@ -1754,8 +1768,18 @@ class FanControl:
         if self.app.find():
             # Fan Control is in charge of the fans: switch its configuration (it would undo anything set beside it)
             self.via = "Fan Control"
+            def readback():
+                """True when the motherboard fans read the mode's % (False if not, None if there's nothing to read)."""
+                self.refresh()
+                with self.lock:
+                    fans = [f for f in self.fans if f.get("pct") is not None]
+                if not fans or mode == "auto":
+                    return None
+                want = fan_targets(fans, mode)
+                hits = [f for f in fans if f["control_id"] in want and abs(f["pct"] - want[f["control_id"]]) <= 5]
+                return len(hits) >= max(1, len(want) // 2)
             try:
-                ok, err = self.app.switch(mode)
+                ok, err = self.app.switch(mode, readback)
             except Exception as e:  # noqa: BLE001
                 ok, err = False, str(e)
             if not ok and mode != "auto":
@@ -1814,7 +1838,8 @@ class FanControl:
         if mode == "auto":
             self.refresh()
             return ""
-        if hot:
+        if hot and mode in ("quiet", "normal"):
+            # something runs hot on a low setting: back to Auto (Cool and Max already cool more, so they stay)
             self.set_mode("auto", why=hot)
             return hot
         self.refresh()
