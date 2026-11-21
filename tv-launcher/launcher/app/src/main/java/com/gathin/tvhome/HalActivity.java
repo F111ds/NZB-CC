@@ -250,6 +250,13 @@ public class HalActivity extends Activity {
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
                 || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER || keyCode == KeyEvent.KEYCODE_BUTTON_A) {
             if (speaking && tts != null) tts.stop();
+            speaking = false;
+            // OK again after he has said this line: on to his next one, so each press brings something new.
+            if (!currentSay.isEmpty() && currentSay.equals(lastSay) && lines != null && lines.length() > 1) {
+                lineAt = (lineAt + 1) % lines.length();
+                JSONObject l = lines.optJSONObject(lineAt);
+                if (l != null) setLine(l.optString("say", ""), l.optString("text", ""));
+            }
             say(currentSay.isEmpty() ? "__line__" : currentSay);
             return true;
         }
