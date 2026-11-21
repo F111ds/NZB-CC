@@ -169,6 +169,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     static boolean iconsOnly = false;
     /** NZB-CC: HAL's tile draws his live eye (HalEyeDrawable) instead of his still icon (the HAL-style home). */
     static boolean halEyeLive = false;
+    /** NZB-CC: HAL's tile in the dock; false on the HAL-style home, where his big eye at the top opens him. */
+    static boolean halInDock = true;
     /**
      * NZB-CC home_apps: when not empty, only these apps are on Home, in this order. Each entry matches a package
      * name or an app's label (case ignored); "a|b" accepts either. Every other app stays in the App library (the grid button).
@@ -362,6 +364,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             Drawable icon = banner == null ? ri.loadIcon(pm) : null;
             // NZB-CC: HAL's own tile is his live eye (it glances around and glows with focus) on the HAL-style home.
             if (hal && halEyeLive && banner == null) icon = new HalEyeDrawable();
+            if (hal && !halInDock) continue;   // NZB-CC: HAL's big eye above the posters opens him instead
             if (card != null) {
                 fresh.add(new Entry(Entry.CARD, label, component, banner, icon, card.caption, card.accent));
             } else {

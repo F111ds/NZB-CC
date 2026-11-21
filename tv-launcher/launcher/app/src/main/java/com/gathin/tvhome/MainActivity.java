@@ -95,7 +95,7 @@ import java.util.Set;
 /**
  * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that springs between tiles.
  */
-public class MainActivity extends Activity implements AppAdapter.TileListener, KodiRow.Host , DownloadNotes.Listener, EmberHome.Host {
+public class MainActivity extends Activity implements AppAdapter.TileListener, KodiRow.Host , DownloadNotes.Listener, EmberHome.Host, BigHal.Host {
     @Override
     protected void attachBaseContext(android.content.Context base) {
         super.attachBaseContext(LauncherLocale.wrap(base));   // locale
@@ -222,6 +222,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private Showcase showcase;
     /** NZB-CC: the TV's memory, CPU and smoothness, sent to the PC every minute while the HAL-style home is new. */
     private PerfReport perf;
+    /** NZB-CC: HAL's big eye above the posters (it opens HAL; his tile is out of the dock). */
+    private BigHal bigHal;
     private long showcaseMs;
     private int showcaseSwallowUp = -1;
     private final Runnable showShowcase = this::maybeShowShowcase;
@@ -238,6 +240,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private void playWake() {
         if (ember == null || isDestroyed() || root.getWidth() == 0) return;
         float x = root.getWidth() / 2f, y = root.getHeight() - 80 * density, size = 90 * density;
+        if (bigHal != null && bigHal.shown() && bigHal.eye.getWidth() > 0) {
+            float[] c = bigHal.eyeCentre(root);
+            ember.playWake(root, c[0], c[1], c[2]);
+            return;
+        }
         for (int i = 0; adapter != null && i < adapter.appCount(); i++) {
             String key = adapter.keyAt(i);
             if (key == null || !key.endsWith(".HalActivity")) continue;
@@ -689,6 +696,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             KodiRow.cinema = cinemaLayout;
             KodiRow.reflections = !cinemaLayout;
             AppAdapter.halEyeLive = true;
+            if (!cinemaLayout) {
+                AppAdapter.halInDock = false;
+                bigHal = new BigHal(this, root, root.indexOfChild(findViewById(R.id.glass)), this);
+                ember.halLine = bigHal::setLine;
+                bigHal.setLine("");
+                // YouTube comes off the dock (it stays in the App library, and Add to Home brings it back).
+                List<String> apps = new ArrayList<>();
+                for (String a : AppAdapter.homeApps) if (!a.toLowerCase(Locale.ROOT).contains("youtube")) apps.add(a);
+                AppAdapter.homeApps = apps;
+            }
             KodiRow.tilt = !cinemaLayout && animations && !reducedMotion;
             // HAL wakes up when the TV is switched on (the screen went off since Home was last on screen).
             IntentFilter off = new IntentFilter(Intent.ACTION_SCREEN_OFF);
@@ -835,7 +852,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
                 // scrolls sideways from the usual 10dp sides.
                 int cells = adapter.appCount() + (adapter.isLibraryAt(adapter.appCount()) ? 1 : 0);
                 boolean cinemaRow = cinemaLayout && ember != null && kodiRowShown();
-                float wantScale = extras.dockTileScale;
+                float wantScale = bigHal != null ? Math.min(extras.dockTileScale, 0.4f) : extras.dockTileScale;
                 int cinemaLeft = 0, cinemaRight = (int) (10 * density);
                 if (cinemaRow && cells > 0) {
                     // NZB-CC Cinema home: the apps share the bottom row with the posters, so they start just right of
@@ -1287,6 +1304,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (ember != null) {
             ember.resumeMotion();
             ember.refreshHal();
+            if (bigHal != null) bigHal.motion(animations && !reducedMotion);
             restartIdleClock();
             if (perf != null) perf.homeShown(getWindow());
             if (wakeNext) {
@@ -1515,6 +1533,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         resumed = false;
         if (newsTicker != null) newsTicker.stop();
         if (ember != null) ember.pause();
+        if (bigHal != null) bigHal.motion(false);
         if (perf != null) perf.homeShown(null);
         // No UP reaches a paused Home, so a vendor-key hold it saw go down would still open its app later.
         // Only Home's own share is dropped: a key service that saw the same DOWN keeps its hold.
@@ -2160,7 +2179,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     // ---- top shelf -------------------------------------------------------------------------------
 
     private void showHero(int position, float dockTopInRoot) {
-        if (cinemaOn()) {   // Cinema home: no app name over the row; the icons speak for themselves
+        if (cinemaOn() || bigHal != null) {   // Cinema / HAL-style home: no app name over the row; the icons speak for themselves
             hero.animate().cancel();
             hero.setAlpha(0f);
             return;
@@ -3332,6 +3351,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         int dockTop = r.top + grid.getPaddingTop();
         int heroH = Math.max(hero.getHeight(), (int) (24 * density));
         int bottom = dockTop - (int) (40 * density) - heroH;   // showHero's place for the name
+        if (bigHal != null) bottom = dockTop - (int) (14 * density);   // no app name over the dock there
         int top;
         if (racePanel.getVisibility() == View.VISIBLE) {
             top = racePanel.getBottom();
@@ -3345,6 +3365,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
                 top = Math.max(top, f.bottom);
             }
         }
+        if (bigHal != null) {
+            // HAL's big eye under the top line; the posters go below him.
+            bigHal.setShown(kodi);
+            if (kodi) {
+                bigHal.layout(root.getWidth(), top + (int) (4 * density));
+                top += (int) (4 * density) + bigHal.height();
+            }
+        }
         int tickerH = news ? (int) (30 * density) : 0;
         int blocks = (news ? 1 : 0) + (kodi ? 1 : 0);
         int minGap = (int) (14 * density);
@@ -3353,7 +3381,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         int shown = 0;
         if (kodi) {
             int room = bottom - top - tickerH - shelfExtra - (blocks + 1) * minGap;
-            shown = Math.min(room, (int) (170 * density));   // NZB-CC: a little smaller than the 205dp before
+            shown = Math.min(room, (int) ((bigHal != null ? 118 : 170) * density));   // NZB-CC: smaller under HAL's eye
             kodiRow.setPosterHeight(shown);
         }
         int kodiH = kodi ? shown + shelfExtra : 0;
@@ -3380,7 +3408,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             // (showHero: 40dp above the dock) touches the posters.
             int visibleH = shown + shelfExtra - (int) (19 * density) + KodiRow.reflectionPx(shown);
             int visibleTop = top + Math.max(minGap, (dockTop - top - visibleH) / 2);
-            int heroTop = dockTop - (int) (40 * density) - heroH;
+            int heroTop = bigHal != null ? dockTop - (int) (8 * density) : dockTop - (int) (40 * density) - heroH;
             int over = visibleTop + visibleH - (heroTop - (int) (6 * density));
             if (over > 0) visibleTop = Math.max(top + minGap, visibleTop - over);
             y = visibleTop - (int) (9 * density);
@@ -3404,7 +3432,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (kodiBlock.getVisibility() != View.VISIBLE) {
             kodiBlock.setVisibility(View.VISIBLE);
             ViewGroup bar = findViewById(R.id.topButtons);
-            for (int i = 0; i < bar.getChildCount(); i++) bar.getChildAt(i).setNextFocusDownId(R.id.kodiRow);
+            for (int i = 0; i < bar.getChildCount(); i++) bar.getChildAt(i).setNextFocusDownId(bigHal != null ? bigHal.eye.getId() : R.id.kodiRow);
         }
     }
 
@@ -3460,7 +3488,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (kodiBlock.getVisibility() != View.VISIBLE) {
             kodiBlock.setVisibility(View.VISIBLE);
             ViewGroup bar = findViewById(R.id.topButtons);
-            for (int i = 0; i < bar.getChildCount(); i++) bar.getChildAt(i).setNextFocusDownId(R.id.kodiRow);
+            for (int i = 0; i < bar.getChildCount(); i++) bar.getChildAt(i).setNextFocusDownId(bigHal != null ? bigHal.eye.getId() : R.id.kodiRow);
         }
         if (!ember.shown()) {
             ember.setShown(true);
@@ -3547,6 +3575,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     }
 
     @Override
+    public void onBigHalDown() {
+        if (!kodiRow.focus()) focusTile(0);
+    }
+
+    @Override
+    public void onBigHalUp() {
+        firstTopButton().requestFocus();
+    }
+
+    @Override
     public void onEmberUp() {
         firstTopButton().requestFocus();
     }
@@ -3567,6 +3605,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     @Override
     public void onKodiRowUp() {
         if (cinemaOn() && ember.focusButtons()) return;
+        if (bigHal != null && bigHal.focus()) return;
         firstTopButton().requestFocus();
     }
 

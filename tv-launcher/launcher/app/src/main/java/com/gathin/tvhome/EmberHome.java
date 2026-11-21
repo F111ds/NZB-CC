@@ -527,17 +527,21 @@ final class EmberHome {
         return halPill;
     }
 
+    /** HAL's latest line (greeting and quote), for the big eye on the HAL-style home; "" when the PC is off. */
+    java.util.function.Consumer<String> halLine;
+
     void refreshHal() {
-        if (halPill == null || halBusy || System.currentTimeMillis() - halReadAt < HAL_EVERY_MS) return;
+        if ((halPill == null && halLine == null) || halBusy || System.currentTimeMillis() - halReadAt < HAL_EVERY_MS) return;
         halBusy = true;
         try {
             io.execute(() -> {
-                String level = null;
+                String level = null, said = "";
                 int issues = 0;
                 try {
                     JSONObject j = new JSONObject(new String(get("/hal/api/status", 8000), StandardCharsets.UTF_8));
                     JSONObject hal = j.optJSONObject("hal");
                     level = hal == null ? "ok" : hal.optString("level", "ok");
+                    if (hal != null) said = (hal.optString("greeting", "") + " " + hal.optString("quote", "")).trim();
                     JSONArray is = j.optJSONArray("issues");
                     for (int i = 0; is != null && i < is.length(); i++) {
                         String l = is.getJSONObject(i).optString("level", "");
@@ -546,12 +550,13 @@ final class EmberHome {
                 } catch (Exception ignored) {
                     level = null;   // the PC is off or asleep
                 }
-                final String lv = level;
+                final String lv = level, line = said;
                 final int n = issues;
                 main.post(() -> {
                     halBusy = false;
                     halReadAt = System.currentTimeMillis();
                     setHal(lv, n);
+                    if (halLine != null) halLine.accept(line);
                 });
             });
         } catch (java.util.concurrent.RejectedExecutionException e) {
