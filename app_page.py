@@ -576,7 +576,7 @@ function fansCard(){const v=S&&S.vitals;if(!v)return'';const fans=v.fans||[],g=(
   return'<div class="card fanscard"><h3><span class="k">FANS</span><span class="mono" style="color:var(--'+st[0]+')">● '+st[1]+'</span></h3>'+
     '<div class="fmodes">'+(fc.modes||['auto','quiet','normal','cool','max']).map(m=>'<button data-fanmode="'+m+'" class="'+(m===mode?'on':'')+'">'+m.toUpperCase()+'</button>').join('')+'</div>'+
     rows.map(row).join('')+
-    '<div class="fnote">'+(fc.note&&mode==='auto'&&fc.since&&Date.now()/1000-fc.since<3600?'Back on Auto: '+esc(fc.note)+'. ':'')+'Auto = your BIOS fan curves. Never below 40% (CPU) / 25%; back to Auto by itself if anything runs hot.</div></div>'}
+    '<div class="fnote">'+(fc.note&&fc.since&&Date.now()/1000-fc.since<3600?'<b style="color:var(--amber);font-weight:600">'+(mode==='auto'?'On Auto: ':'Note: ')+esc(fc.note)+'.</b> ':'')+'Auto = your BIOS fan curves. Never below 40% (CPU) / 25%; back to Auto by itself if anything runs hot.</div></div>'}
 async function setFans(mode){document.querySelectorAll('[data-fanmode]').forEach(b=>b.classList.toggle('on',b.dataset.fanmode===mode));
   try{const r=await api('/hal/api/fans',{mode,from:'phone'});if(S&&r&&r.fans)S.fanctl=r.fans;toast(r&&r.say||'Done',!(r&&r.ok))}catch(e){toast('I couldn\'t reach the PC.',true)}
   refresh()}

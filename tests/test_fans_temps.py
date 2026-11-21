@@ -225,8 +225,9 @@ class _LH(_BH):
         if u.path == "/Sensor" and not _lhm["refuse"]:
             q = dict(_up.parse_qsl(u.query)); _lhm["sets"].append((q.get("id"), q.get("value")))
             idx = q["id"].rsplit("/", 1)[-1]
-            _lhm["pct"][idx] = 50.0 if q.get("value") == "null" else float(q["value"])
-            self.send_response(200); self.end_headers(); self.wfile.write(b'{"result":"ok"}'); return
+            if not _lhm.get("stuck") and _lhm.get("answer", b'{"result":"ok"}') == b'{"result":"ok"}':
+                _lhm["pct"][idx] = 50.0 if q.get("value") == "null" else float(q["value"])
+            self.send_response(200); self.end_headers(); self.wfile.write(_lhm.get("answer", b'{"result":"ok"}')); return
         self.send_response(404); self.end_headers()
     do_GET = do_POST = _go
 _srv = _TS(("127.0.0.1", 0), _LH); _th.Thread(target=_srv.serve_forever, daemon=True).start()
@@ -255,6 +256,25 @@ _lhm["refuse"] = True
 r = fc.set_mode("max")
 assert not r["ok"] and fc.mode == "auto" and "BIOS" in r["say"], r
 _lhm["refuse"] = False
+# LibreHardwareMonitor answers 200 but refuses inside: not taken as done
+_lhm["answer"] = b'{"result":"fail","message":"Specified sensor can not be set"}'
+r = fc.set_mode("cool")
+assert not r["ok"] and fc.mode == "auto" and "can not be set" in r["say"], r
+# an older one answers with its web page
+_lhm["answer"] = b"<html>LibreHardwareMonitor</html>"
+r = fc.set_mode("cool")
+assert not r["ok"] and "update LibreHardwareMonitor" in r["say"], r
+# says ok but the controller doesn't move
+_lhm["answer"] = b'{"result":"ok"}'; _lhm["stuck"] = True
+r = fc.set_mode("cool")
+assert not r["ok"] and "didn't take" in r["say"] and fc.mode == "auto", r
+_lhm["stuck"] = False
+# took the power but the fans didn't speed up: a note after 8 s
+r = fc.set_mode("max"); assert r["ok"], r
+fc.check["at"] -= 9
+fc.watch("")
+assert "speeds didn't" in fc.view()["note"], fc.view()
+fc.set_mode("auto")
 # nothing answering
 assert not hs.FanControl(port=1).set_mode("cool")["ok"]
 # why it goes back to Auto
