@@ -52,7 +52,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 .nt3{display:flex;margin-top:12px}.nt3>div{flex:1;min-width:0}.nt3>div+div{border-left:1px solid rgba(255,255,255,.1);padding-left:10px}
 .nt3 .l{font:700 9px "JetBrains Mono",monospace;letter-spacing:.14em;color:rgba(255,235,228,.75);display:flex;align-items:center;gap:5px}
 .nt3 .l svg{width:12px;height:12px;flex:none}.nt3 .v{font:700 14px "JetBrains Mono",monospace;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ntleg{display:flex;justify-content:flex-end;gap:12px;font:500 9px "JetBrains Mono",monospace;color:rgba(255,235,228,.8);margin-top:10px;border-top:1px solid rgba(255,255,255,.1);padding-top:6px;height:18px}
+.ntleg{display:flex;justify-content:space-between;gap:12px;font:500 9px "JetBrains Mono",monospace;color:rgba(255,235,228,.8);margin-top:10px;border-top:1px solid rgba(255,255,255,.1);padding-top:6px;height:18px}
 .ntbars{display:flex;align-items:flex-end;gap:2px;height:34px;margin-top:4px}.ntbars i{flex:1;border-radius:1px 1px 0 0;background:linear-gradient(#5ff2e0,#16a99a);min-height:3px}
 .ntfoot{font:500 9.5px "JetBrains Mono",monospace;color:rgba(255,235,228,.75);margin-top:7px;display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden}
 .ntfoot span{overflow:hidden;text-overflow:ellipsis}.ntfoot svg{width:13px;height:13px;flex:none}
@@ -207,7 +207,7 @@ function apply(){if(!B)return;const sc=B.screen||{};
  $('gpu').textContent=g.split(' · ')[0];$('gpus').textContent='GPU'+(g.includes('·')?' · '+g.split(' · ')[1]:'');
  $('mem').textContent=m.split(' of ')[0];$('mems').textContent=m.includes(' of ')?'of '+m.split(' of ')[1]:'memory';
  drives=(pc.drives||[]).slice(0,5);$('drv').innerHTML=drives.map(d=>`<div><span>${esc(d.mount)}<b>${d.pct}%</b></span><i><b class="dv${d.warn?' w':''}" data-w="${d.pct}"></b></i></div>`).join('');
- const dn=rate(B.net_down),up=rate(B.net_up);$('ndn').textContent=dn;$('nup').textContent=up;$('lgd').textContent=B.net_down!=null?'↓ '+dn:'';$('lgu').textContent=B.net_up!=null?'↑ '+up:'';
+ const dn=rate(B.net_down),up=rate(B.net_up);$('ndn').textContent=dn;$('nup').textContent=up;$('lgd').textContent='DOWNLOAD · LAST HOUR';$('lgu').textContent=B.net_down!=null?'↓ '+dn:'';
  $('npg').textContent=B.ping!=null?Math.max(1,Math.round(B.ping))+' ms':'—';
  {const nr=net.rows||[],r1=nr[1]||[],r2=nr[2]||[],ads=String(r2[1]||'').split(' · ')[0],em=(r,t)=>`<em style="font-style:normal" class="${r[2]==='ok'?'':lv(r[2])}">${esc(t)}</em>`;
   $('nfoot').innerHTML=[r1.length?em(r1,'Router '+String(r1[1]).replace(' · no loss','')):'',r2.length?em(r2,/^[\d,]+$/.test(ads)?ads+' ads blocked':'Ads '+ads):''].filter(Boolean).join(' · ')}
@@ -333,7 +333,10 @@ function render(t){
   const ch=(HIST&&HIST.cpu||[]).filter(v=>v!=null).slice(-60);if(ch.length>1){const d=pathD(ch,254,34,0,Math.max(20,...ch)*1.15);$('pcln').setAttribute('d',d);$('pcf').setAttribute('d',d+' V34 H0Z')}
   const nd=(HIST&&HIST.net_down||[]).map(v=>v==null?0:+v).slice(-30);
   if(nd.length){const mx=Math.max(...nd,1);$('nbars').innerHTML=nd.map(v=>`<i style="height:${Math.max(6,v*100/mx).toFixed(1)}%"></i>`).join('')}}
- if(mons!==drawnMons){drawnMons=mons;mons.forEach((m,k)=>{const el=$('m'+k);if(!el)return;let p='';for(let i=0;i<25;i++){const v=8+(m.status==='up'?4.5:1)*nz(i*.35,k*2.1);p+=`${(i*3.5).toFixed(1)},${v.toFixed(2)} `}el.setAttribute('points',p)})}
+ if(mons!==drawnMons){drawnMons=mons;mons.forEach((m,k)=>{const el=$('m'+k);if(!el)return;   // the last hour's real response times
+   const h=(m.ms_hist||[]).map(v=>v==null?null:+v),ok=h.filter(v=>v!=null);if(ok.length<2){el.setAttribute('points','');return}
+   const lo=Math.min(...ok),hi=Math.max(...ok,lo+Math.max(5,lo*.5)),n=h.length,mid=(lo+hi)/2;   // a steady service draws a calm line
+   el.setAttribute('points',h.map((v,i)=>`${(i*84/Math.max(1,n-1)).toFixed(1)},${(14-((v==null?mid:v)-lo)/(hi-lo)*12).toFixed(2)}`).join(' '))})}
  if(dnsBars.length&&$('dns').children.length!==dnsBars.length){const mx=Math.max(...dnsBars.map(x=>x[0]),1);$('dns').innerHTML=dnsBars.map(([v,b])=>`<i style="flex:1;height:${Math.max(3,v*100/mx)}%;border-radius:2px 2px 0 0;background:linear-gradient(#ffc46b ${100-(v?b*100/v:0)}%, #ff3a1e ${100-(v?b*100/v:0)}%)"></i>`).join('')}
  // the alert and the download bar, still
  const warm=alert0&&alert0.level==='critical'?'255,90,70':'255,170,80';$('alert').style.boxShadow=`0 18px 40px rgba(0,0,0,.45),0 0 18px rgba(${warm},.4),inset 0 1px 0 rgba(255,255,255,.18)`;
@@ -361,7 +364,7 @@ function detCard(c){let h=`<div class="k">${esc(c.key)}${c.badge?`<b class="${bc
  if(c.drives)h+=`<div class="dgrid">${c.drives.map(d=>`<div class="dd"><div class="top"><span>${esc(d.mount)} ${esc(d.name)}</span><em style="color:${d.warn?'#ffc46b':'#ffe7dc'}">${d.pct}% · ${esc(d.free)} free</em></div><div class="bar"><b style="width:${d.pct}%;background:${d.warn?'linear-gradient(90deg,#ffc46b,#ffb020)':'linear-gradient(90deg,#ff9a3c,#ff4b2b)'}"></b></div><div class="inf">${esc(d.info)}</div></div>`).join('')}</div>`;
  if(c.queue)h+=`<div class="q">${c.queue.map(q=>`<div class="n"><span>${esc(q.name)}</span><span class="mono">${q.pct}%</span></div><div class="qb"><b style="width:${q.pct}%;${q.paused?'background:#ffc46b':''}"></b></div><div class="i">${esc(q.info)}</div>`).join('')}</div>`;
  if(c.monitors)h+=`<div class="rows fill">${c.monitors.map(m=>`<div class="row"><span><span style="color:${m.status==='up'?'#7cf5b5':'#ff6a4d'}">●</span> ${esc(m.name)}</span><em style="color:${m.status==='up'?'#ffe7dc':'#ff7a6b'}">${m.status==='up'?(m.ms==null?'up':m.ms+' ms'):esc(m.status)}</em></div>`).join('')}</div>`;
- if(c.rows&&c.rows.length)h+=`<div class="rows${fill?' fill':''}">${c.rows.map(r=>{const l=r[2]||'ok';return`<div class="row"><span>${esc(r[0])}</span>${r.length>3?`<span class="bar"><b style="width:${Math.max(0,Math.min(100,r[3]))}%;background:${lcol(l)}"></b></span>`:''}<em style="color:${l==='ok'?'#ffe7dc':lcol(l)}">${esc(r[1])}</em></div>`}).join('')}</div>`;
+ if(c.rows&&c.rows.length)h+=`<div class="rows${fill?' fill':''}">${c.rows.map(r=>{const l=r[2]||'ok';return`<div class="row"><span>${esc(r[0])}</span>${r.length>3?`<span class="bar"><b style="width:${Math.max(0,Math.min(100,r[3]))}%;background:${r[4]||lcol(l)}"></b></span>`:''}<em style="color:${l==='ok'?'#ffe7dc':lcol(l)}">${esc(r[1])}</em></div>`}).join('')}</div>`;
  if(c.hourly&&c.hourly.length){const mx=Math.max(...c.hourly,1);h+=`<div class="hb" style="${fh?'flex:1':'height:46px'};${c.hourly_tops?'padding-top:14px':''}">${c.hourly.map((v,k)=>{const b=c.hourly2?c.hourly2[k]||0:0;return`<i style="height:${Math.max(3,v*100/mx)}%;background:${c.hourly_color||'#2a9d74'}"><s style="height:${v?b*100/v:0}%;background:${c.hourly2_color||'#ff6a4d'}"></s>${c.hourly_tops&&c.hourly_tops[k]?`<em>${esc(c.hourly_tops[k])}</em>`:''}</i>`}).join('')}</div>`;
   if(c.hourly_labels){const each=c.hourly_labels.length===c.hourly.length;h+=`<div class="hl" style="${each?'':'justify-content:space-between'}">${c.hourly_labels.map(l=>`<span style="${each?'flex:1;text-align:center':''}">${esc(l)}</span>`).join('')}</div>`}
   if(c.hourly_label)h+=`<div class="hl">${esc(c.hourly_label)}</div>`}
