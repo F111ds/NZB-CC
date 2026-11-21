@@ -112,6 +112,7 @@ final class BigHal {
 
         LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-2, -2);
         hl.topMargin = dp(6);
+        hint.setVisibility(View.GONE);   // not shown: OK on his eye still opens his screens
         words.addView(hint, hl);
         // the status line: a coloured dot and all well, or what needs looking at
         status = text(10, 0xFF9FF5C4, R.string.font_medium);
