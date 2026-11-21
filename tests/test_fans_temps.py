@@ -395,4 +395,33 @@ with open(_os.path.join(d2, "userConfig.json"), "w") as f:
 assert hs.FanControlApp()._base_in(d2) == "userConfig.json"
 print("Fan Control detection ok")
 
+# newer Fan Control keeps its configuration in the user's folders, not next to the program
+_home = _tf.mkdtemp(); _appd = _os.path.join(_home, "AppData", "Roaming", "FanControl", "Configurations"); _os.makedirs(_appd)
+with open(_os.path.join(_appd, "userConfig.json"), "w") as f:
+    _json.dump(_cfg, f)
+_old_env = dict(_os.environ); _os.environ["APPDATA"] = _os.path.join(_home, "AppData", "Roaming")
+try:
+    a5 = hs.FanControlApp(); a5.exe = "/nowhere/FanControl.exe"
+    assert _appd in a5.config_dirs()
+    d5 = next(d for d in a5.config_dirs() if a5._base_in(d))
+    assert d5 == _appd, d5
+finally:
+    _os.environ.clear(); _os.environ.update(_old_env)
+# or the setting points straight at it
+class _Run(hs.FanControlApp):
+    pass
+a6 = hs.FanControlApp(); a6.config_path = _os.path.join(_appd, "userConfig.json")
+import psutil as _ps
+_pi = _ps.process_iter
+class _P:
+    info = {"name": "FanControl.exe", "exe": __file__, "cmdline": []}
+_ps.process_iter = lambda *a, **k: [_P()]
+hs.psutil.process_iter = _ps.process_iter
+try:
+    assert a6.find() and a6.dir == _appd and a6.base_name == "userConfig.json", (a6.dir, a6.problem)
+finally:
+    _ps.process_iter = _pi; hs.psutil.process_iter = _pi
+assert "fan_control_config" in hs.DEFAULT_SETTINGS
+print("Fan Control configuration search ok")
+
 print("\nALL FAN AND TEMPERATURE TESTS PASSED")
