@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.32.2"
+VERSION = "1.32.3"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1560,15 +1560,24 @@ def lhm_fan_controls(data) -> list[dict]:
     return out
 
 
+PUMP_RPM = 3000   # nothing but a pump spins this fast (AIO pumps run ~2,500-7,000 rpm, case fans under ~2,500)
+
+
+def is_pump(f: dict) -> bool:
+    """A pump (left on its own curve): called one, or spinning faster than any case or CPU fan, e.g. an AIO pump on
+    the CPU_OPT header ("CPU Optional Fan" at 6,000+ rpm)."""
+    return bool(re.search(r"pump|\baio\b", str(f.get("name") or ""), re.I)) or (f.get("rpm") or 0) > PUMP_RPM
+
+
 def fan_targets(fans: list[dict], mode: str) -> dict:
     """control id -> % for a mode. Never below 40% for the CPU fan (every fan, if none is called CPU) and 25% for the
     rest; pumps are left on their own curve."""
     pct = FAN_MODES[mode]
-    cpu_named = any("cpu" in f["name"].lower() for f in fans)
+    cpu_named = any("cpu" in f["name"].lower() and not is_pump(f) for f in fans)   # a "CPU Optional" pump doesn't count
     out = {}
     for f in fans:
         nm = f["name"].lower()
-        if "pump" in nm:
+        if is_pump(f):
             continue
         floor = FAN_FLOOR_CPU if ("cpu" in nm or not cpu_named) else FAN_FLOOR
         out[f["control_id"]] = max(pct, floor)
@@ -1594,14 +1603,18 @@ def fc_controls(cfg) -> list[dict]:
     return out
 
 
-def fc_profile(cfg: dict, mode: str) -> dict:
+def fc_profile(cfg: dict, mode: str, rpm: dict | None = None) -> dict:
     """A copy of the owner's configuration with each motherboard fan at the mode's fixed % (with the floors);
     pumps and the graphics card keep the owner's curves."""
     cfg = json.loads(json.dumps(cfg))
     gpu = lambda c: (str(c.get("Identifier", "")).lower().startswith("/gpu") or "nvidia" in str(c.get("Identifier", "")).lower()
                      or re.search(r"\bgpu\b|graphics|nvidia|geforce|radeon", str(c.get("Name", "")), re.I) is not None)
-    ctrls = [c for c in fc_controls(cfg) if not gpu(c) and "pump" not in str(c.get("Name", "")).lower()]
-    fans = [{"name": str(c.get("Name") or ""), "control_id": str(c.get("Identifier"))} for c in ctrls]
+    rpm = rpm or {}
+    fans = [{"name": str(c.get("Name") or ""), "control_id": str(c.get("Identifier")), "rpm": rpm.get(str(c.get("Identifier")))}
+            for c in fc_controls(cfg) if not gpu(c)]
+    fans = [f for f in fans if not is_pump(f)]
+    keep = {f["control_id"] for f in fans}
+    ctrls = [c for c in fc_controls(cfg) if str(c.get("Identifier")) in keep]
     want = fan_targets(fans, mode)
     for c in ctrls:
         if str(c.get("Identifier")) in want:
@@ -1626,6 +1639,7 @@ class FanControlApp:
     def __init__(self):
         self.exe = ""
         self.dir = ""
+        self.rpm: dict = {}   # control id -> its fan's rpm (from LibreHardwareMonitor), to leave pumps alone
 
     def find(self) -> bool:
         self.exe = self.dir = ""
@@ -1642,7 +1656,7 @@ class FanControlApp:
     def path_for(self, mode: str) -> str:
         return os.path.join(self.dir, self.BASE if mode == "auto" else f"HAL-{mode.title()}.json")
 
-    def write_profile(self, mode: str) -> str:
+    def write_profile(self, mode: str, rpm: dict | None = None) -> str:
         with open(os.path.join(self.dir, self.BASE), encoding="utf-8-sig") as f:
             base = json.load(f)
         if not fc_controls(base):
@@ -1650,7 +1664,7 @@ class FanControlApp:
         path = self.path_for(mode)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(fc_profile(base, mode), f, indent=2)
+            json.dump(fc_profile(base, mode, rpm or self.rpm), f, indent=2)
         os.replace(tmp, path)
         return path
 
@@ -1781,6 +1795,9 @@ class FanControl:
                 want = fan_targets(fans, mode)
                 hits = [f for f in fans if f["control_id"] in want and abs(f["pct"] - want[f["control_id"]]) <= 5]
                 return len(hits) >= max(1, len(want) // 2)
+            self.refresh()
+            with self.lock:
+                self.app.rpm = {f["control_id"]: f["rpm"] for f in self.fans}
             try:
                 ok, err = self.app.switch(mode, readback)
             except Exception as e:  # noqa: BLE001
@@ -1878,7 +1895,7 @@ class FanControl:
 
 
 def fans_controllable(fans: list[dict]) -> list[dict]:
-    return [f for f in fans if "pump" not in f["name"].lower()]
+    return [f for f in fans if not is_pump(f)]
 
 
 def fan_hot_reason(snap: dict, s: dict) -> str:
@@ -2976,9 +2993,11 @@ def tv_fan_card(v: dict, fc: dict | None = None) -> dict | None:
     fans = v.get("fans") or []
     g = (v.get("gpus") or [{}])[0] if v.get("gpus") else {}
     pct = {f["name"]: f.get("pct") for f in (fc or {}).get("fans") or []} if fc and fc.get("available") else {}
+    with_modes = bool(fc and fc.get("available"))
     rows = [[f["name"], "STOPPED" if f.get("stopped") else f"{f['value']:,.0f} rpm" + (f" · {pct[f['name']]:.0f}%" if pct.get(f["name"]) is not None else ""),
-             "critical" if f.get("stopped") else "ok"] for f in fans[:5]]
-    if g.get("fan") is not None and len(rows) < 6:
+             "critical" if f.get("stopped") else "ok"] for f in fans[:4 if with_modes else 5]]
+    gpu_listed = any(re.search(r"\bgpu\b|graphics", r[0], re.I) for r in rows)
+    if g.get("fan") is not None and not gpu_listed and len(rows) < (4 if with_modes else 6):
         rows.append(["Graphics card", f"{g['fan']:.0f}%", "ok"])
     if not rows:
         return None

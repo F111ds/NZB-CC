@@ -56,6 +56,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 #det .dgrid.one{grid-template-columns:1fr;gap:6px}
 #det .fm{display:flex;gap:4px;margin-top:8px}#det .fm span{flex:1;text-align:center;padding:5px 0;border-radius:8px;border:1px solid rgba(255,255,255,.12);font:700 8.5px "JetBrains Mono",monospace;letter-spacing:.06em;color:rgba(255,235,228,.7)}
 #det .fm span.on{background:linear-gradient(135deg,rgba(255,106,58,.9),rgba(225,29,72,.9));color:#fff;border-color:transparent}
+#det .c.hasmodes .rows{justify-content:flex-start;gap:0}#det .c.hasmodes .row{padding:4px 0}
 #det .c.fanlit{box-shadow:0 0 0 2px rgba(255,90,60,.8),0 0 26px rgba(255,40,20,.35)}
 .ntleg{display:flex;justify-content:space-between;gap:12px;font:500 9px "JetBrains Mono",monospace;color:rgba(255,235,228,.8);margin-top:10px;border-top:1px solid rgba(255,255,255,.1);padding-top:6px;height:18px}
 .ntbars{display:flex;align-items:flex-end;gap:2px;height:34px;margin-top:4px}.ntbars i{flex:1;border-radius:1px 1px 0 0;background:linear-gradient(#5ff2e0,#16a99a);min-height:3px}
@@ -401,7 +402,7 @@ function detCard(c){let h=`<div class="k">${esc(c.key)}${c.badge?`<b class="${bc
  if(c.footer_graph&&c.footer_graph.length>1)h+=`<div class="k" style="margin-top:10px"><span>${esc(c.footer_key||'')}${c.footer_live?'<span class="live">● LIVE</span>':''}</span>${c.footer_badge?`<b>${esc(c.footer_badge)}</b>`:''}</div>`+graphSvg(c.footer_graph,c.footer_color||'#7cf5b5');
  if(c.chips&&c.chips.length)h+=`<div class="chips">${c.chips.map(x=>`<span>${esc(x[0])}<b>${esc(x[1])}</b>${esc(x[2])}</span>`).join('')}</div>`;
  if(c.modes)h+=`<div class="fm">${c.modes.map(m=>`<span class="${m===c.mode?'on':''}">${esc(m)}</span>`).join('')}</div>`;
- return`<div class="c glass${c.lit?' fanlit':''}" style="flex:${c.weight||1} 1 0">${h}</div>`}
+ return`<div class="c glass${c.lit?' fanlit':''}${c.modes?' hasmodes':''}" style="flex:${c.weight||1} 1 0">${h}</div>`}
 // The live readings folded into the details pages: the PC's graphs and numbers, ping, and the traffic now.
 function liveDet(){if(!DET||!liveFresh())return;const L=LIVE,last=a=>a[a.length-1],ok=a=>(a||[]).filter(x=>x!=null),pg=t=>(DET.pages||[]).find(p=>p.title===t);
  const cards=t=>{const p=pg(t);return p&&p.grid?[].concat(...p.grid):[]},card=(t,k)=>cards(t).find(c=>String(c.key).startsWith(k));
