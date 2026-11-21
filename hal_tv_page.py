@@ -37,6 +37,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 .quote.long{font-size:13px}.quote.vlong{font-size:11.5px}
 .caret{display:inline-block;width:2px;height:1em;background:#ffb59a;vertical-align:-2px;margin-left:2px}
 .wave{position:absolute;left:420px;width:120px;top:372px;height:12px;display:flex;align-items:center;gap:2px;justify-content:center}
+.wave{display:none!important}   /* no waveform: only the eye and the sweep move */
 .wave i{width:2px;height:2px;border-radius:1px;background:linear-gradient(#ffb347,#ff3a1e);box-shadow:0 0 4px rgba(255,90,40,.6)}
 .alert{position:absolute;left:345px;width:270px;top:388px;padding:9px 14px;display:flex;gap:10px;align-items:center;border-radius:14px}
 .alert .ic{width:24px;height:24px;border-radius:8px;background:linear-gradient(135deg,#ffc46b,#ff6a3a);display:grid;place-items:center;font-weight:800;font-size:13px;color:#2a0a00;flex:none}
@@ -173,6 +174,7 @@ async function poll(){try{B=await api('/api/brief?from=tv&px='+PX);apply()}catch
 async function pollSlow(){try{HIST=(await api('/api/history?range=1h')).series}catch(e){}try{DET=await api('/api/tv/details');applyDet();if(detOn)drawDet()}catch(e){}setTimeout(pollSlow,60000)}
 const lv=l=>l==='critical'?'critical':l==='warning'?'warning':'ok';
 function setLevel(id,level,okText,txt){const e=$(id);e.className=lv(level);e.textContent='● '+(txt||(level==='ok'?okText:level==='critical'?'PROBLEM':'CHECK'))}
+let drawnHist=null,drawnMons=null;
 let lines=[{text:"I'm reading the house, Dave.",say:""}],mons=[],dnsBars=[],drives=[],alert0=null,dl=null,targets={};
 function apply(){if(!B)return;const sc=B.screen||{};
  const pc=sc.pc||{},net=sc.net||{},k=sc.kuma||{},pi=sc.pi||{};
@@ -276,15 +278,14 @@ function render(t){
  // boot: the veil lifts, the lens assembles, ticks light in turn, panels unfold from the eye
  $('veil').style.opacity=1-ease((t-.1)/.6);
  const eye=$('eyewrap'),px=Math.sin(t*.23),py=Math.cos(t*.17);
- eye.style.transform=`scale(${.55+.45*ease((t-.05)/.8)}) translate(${-px*2}px,${-py*2}px)`;eye.style.opacity=Math.min(1,t/.3);
+ eye.style.transform=`scale(${.55+.45*ease((t-.05)/.8)})`;eye.style.opacity=Math.min(1,t/.3);
  tickEls.forEach((l,i)=>l.style.opacity=t>.2+i*.008?1:0);
  const bs='HAL 9000 · ONLINE',bn=Math.floor(Math.max(0,t-.3)*30);$('boot').textContent=bs.slice(0,bn);$('boot').style.opacity=t<1.2?1:Math.max(0,1-(t-1.2)/.3);
  cards.forEach((c,i)=>{const e=ease((t-.7-i*.06)/.5),left=parseFloat(c.style.left)<480||c.id==='alert'||c.id==='strip';
-  if(t<2){c.style.clipPath=i<4?`inset(0 ${left?(1-e)*100:0}% 0 ${left?0:(1-e)*100}% round 20px)`:`inset(0 ${(1-e)*50}% 0 ${(1-e)*50}% round 16px)`;c.style.opacity=Math.min(1,e*1.4)}else if(c.style.clipPath){c.style.clipPath='';c.style.opacity=1}
-  const d=i<4?5:3;c.style.transform=`translate(${px*d}px,${py*d}px)`});
+  if(t<2){c.style.clipPath=i<4?`inset(0 ${left?(1-e)*100:0}% 0 ${left?0:(1-e)*100}% round 20px)`:`inset(0 ${(1-e)*50}% 0 ${(1-e)*50}% round 16px)`;c.style.opacity=Math.min(1,e*1.4)}else if(c.style.clipPath){c.style.clipPath='';c.style.opacity=1}});
  document.querySelectorAll('.hint,#clock').forEach(e=>e.style.opacity=ease((t-1)/.5));
  // rings and numbers: the real values, filled on opening and breathing a little
- const cpu=(B&&B.cpu!=null?B.cpu:0)+1.2*nz(t*.5,1)*(B?1:0),tmp=B&&B.cpu_temp!=null?B.cpu_temp:0,mem=B&&B.ram!=null?B.ram:0,e=ease((t-.2)/.9);
+ const cpu=(B&&B.cpu!=null?B.cpu:0),tmp=B&&B.cpu_temp!=null?B.cpu_temp:0,mem=B&&B.ram!=null?B.ram:0,e=ease((t-.2)/.9);
  const ring=(id,len,f)=>$(id).setAttribute('stroke-dasharray',`${(len*Math.max(0,Math.min(1,f))*e).toFixed(1)} ${len}`);
  ring('r1',804,cpu/100);ring('r2',729,tmp/100);ring('r3',653,mem/100);
  $('l1').textContent=B?`CPU ${Math.max(0,Math.round(cpu*e))}%`:'CPU';$('l2').textContent=B&&B.cpu_temp!=null?`TEMP ${Math.round(tmp*e)}°`:'TEMP';$('l3').textContent=B?`MEM ${Math.round(mem*e)}%`:'MEM';
@@ -296,23 +297,20 @@ function render(t){
  $('quote').className='quote'+(txt.length>110?' vlong':txt.length>70?' long':'');$('quote').innerHTML=t<1.5||!txt?'':'“'+esc(txt.slice(0,shown))+(shown<txt.length?'<span class="caret"></span>':'”');
  const speaking=say.speaking&&t>=1.5;
  talkGlow(speaking,txt,shown);
- waveEls.forEach((el,i)=>{const v=Math.abs(nz(t*7+i*.45,i));el.style.height=(2+(speaking?9:1)*v).toFixed(1)+'px'});
+ 
  
  const g=gaze(t);$('iris').setAttribute('transform',`translate(${(g[0]*17).toFixed(2)} ${(g[1]*17).toFixed(2)})`);
- document.querySelectorAll('.dv').forEach((b,i)=>b.style.width=(+b.dataset.w*ease((t-.6-i*.12)/1.2))+'%');
- // PC graph from the last hour, flowing
- const ch=(HIST&&HIST.cpu||[]).filter(v=>v!=null).slice(-60);if(ch.length>1){const lo=0,hi=Math.max(20,...ch)*1.15,d=pathD(ch.map((v,i)=>v+1.5*nz((i+t*2)*.4,2)),254,34,lo,hi);$('pcln').setAttribute('d',d);$('pcf').setAttribute('d',d+' V34 H0Z')}
- const pg=(HIST&&HIST.ping||[]).filter(v=>v!=null).slice(-50),src=pg.length>1?pg:Array.from({length:50},()=>10);
- {const lo=Math.min(...src),hi=Math.max(...src)+1;let np=[];for(let i=0;i<src.length;i++){const x=i*100/(src.length-1),y=40-((src[i]-lo)/(hi-lo))*14-2*nz((i+t*5)*.3,8)-8;np.push(`${x.toFixed(2)} ${y.toFixed(2)}`)}$('ntl').setAttribute('d','M'+np.join(' L'));$('ntf').setAttribute('d','M'+np.join(' L')+' V44 H0Z')}
- // Kuma: a live line and a heartbeat per monitor
- mons.forEach((m,k)=>{const el=$('m'+k);if(!el)return;let p='';for(let i=0;i<25;i++){const v=8+(m.status==='up'?4.5:1)*nz((i+t*3)*.35,k*2.1);p+=`${(i*3.5).toFixed(1)},${v.toFixed(2)} `}el.setAttribute('points',p);
-});
- // DNS bars grow in
- if(dnsBars.length){if($('dns').children.length!==dnsBars.length){const mx=Math.max(...dnsBars.map(x=>x[0]),1);$('dns').innerHTML=dnsBars.map(([v,b])=>`<i style="flex:1;height:${Math.max(3,v*100/mx)}%;border-radius:2px 2px 0 0;transform-origin:bottom;background:linear-gradient(#ffc46b ${100-(v?b*100/v:0)}%, #ff3a1e ${100-(v?b*100/v:0)}%)"></i>`).join('')}
-  [...$('dns').children].forEach((el,i)=>el.style.transform=`scaleY(${ease((t-.8-i*.04)/.8)})`)}
- // alert breathes, download creeps and shimmers
- const ab=.5+.5*Math.sin(t*2.2),warm=alert0&&alert0.level==='critical'?'255,90,70':'255,170,80';$('alert').style.boxShadow=`0 18px 40px rgba(0,0,0,.45),0 0 ${(10+18*ab).toFixed(1)}px rgba(${warm},${(.25+.3*ab).toFixed(2)}),inset 0 1px 0 rgba(255,255,255,.18)`;
- if(dl&&dl.state==='downloading'){$('pb').style.width=dl.pct+'%';$('pb').style.background=`linear-gradient(90deg,#ff6a3a 0%,#ffc46b ${(30+((t*40)%100)).toFixed(0)}%,#ff6a3a 100%)`}else $('pb').style.width='0';
+ document.querySelectorAll('.dv').forEach(b=>b.style.width=b.dataset.w+'%');
+ // graphs: still (no motion), drawn again only when their data changes
+ if(HIST!==drawnHist){drawnHist=HIST;
+  const ch=(HIST&&HIST.cpu||[]).filter(v=>v!=null).slice(-60);if(ch.length>1){const d=pathD(ch,254,34,0,Math.max(20,...ch)*1.15);$('pcln').setAttribute('d',d);$('pcf').setAttribute('d',d+' V34 H0Z')}
+  const pg=(HIST&&HIST.ping||[]).filter(v=>v!=null).slice(-50),src=pg.length>1?pg:Array.from({length:50},()=>10);
+  {const lo=Math.min(...src),hi=Math.max(...src)+1;const np=src.map((v,i)=>`${(i*100/(src.length-1)).toFixed(2)} ${(40-((v-lo)/(hi-lo))*14-8).toFixed(2)}`);$('ntl').setAttribute('d','M'+np.join(' L'));$('ntf').setAttribute('d','M'+np.join(' L')+' V44 H0Z')}}
+ if(mons!==drawnMons){drawnMons=mons;mons.forEach((m,k)=>{const el=$('m'+k);if(!el)return;let p='';for(let i=0;i<25;i++){const v=8+(m.status==='up'?4.5:1)*nz(i*.35,k*2.1);p+=`${(i*3.5).toFixed(1)},${v.toFixed(2)} `}el.setAttribute('points',p)})}
+ if(dnsBars.length&&$('dns').children.length!==dnsBars.length){const mx=Math.max(...dnsBars.map(x=>x[0]),1);$('dns').innerHTML=dnsBars.map(([v,b])=>`<i style="flex:1;height:${Math.max(3,v*100/mx)}%;border-radius:2px 2px 0 0;background:linear-gradient(#ffc46b ${100-(v?b*100/v:0)}%, #ff3a1e ${100-(v?b*100/v:0)}%)"></i>`).join('')}
+ // the alert and the download bar, still
+ const warm=alert0&&alert0.level==='critical'?'255,90,70':'255,170,80';$('alert').style.boxShadow=`0 18px 40px rgba(0,0,0,.45),0 0 18px rgba(${warm},.4),inset 0 1px 0 rgba(255,255,255,.18)`;
+ if(dl&&dl.state==='downloading'){$('pb').style.width=dl.pct+'%';$('pb').style.background='linear-gradient(90deg,#ff6a3a,#ffc46b)'}else $('pb').style.width='0';
  // clock
  const d=new Date();$('clock').textContent=d.toLocaleDateString([], {weekday:'short',day:'numeric',month:'short'}).toUpperCase()+' · '+d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
 
