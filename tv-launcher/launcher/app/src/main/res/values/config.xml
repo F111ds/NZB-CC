@@ -508,6 +508,9 @@
     <!-- With ember_home: true puts the posters and the apps side by side under a big title (the Cinema layout);
          false keeps the centred home (posters above the dock) with the selected item's art, dimmed, behind it. -->
     <bool name="ember_cinema_layout">false</bool>
+    <!-- With ember_home: minutes idle on Home before the showcase (Recently watched's art full screen, one item every
+         20 seconds, with a large clock); any button brings Home back. 0 turns it off (off until it has been tested on the TV). -->
+    <integer name="ember_showcase_minutes">0</integer>
     <!-- With cinematic_home, false leaves out the dock position dots under the app's name, for a quieter shelf. Can
          also be set with "cinematic_dots": false in a theme's config.json. -->
     <bool name="cinematic_dots">true</bool>

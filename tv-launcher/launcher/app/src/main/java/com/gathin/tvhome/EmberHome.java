@@ -249,15 +249,7 @@ final class EmberHome {
     void setCinemaLayout(boolean on) {
         cinemaLayout = on;
         info.setVisibility(on ? View.VISIBLE : View.GONE);
-        if (!on) {
-            // The glow from the bottom middle, under the dock, as on HAL's screen.
-            GradientDrawable g = new GradientDrawable();
-            g.setGradientType(GradientDrawable.RADIAL_GRADIENT);
-            g.setColors(new int[]{0x4DFF3C14, 0x00FF3C14});
-            g.setGradientRadius(dp(560));
-            g.setGradientCenter(0.5f, 1.08f);
-            glow.setBackground(g);
-        }
+        if (!on) applyGlow();   // the glow from the bottom middle, under the dock, as on HAL's screen
         if (!on) scrim.setBackground(new LayerDrawable(new Drawable[]{new ColorDrawable(0x8C000000),
                 new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{0xF2000000, 0x00000000, 0x00000000}),
                 new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xCC000000, 0x00000000, 0x00000000})}));
@@ -278,6 +270,7 @@ final class EmberHome {
         if (it == null) return;
         boolean same = item != null && item.id.equals(it.id);
         item = it;
+        if (!cinemaLayout) tintTo(posterColor(it.poster));
         kicker.setText(it.partway() ? "Continue watching · Kodi" : it.progress >= 0.97f ? "Watch again · Kodi" : "Kodi");
         title.setText(it.title);
         int len = it.title.length();
@@ -522,15 +515,23 @@ final class EmberHome {
         }
     }
 
-    /** A handful of soft embers rising slowly with a little sway, redrawn about 30 times a second. */
+    /**
+     * A handful of soft embers rising slowly with a little sway, redrawn about 30 times a second; their halo takes
+     * the colour of the poster you're on. Also the burst of sparks when a download is ready.
+     */
     private final class Motes extends View {
-        private static final int COUNT = 16;
+        private static final int COUNT = 16, BURST = 28;
         private final float[] x = new float[COUNT], speed = new float[COUNT], offset = new float[COUNT],
                 size = new float[COUNT], sway = new float[COUNT], phase = new float[COUNT];
-        private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+        private final float[] bx = new float[BURST], by = new float[BURST], bvx = new float[BURST], bvy = new float[BURST],
+                bsize = new float[BURST];
+        private long burstAt = -1;
+        private final android.graphics.Paint core = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG),
+                halo = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
         private final android.graphics.RectF dst = new android.graphics.RectF();
-        private Bitmap dot;
+        private Bitmap coreDot, haloDot;
         private boolean running;
+        private int haloColor = -1;
         private final long start = android.os.SystemClock.uptimeMillis();
 
         Motes(Context c) {
@@ -553,36 +554,187 @@ final class EmberHome {
             if (on) postInvalidateOnAnimation();
         }
 
-        private Bitmap dot() {
-            if (dot == null) {
-                int n = 64;
-                dot = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888);
-                android.graphics.Canvas c = new android.graphics.Canvas(dot);
-                android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
-                p.setShader(new android.graphics.RadialGradient(n / 2f, n / 2f, n / 2f,
-                        new int[]{0xFFFFDCAA, 0x99FF7832, 0x00FF3C14}, new float[]{0f, 0.35f, 1f},
-                        android.graphics.Shader.TileMode.CLAMP));
-                c.drawCircle(n / 2f, n / 2f, n / 2f, p);
+        void burst(float cx, float cy) {
+            java.util.Random r = new java.util.Random();
+            for (int i = 0; i < BURST; i++) {
+                double a = r.nextDouble() * Math.PI * 2;
+                float v = dp(120 + r.nextFloat() * 260);
+                bx[i] = cx;
+                by[i] = cy;
+                bvx[i] = (float) Math.cos(a) * v;
+                bvy[i] = (float) Math.sin(a) * v - dp(60);
+                bsize[i] = dp(3 + r.nextFloat() * 6);
             }
-            return dot;
+            burstAt = android.os.SystemClock.uptimeMillis();
+            postInvalidateOnAnimation();
+        }
+
+        private Bitmap sprite(int[] colors, float[] stops) {
+            int n = 64;
+            Bitmap bm = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas c = new android.graphics.Canvas(bm);
+            android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            p.setShader(new android.graphics.RadialGradient(n / 2f, n / 2f, n / 2f, colors, stops,
+                    android.graphics.Shader.TileMode.CLAMP));
+            c.drawCircle(n / 2f, n / 2f, n / 2f, p);
+            return bm;
         }
 
         @Override
         protected void onDraw(android.graphics.Canvas c) {
             int w = getWidth(), h = getHeight();
             if (w == 0 || h == 0) return;
-            float t = (android.os.SystemClock.uptimeMillis() - start) / 1000f;
-            Bitmap b = dot();
+            if (coreDot == null) {
+                coreDot = sprite(new int[]{0xFFFFF0DC, 0x66FFE0C0, 0x00FFE0C0}, new float[]{0f, 0.18f, 0.4f});
+                haloDot = sprite(new int[]{0xFFFFFFFF, 0x99FFFFFF, 0x00FFFFFF}, new float[]{0f, 0.35f, 1f});
+            }
+            if (haloColor != tintNow) {
+                haloColor = tintNow;
+                halo.setColorFilter(new android.graphics.PorterDuffColorFilter(tintNow | 0xFF000000,
+                        android.graphics.PorterDuff.Mode.SRC_IN));
+            }
+            long now = android.os.SystemClock.uptimeMillis();
+            float t = (now - start) / 1000f;
             for (int i = 0; i < COUNT; i++) {
                 float p = (offset[i] + t * speed[i]) % 1f;
                 float cy = h + dp(20) - p * (h + dp(60));
                 float cx = x[i] * w + (float) Math.sin(t * 0.6f + phase[i]) * sway[i];
-                paint.setAlpha(Math.round(200 * (float) Math.sin(p * Math.PI)));
-                dst.set(cx - size[i], cy - size[i], cx + size[i], cy + size[i]);
-                c.drawBitmap(b, null, dst, paint);
+                int a = Math.round(200 * (float) Math.sin(p * Math.PI));
+                dot(c, cx, cy, size[i], a);
             }
-            if (running) postInvalidateDelayed(33);
+            boolean bursting = burstAt >= 0 && now - burstAt < 1400;
+            if (bursting) {
+                float bt = (now - burstAt) / 1000f;
+                for (int i = 0; i < BURST; i++) {
+                    float drag = (float) (1 - Math.exp(-2.2 * bt)) / 2.2f;   // slows as it goes
+                    float px = bx[i] + bvx[i] * drag, py = by[i] + bvy[i] * drag + dp(90) * bt * bt;
+                    dot(c, px, py, bsize[i] * (1f - bt / 1.6f), Math.round(255 * Math.max(0f, 1f - bt / 1.4f)));
+                }
+            } else {
+                burstAt = -1;
+            }
+            if (running || bursting) postInvalidateDelayed(bursting ? 16 : 33);
         }
+
+        private void dot(android.graphics.Canvas c, float cx, float cy, float r, int alpha) {
+            halo.setAlpha(alpha);
+            dst.set(cx - r, cy - r, cx + r, cy + r);
+            c.drawBitmap(haloDot, null, dst, halo);
+            core.setAlpha(alpha);
+            c.drawBitmap(coreDot, null, dst, core);
+        }
+    }
+
+    // ---- colour: the poster's, a little warmer in the evening and cooler in the morning --------
+
+    /** The ember colour on screen now (RGB), eased towards tintTarget. */
+    private int tintNow = 0xFF3C14, tintTarget = 0xFF3C14;
+    private ValueAnimator tintAnim;
+    private static final java.util.Map<String, Integer> posterColors = new java.util.HashMap<>();
+
+    /** Sparks fly from (x, y) in root coordinates: a download is ready. */
+    void burst(float x, float y) {
+        if (!shown() || breathe == null) return;
+        motes.setVisibility(View.VISIBLE);
+        motes.burst(x, y);
+    }
+
+    private void tintTo(int rgb) {
+        rgb = timeOfDay(rgb) & 0xFFFFFF;
+        if (rgb == tintTarget) return;
+        tintTarget = rgb;
+        final int from = tintNow, to = rgb;
+        if (tintAnim != null) tintAnim.cancel();
+        tintAnim = ValueAnimator.ofFloat(0f, 1f);
+        tintAnim.setDuration(breathe == null ? 0 : 900);
+        tintAnim.addUpdateListener(a -> {
+            tintNow = (Integer) new android.animation.ArgbEvaluator().evaluate(a.getAnimatedFraction(),
+                    from | 0xFF000000, to | 0xFF000000) & 0xFFFFFF;
+            applyGlow();
+        });
+        tintAnim.start();
+    }
+
+    private void applyGlow() {
+        if (cinemaLayout) return;
+        GradientDrawable g = new GradientDrawable();
+        g.setGradientType(GradientDrawable.RADIAL_GRADIENT);
+        g.setColors(new int[]{0x55000000 | tintNow, 0x00000000 | tintNow});
+        g.setGradientRadius(dp(560));
+        g.setGradientCenter(0.5f, 1.08f);
+        glow.setBackground(g);
+        motes.invalidate();
+    }
+
+    /** Evening (5 pm to 11 pm) leans to deep orange, morning (6 to 11 am) a little towards cool blue. */
+    static int timeOfDay(int rgb) {
+        int hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        int toward;
+        float k;
+        if (hour >= 17 && hour < 23) {
+            toward = 0xFF4A10;
+            k = 0.22f;
+        } else if (hour >= 6 && hour < 11) {
+            toward = 0x8AA8FF;
+            k = 0.2f;
+        } else {
+            return rgb;
+        }
+        return mix(rgb, toward, k);
+    }
+
+    static int mix(int a, int b, float k) {
+        int r = Math.round(((a >> 16) & 255) * (1 - k) + ((b >> 16) & 255) * k);
+        int g = Math.round(((a >> 8) & 255) * (1 - k) + ((b >> 8) & 255) * k);
+        int bl = Math.round((a & 255) * (1 - k) + (b & 255) * k);
+        return (r << 16) | (g << 8) | bl;
+    }
+
+    /**
+     * A poster's colour: the average of its bright, saturated pixels (dull and dark ones count little), made bright
+     * and rich enough to glow. HAL red when there is none.
+     */
+    static int posterColor(File poster) {
+        if (poster == null || !poster.isFile()) return 0xFF3C14;
+        Integer cached = posterColors.get(poster.getPath() + poster.lastModified());
+        if (cached != null) return cached;
+        int out = 0xFF3C14;
+        try {
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(poster.getPath(), o);
+            int sample = 1;
+            while (o.outWidth / (sample * 2) >= 32) sample *= 2;
+            o = new BitmapFactory.Options();
+            o.inSampleSize = sample;
+            Bitmap bm = BitmapFactory.decodeFile(poster.getPath(), o);
+            if (bm != null) {
+                double sr = 0, sg = 0, sb = 0, sw = 0;
+                float[] hsv = new float[3];
+                for (int yy = 0; yy < bm.getHeight(); yy++) {
+                    for (int xx = 0; xx < bm.getWidth(); xx++) {
+                        int c = bm.getPixel(xx, yy);
+                        Color.colorToHSV(c, hsv);
+                        double w = hsv[1] * hsv[1] * hsv[2];
+                        sr += Color.red(c) * w;
+                        sg += Color.green(c) * w;
+                        sb += Color.blue(c) * w;
+                        sw += w;
+                    }
+                }
+                bm.recycle();
+                if (sw > 0.5) {
+                    Color.colorToHSV(Color.rgb((int) (sr / sw), (int) (sg / sw), (int) (sb / sw)), hsv);
+                    hsv[1] = Math.max(0.65f, hsv[1]);
+                    hsv[2] = 1f;
+                    out = Color.HSVToColor(hsv) & 0xFFFFFF;
+                }
+            }
+        } catch (Exception ignored) {
+            // HAL red
+        }
+        posterColors.put(poster.getPath() + poster.lastModified(), out);
+        return out;
     }
 
     void shutdown() {

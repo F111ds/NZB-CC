@@ -83,7 +83,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.24.0"
+VERSION = "3.25.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -4080,6 +4080,75 @@ def tv_poster(item_id: str) -> bytes | None:
         return None
 
 
+# How the TV copes with the HAL-style home (POST /api/tv/perf, once a minute from the TV app): free memory, the
+# app's memory and CPU, and how smoothly Home draws. The last day is kept (tv_perf.json) and summed up by
+# GET /api/tv/perf, so the animations can be checked against what the TV can take.
+TV_PERF_FILE = BASE_DIR / "tv_perf.json"
+TV_PERF_KEEP = 1440
+_tv_perf: list[dict] = []
+_tv_perf_lock = threading.Lock()
+_tv_perf_logged = 0.0
+
+
+def tv_perf_add(body: dict, now: float | None = None) -> dict:
+    """Stores one reading from the TV (numbers only, clamped) and logs a summary every 10 minutes."""
+    global _tv_perf_logged
+    now = time.time() if now is None else now
+    def num(k, hi):
+        v = to_float(body.get(k))
+        return max(0.0, min(hi, v))
+    r = {"t": now, "avail_mb": num("avail_mb", 1e6), "total_mb": num("total_mb", 1e6), "low_memory": bool(body.get("low_memory")),
+         "app_mb": num("app_mb", 1e5), "cpu": round(to_float(body.get("cpu")), 1) if to_float(body.get("cpu")) >= 0 else None,
+         "cores": int(num("cores", 64)), "frames": int(num("frames", 1e6)), "slow_frames": int(num("slow_frames", 1e6)),
+         "freezes": int(num("freezes", 1e6)), "home_s": int(num("home_s", 3600)),
+         "screen": "home" if body.get("screen") == "home" else "away", "version": str(body.get("version") or "")[:40]}
+    with _tv_perf_lock:
+        if not _tv_perf:
+            try:
+                old = json.loads(read_text_retry(TV_PERF_FILE))
+                _tv_perf.extend(x for x in old if isinstance(x, dict) and now - to_float(x.get("t")) < 86400)
+            except (OSError, ValueError):
+                pass
+        _tv_perf.append(r)
+        del _tv_perf[:-TV_PERF_KEEP]
+        try:
+            tmp = TV_PERF_FILE.with_name(TV_PERF_FILE.name + ".tmp")
+            tmp.write_text(json.dumps(_tv_perf), encoding="utf-8")
+            replace_retry(tmp, TV_PERF_FILE)
+        except OSError:
+            pass
+    if now - _tv_perf_logged >= 600:
+        _tv_perf_logged = now
+        s = tv_perf_summary(3600, now)
+        log.info("TV: %s MB free of %s, app %s MB, CPU %s%% (peak %s%%), smooth %s%% of %s frames, %s freezes (last hour)",
+                 s["avail_mb_min"], s["total_mb"], s["app_mb_max"], s["cpu_avg"], s["cpu_max"], s["smooth_pct"], s["frames"], s["freezes"])
+    return r
+
+
+def tv_perf_summary(window: float = 3600, now: float | None = None) -> dict:
+    now = time.time() if now is None else now
+    with _tv_perf_lock:
+        rs = [r for r in _tv_perf if now - r["t"] <= window]
+    cpus = [r["cpu"] for r in rs if r.get("cpu") is not None]
+    frames = sum(r["frames"] for r in rs)
+    slow = sum(r["slow_frames"] for r in rs)
+    return {"readings": len(rs), "total_mb": rs[-1]["total_mb"] if rs else None,
+            "avail_mb_min": min((r["avail_mb"] for r in rs), default=None),
+            "avail_mb_now": rs[-1]["avail_mb"] if rs else None,
+            "app_mb_max": max((r["app_mb"] for r in rs), default=None),
+            "cpu_avg": round(sum(cpus) / len(cpus), 1) if cpus else None, "cpu_max": max(cpus, default=None),
+            "frames": frames, "slow_frames": slow, "freezes": sum(r["freezes"] for r in rs),
+            "smooth_pct": round(100.0 * (frames - min(slow, frames)) / frames, 1) if frames else None,
+            "low_memory": any(r["low_memory"] for r in rs)}
+
+
+def tv_perf_report() -> dict:
+    with _tv_perf_lock:
+        latest = dict(_tv_perf[-1]) if _tv_perf else None
+        history = [dict(r) for r in _tv_perf[-120:]]
+    return {"latest": latest, "last_hour": tv_perf_summary(3600), "last_day": tv_perf_summary(86400), "history": history}
+
+
 def tv_backdrop(item_id: str) -> bytes | None:
     """A Recently watched item's background art (saved by _tv_save_watched_backdrop), or None."""
     if not TV_WATCHED_ID_RE.fullmatch(item_id or ""):
@@ -6289,6 +6358,8 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
                 self.send_json(404, {"error": "No poster for this movie."})
                 return
             self._send(200, raw, _image_type(raw) or "image/jpeg", {"Cache-Control": "private, max-age=604800"})
+        elif path == "/api/tv/perf":
+            self.send_json(200, tv_perf_report())
         elif path == "/api/tv/backdrop":
             raw = tv_backdrop(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
             if not raw:
@@ -6399,6 +6470,9 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             item = {"movieid": movieid} if movieid > 0 else {"episodeid": episodeid}
             kodi_call("Player.Open", {"item": item, "options": {"resume": bool(body.get("resume"))}})
             log.info("kodi play %s resume=%s ip=%s", item, bool(body.get("resume")), self.ip)
+            self.send_json(200, {"ok": True})
+        elif path == "/api/tv/perf":
+            tv_perf_add(body)
             self.send_json(200, {"ok": True})
         elif path == "/api/tv/play":
             result = tv_play(str(body.get("id") or ""), from_start=bool(body.get("from_start")))

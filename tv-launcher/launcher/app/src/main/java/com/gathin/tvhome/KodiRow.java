@@ -192,6 +192,13 @@ final class KodiRow {
 
     /** NZB-CC Cinema home: the time-left chip on the focused poster is left out (the big picture shows it). */
     static boolean cinema;
+    /** NZB-CC HAL-style home: a faint reflection under each poster, as if the row stood on a glossy floor. */
+    static boolean reflections;
+
+    /** The reflection's height for a poster this tall. */
+    static int reflectionPx(int posterH) {
+        return reflections ? Math.round(posterH * 0.28f) : 0;
+    }
 
     /** Sizes the posters to the height the row has on screen. */
     void setPosterHeight(int px) {
@@ -799,15 +806,41 @@ final class KodiRow {
         card.addView(ring, new FrameLayout.LayoutParams(-1, -1));
 
         cell.addView(card);
-        cell.setTag(new View[]{card, title, img, badge, seen, ring, track, fill, left});
+        ImageView ref = new ImageView(ctx);
+        ref.setScaleType(ImageView.ScaleType.FIT_XY);
+        ref.setVisibility(View.GONE);
+        cell.addView(ref);
+        cell.setTag(new View[]{card, title, img, badge, seen, ring, track, fill, left, ref});
         return cell;
+    }
+
+    /** The poster's foot, upside down and fading out: its reflection on the floor under the row. */
+    static Bitmap reflection(Bitmap poster, int w, int h) {
+        try {
+            Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas c = new android.graphics.Canvas(out);
+            // the bottom of the poster (the same share of it as h is of the poster's height), flipped
+            int srcH = Math.max(1, Math.round(poster.getHeight() * (h / (float) (w * 3 / 2))));
+            android.graphics.Rect src = new android.graphics.Rect(0, poster.getHeight() - srcH, poster.getWidth(), poster.getHeight());
+            c.save();
+            c.scale(1f, -1f, 0f, h / 2f);
+            c.drawBitmap(poster, src, new android.graphics.Rect(0, 0, w, h), new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG));
+            c.restore();
+            android.graphics.Paint fade = new android.graphics.Paint();
+            fade.setShader(new android.graphics.LinearGradient(0, 0, 0, h, 0x4DFFFFFF, 0x00FFFFFF, android.graphics.Shader.TileMode.CLAMP));
+            fade.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN));
+            c.drawRect(0, 0, w, h, fade);
+            return out;
+        } catch (OutOfMemoryError e) {
+            return null;
+        }
     }
 
     private final class Holder extends RecyclerView.ViewHolder {
         final View card, ring, badge, seen, track, fill;
         final TextView left;
         final TextView title;
-        final ImageView img;
+        final ImageView img, ref;
         Item item;
 
         Holder(FrameLayout cell) {
@@ -822,6 +855,7 @@ final class KodiRow {
             track = v[6];
             fill = v[7];
             left = (TextView) v[8];
+            ref = (ImageView) v[9];
             cell.setOnFocusChangeListener((view, has) -> {
                 float s = has ? 1.06f : 1f;   // NZB-CC: the bigger posters grow less, clear of the heading
                 card.animate().scaleX(s).scaleY(s).translationZ(has ? dp(6) : 0).setDuration(140).start();
@@ -867,7 +901,8 @@ final class KodiRow {
 
         void bind(Item it, int position) {
             item = it;
-            ViewGroup.MarginLayoutParams lp = new ViewGroup.MarginLayoutParams(posterW, posterH);
+            int refH = reflectionPx(posterH);
+            ViewGroup.MarginLayoutParams lp = new ViewGroup.MarginLayoutParams(posterW, posterH + refH);
             int gap = dp(12);
             lp.setMargins(gap / 2, dp(8), gap / 2, dp(8));
             itemView.setLayoutParams(new RecyclerView.LayoutParams(lp));
@@ -897,6 +932,14 @@ final class KodiRow {
             }
             img.setImageBitmap(bm);
             img.setVisibility(bm == null ? View.GONE : View.VISIBLE);
+            Bitmap rb = refH > 0 && bm != null ? reflection(bm, posterW, refH) : null;
+            ref.setImageBitmap(rb);
+            ref.setVisibility(rb == null ? View.GONE : View.VISIBLE);
+            if (rb != null) {
+                FrameLayout.LayoutParams rl = new FrameLayout.LayoutParams(posterW, refH);
+                rl.topMargin = posterH + dp(3);
+                ref.setLayoutParams(rl);
+            }
             itemView.setContentDescription(it.title);
         }
     }
