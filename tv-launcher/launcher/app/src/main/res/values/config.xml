@@ -501,6 +501,13 @@
          dots, the focus glow takes the app's colour and the dock band turns translucent. false keeps the plain
          shelf. Can also be set with "cinematic_home": true in a theme's config.json. -->
     <bool name="cinematic_home">false</bool>
+    <!-- NZB-CC Cinema home (design A, in HAL's red style): the Kodi item you're on fills the top of the screen (its
+         background art, title, story, time left, Resume), the posters and the apps share the bottom row, and a HAL
+         pill in the top bar says whether all is well (Cinema layout). Needs the compact dock (single_row) and the Kodi row. -->
+    <bool name="ember_home">true</bool>
+    <!-- With ember_home: true puts the posters and the apps side by side under a big title (the Cinema layout);
+         false keeps the centred home (posters above the dock) with the selected item's art, dimmed, behind it. -->
+    <bool name="ember_cinema_layout">false</bool>
     <!-- With cinematic_home, false leaves out the dock position dots under the app's name, for a quieter shelf. Can
          also be set with "cinematic_dots": false in a theme's config.json. -->
     <bool name="cinematic_dots">true</bool>

@@ -74,10 +74,16 @@ final class KodiRow {
 
         /** OK held on a poster: the options menu (resume, play from the start, mark as watched, remove). */
         void onKodiItemMenu(Item item, View anchor);
+
+        /** NZB-CC Cinema home: Right past the last poster (onto the apps beside the row). True when handled. */
+        boolean onKodiRowRightEnd();
     }
 
     static final class Item {
         String id = "", title = "", quality = "", file = "", posterUrl = "", artRef = "", episodeTitle = "";
+        /** NZB-CC Cinema home: the story, the genres ("Drama · Sci-Fi") and the background art (from the PC). */
+        String plot = "", genres = "";
+        File backdrop;
         int year, runtime, movieid, episodeid, season, episode, remaining;
         boolean isNew, watched;
         /** How far in, 0 to 1 (1 when finished). */
@@ -178,6 +184,15 @@ final class KodiRow {
         return items.size();
     }
 
+    /** NZB-CC Cinema home: the poster that had focus last (the one watched last at first), or null. */
+    Item current() {
+        if (items.isEmpty()) return null;
+        return items.get(Math.max(0, Math.min(lastIndex, items.size() - 1)));
+    }
+
+    /** NZB-CC Cinema home: the time-left chip on the focused poster is left out (the big picture shows it). */
+    static boolean cinema;
+
     /** Sizes the posters to the height the row has on screen. */
     void setPosterHeight(int px) {
         int h = Math.max(Math.round(60 * density), px);
@@ -270,6 +285,15 @@ final class KodiRow {
                     // no poster this time: left out of the row until it has one
                 }
             }
+            String bg = o.optString("backdrop", "");
+            it.backdrop = backdropFile(it.id);
+            if (!bg.isEmpty() && !"null".equals(bg) && !it.backdrop.isFile()) {
+                try {
+                    writeFile(it.backdrop, http("GET", extras.kodiServer + bg, null, true, 15000));
+                } catch (IOException ignored) {
+                    // no background art this time: the poster stands in
+                }
+            }
             if (it.poster.isFile() && !hiddenIds().contains(it.id)) out.add(it);
         }
         return out;
@@ -301,6 +325,7 @@ final class KodiRow {
             it.year = o.optInt("year");
             JSONObject art = o.optJSONObject("art");
             it.artRef = art == null ? "" : art.optString("poster", "");
+            it.backdrop = backdropFile(it.id);
             fillProgress(it, o);
             all.add(new Object[]{o.optString("lastplayed", ""), it});
         }
@@ -317,6 +342,7 @@ final class KodiRow {
             it.episode = o.optInt("episode");
             JSONObject art = o.optJSONObject("art");
             it.artRef = art == null ? "" : art.optString("tvshow.poster", art.optString("season.poster", ""));
+            it.backdrop = backdropFile(it.id);
             fillProgress(it, o);
             all.add(new Object[]{o.optString("lastplayed", ""), it});
         }
@@ -375,11 +401,29 @@ final class KodiRow {
         if ("null".equals(it.file)) it.file = "";
         if ("null".equals(it.episodeTitle)) it.episodeTitle = "";
         if ("null".equals(it.quality)) it.quality = "";
+        it.plot = o.optString("plot", "");
+        if ("null".equals(it.plot)) it.plot = "";
+        Object g = o.opt("genres");
+        if (g instanceof JSONArray) {
+            StringBuilder b = new StringBuilder();
+            JSONArray ga = (JSONArray) g;
+            for (int i = 0; i < ga.length() && i < 2; i++) {
+                String one = ga.optString(i, "");
+                if (!one.isEmpty()) b.append(b.length() > 0 ? " \u00B7 " : "").append(one);
+            }
+            it.genres = b.toString();
+        } else if (g instanceof String) {
+            it.genres = (String) g;
+        }
         return it;
     }
 
     private File posterFile(String id) {
         return new File(posters, id + ".img");
+    }
+
+    private File backdropFile(String id) {
+        return new File(posters, id + ".bg");
     }
 
     private void save(List<Item> list) {
@@ -388,11 +432,13 @@ final class KodiRow {
             Set<String> keep = new HashSet<>();
             for (Item it : list) {
                 keep.add(it.id + ".img");
+                keep.add(it.id + ".bg");
                 a.put(new JSONObject().put("id", it.id).put("title", it.title).put("year", it.year)
                         .put("runtime", it.runtime).put("quality", it.quality).put("new", it.isNew)
                         .put("watched", it.watched).put("movieid", it.movieid).put("file", it.file)
                         .put("episodeid", it.episodeid).put("season", it.season).put("episode", it.episode)
-                        .put("episode_title", it.episodeTitle).put("progress", it.progress).put("remaining", it.remaining));
+                        .put("episode_title", it.episodeTitle).put("progress", it.progress).put("remaining", it.remaining)
+                        .put("plot", it.plot).put("genres", it.genres));
             }
             writeFile(saved, new JSONObject().put("items", a).toString().getBytes(StandardCharsets.UTF_8));
             File[] old = posters.listFiles();
@@ -411,6 +457,7 @@ final class KodiRow {
                 Item it = fromJson(a.getJSONObject(i));
                 if (it.id.isEmpty()) continue;
                 it.poster = posterFile(it.id);
+                it.backdrop = backdropFile(it.id);
                 if (it.poster.isFile() && out.size() < extras.kodiRowSize && !hiddenIds().contains(it.id)) out.add(it);
             }
         } catch (Exception ignored) {
@@ -670,6 +717,10 @@ final class KodiRow {
         });
         card.setClipToOutline(true);
         card.setElevation(dp(4));
+        if (android.os.Build.VERSION.SDK_INT >= 28) {   // NZB-CC: the focused poster's lift glows HAL red
+            card.setOutlineSpotShadowColor(0xFFFF3C14);
+            card.setOutlineAmbientShadowColor(0xFFFF3C14);
+        }
 
         TextView title = new TextView(ctx);
         title.setTextColor(Color.WHITE);
@@ -718,7 +769,8 @@ final class KodiRow {
         FrameLayout track = new FrameLayout(ctx);
         track.setBackgroundColor(0x59000000);
         View fill = new View(ctx);
-        fill.setBackgroundColor(0xFF17B2E7);
+        fill.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[]{0xFFD4140A, 0xFFFF5A1F, 0xFFFFD27A}));   // NZB-CC: HAL's red, not Kodi blue
         track.addView(fill, new FrameLayout.LayoutParams(0, -1, Gravity.START));
         card.addView(track, new FrameLayout.LayoutParams(-1, dp(3), Gravity.BOTTOM));
 
@@ -740,7 +792,7 @@ final class KodiRow {
         View ring = new View(ctx);
         GradientDrawable rd = new GradientDrawable();
         rd.setCornerRadius(dp(8));
-        rd.setStroke(dp(2.5f), Color.WHITE);
+        rd.setStroke(dp(2.5f), 0xFFFFB08A);   // NZB-CC: a warm HAL ring
         rd.setColor(Color.TRANSPARENT);
         ring.setBackground(rd);
         ring.setAlpha(0f);
@@ -774,7 +826,7 @@ final class KodiRow {
                 float s = has ? 1.06f : 1f;   // NZB-CC: the bigger posters grow less, clear of the heading
                 card.animate().scaleX(s).scaleY(s).translationZ(has ? dp(6) : 0).setDuration(140).start();
                 ring.animate().alpha(has ? 1f : 0f).setDuration(140).start();
-                left.animate().alpha(has && left.getText().length() > 0 ? 1f : 0f).setDuration(140).start();
+                left.animate().alpha(has && !cinema && left.getText().length() > 0 ? 1f : 0f).setDuration(140).start();
                 if (has && item != null) {
                     lastIndex = getBindingAdapterPosition();
                     host.onKodiItemFocused(item);
@@ -805,7 +857,11 @@ final class KodiRow {
                 }
                 // The row's ends: stay put instead of focus escaping to the clock or the dock.
                 if (code == KeyEvent.KEYCODE_DPAD_LEFT && pos == 0) return true;
-                return code == KeyEvent.KEYCODE_DPAD_RIGHT && pos == items.size() - 1;
+                if (code == KeyEvent.KEYCODE_DPAD_RIGHT && pos == items.size() - 1) {
+                    host.onKodiRowRightEnd();
+                    return true;
+                }
+                return false;
             });
         }
 
@@ -824,7 +880,7 @@ final class KodiRow {
             track.setVisibility(it.progress > 0f ? View.VISIBLE : View.GONE);
             int minutes = it.minutesLeft();
             left.setText(minutes > 0 ? Item.duration(minutes) + " left" : "");
-            left.setAlpha(itemView.hasFocus() && minutes > 0 ? 1f : 0f);
+            left.setAlpha(itemView.hasFocus() && !cinema && minutes > 0 ? 1f : 0f);
             fill.getLayoutParams().width = Math.round(posterW * Math.min(1f, it.progress));
             fill.requestLayout();
             Bitmap bm = null;

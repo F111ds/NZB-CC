@@ -129,8 +129,13 @@ experience on top of it, piece by piece, checking each change on the real TV.
 - **A calm dock**: one glass band along the bottom with just the apps we use, each as its own icon: Netflix, Prime
   Video, YouTube, Kodi, and **HAL 9000**. Everything else is behind the library button, and the dock keeps the order
   you set.
-- **The look**: the Sora font, and a time-of-day sky in place of a wallpaper (night blues, a warm sunset glow).
-  There's a news ticker too (with Mexico News Daily), off by default because it was too busy.
+- **The look, in HAL's red style**: behind the posters, the background art of the movie or show you're on fills
+  the screen, dimmed so the posters stand out, and fades to the next one as you move along the row. HAL's red glow
+  rises from under the dock and gently breathes, a few embers drift slowly up the screen, and the art slowly
+  drifts in and out. The posters' bars, the KODI tag and the dock's glass are HAL red; the top line keeps its own
+  look. (The motion pauses whenever an app is open, and is off when the TV's animations are off.) Without anything
+  in Recently watched, it's the Sora font on a time-of-day sky (night blues, a warm sunset glow). There's a news
+  ticker too (with Mexico News Daily), off by default because it was too busy.
 
 ### The screensaver
 

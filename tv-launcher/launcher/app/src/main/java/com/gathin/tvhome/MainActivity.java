@@ -95,7 +95,7 @@ import java.util.Set;
 /**
  * tvOS style home: black, a pinned dock row, an app grid, and one glass highlight that springs between tiles.
  */
-public class MainActivity extends Activity implements AppAdapter.TileListener, KodiRow.Host , DownloadNotes.Listener {
+public class MainActivity extends Activity implements AppAdapter.TileListener, KodiRow.Host , DownloadNotes.Listener, EmberHome.Host {
     @Override
     protected void attachBaseContext(android.content.Context base) {
         super.attachBaseContext(LauncherLocale.wrap(base));   // locale
@@ -214,6 +214,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private TextView weatherPill;
     private KodiRow kodiRow;
     private View kodiBlock;
+    /** NZB-CC Cinema home (config.xml ember_home): the Kodi item's big picture, posters and apps in one row. */
+    private EmberHome ember;
+    private boolean cinemaHeader;
+    private boolean cinemaLayout;
+
+    private boolean cinemaOn() {
+        return cinemaLayout && ember != null && ember.shown();
+    }
     private TextView kodiCount, kodiFocusTitle, kodiFocusMeta;
     private TextView raceKicker, raceHeadline, raceSessions;
     /** game_day: each team's next game from an add-on, rotating in the race panel; null when the key is off. */
@@ -633,6 +641,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         kodiFocusTitle = findViewById(R.id.kodiFocusTitle);
         kodiFocusMeta = findViewById(R.id.kodiFocusMeta);
         kodiRow = new KodiRow(this, extras, handler, findViewById(R.id.kodiRow), this);
+        if (getResources().getBoolean(R.bool.ember_home) && AppAdapter.compactDock && dockRow && kodiRow.enabled()) {
+            ember = new EmberHome(this, root, root.indexOfChild(findViewById(R.id.heroScrim)) + 1, kodiRow, extras,
+                    handler, this);
+            cinemaLayout = getResources().getBoolean(R.bool.ember_cinema_layout);
+            ember.setCinemaLayout(cinemaLayout);
+            KodiRow.cinema = cinemaLayout;
+            // The top bar stays as it was (no HAL pill there).
+        }
         // The rotation runs on the clock that never jumps: setting the TV's time must not stall or stretch a turn.
         rotationStart = SystemClock.elapsedRealtime();
         showStats = cfg.showStats;
@@ -765,10 +781,42 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
                 // NZB-CC: the compact row in the middle of the screen; once it is wider than the screen it
                 // scrolls sideways from the usual 10dp sides.
                 int cells = adapter.appCount() + (adapter.isLibraryAt(adapter.appCount()) ? 1 : 0);
+                boolean cinemaRow = cinemaLayout && ember != null && kodiRowShown();
+                float wantScale = extras.dockTileScale;
+                int cinemaLeft = 0, cinemaRight = (int) (10 * density);
+                if (cinemaRow && cells > 0) {
+                    // NZB-CC Cinema home: the apps share the bottom row with the posters, so they start just right of
+                    // the posters (48dp in, five 75dp posters 12dp apart) and their tiles shrink to fit what is left (never below a fifth of their size).
+                    Rect gr = new Rect(0, 0, 1, 1);
+                    root.offsetDescendantRectToMyCoords(grid, gr);
+                    int posters = Math.min(5, Math.max(1, kodiRow.count()));
+                    int postersEnd = (int) ((42 + posters * (112 * 2 / 3f + 12)) * density);
+                    cinemaLeft = Math.max((int) (10 * density), postersEnd - gr.left + (int) (26 * density));
+                    int base = Math.round(tileW / Math.max(0.01f, AppAdapter.tileScale));
+                    int fit = ((r - l) - cinemaLeft - cinemaRight) / cells - Math.round(AppAdapter.COMPACT_GAP_DP * density);
+                    wantScale = Math.max(0.2f, Math.min(extras.dockTileScale, fit / (float) Math.max(1, base)));
+                }
+                if (Math.abs(wantScale - AppAdapter.tileScale) > 0.01f) {
+                    int base = Math.round(tileW / Math.max(0.01f, AppAdapter.tileScale));
+                    AppAdapter.tileScale = wantScale;
+                    tileW = Math.round(base * wantScale);
+                    // The tiles take their size when they are made: make them again at the new size.
+                    grid.post(() -> {
+                        grid.swapAdapter(adapter, true);
+                        grid.getRecycledViewPool().clear();
+                        grid.requestLayout();
+                    });
+                }
                 int rowW = cells * AppAdapter.compactCellPx(tileW, density);
                 int side = Math.max((int) (10 * density), ((r - l) - rowW) / 2);
-                if (grid.getPaddingLeft() != side || grid.getPaddingRight() != side) {
-                    grid.setPadding(side, grid.getPaddingTop(), side, grid.getPaddingBottom());
+                int sideR = side;
+                if (cinemaRow) {
+                    // NZB-CC Cinema home: the apps at the right, beside the posters (which take about the left half).
+                    sideR = cinemaRight;
+                    side = Math.max(cinemaLeft, (r - l) - rowW - sideR);
+                }
+                if (grid.getPaddingLeft() != side || grid.getPaddingRight() != sideR) {
+                    grid.setPadding(side, grid.getPaddingTop(), sideR, grid.getPaddingBottom());
                 }
             }
             int itemH = AppAdapter.itemHeightPx(AppAdapter.tileHeightPx(tileW), density);
@@ -1179,6 +1227,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         resumed = true;
         if (newsTicker != null) newsTicker.start();
         if (kodiRow != null) kodiRow.refreshNow();   // NZB-CC: what was just watched shows within seconds
+        if (ember != null) {
+            ember.resumeMotion();
+            ember.refreshHal();
+        }
         // A festival that started or ended while Home was in the background: rebuild with or without it.
         if (festive != festival.active(LocalDate.now())) {
             recreate();
@@ -1397,6 +1449,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         super.onPause();
         resumed = false;
         if (newsTicker != null) newsTicker.stop();
+        if (ember != null) ember.pause();
         // No UP reaches a paused Home, so a vendor-key hold it saw go down would still open its app later.
         // Only Home's own share is dropped: a key service that saw the same DOWN keeps its hold.
         RemoteKeys.release(this);
@@ -1481,6 +1534,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         RemoteKeys.release(this);
         cancelHoldOk();
         if (gameDay != null) gameDay.shutdown();
+        if (ember != null) ember.shutdown();
         if (weatherNow != null) weatherNow.shutdown();
         if (exchangeRate != null) exchangeRate.shutdown();
         if (downloadNotes != null) downloadNotes.shutdown();
@@ -2020,6 +2074,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     // ---- top shelf -------------------------------------------------------------------------------
 
     private void showHero(int position, float dockTopInRoot) {
+        if (cinemaOn()) {   // Cinema home: no app name over the row; the icons speak for themselves
+            hero.animate().cancel();
+            hero.setAlpha(0f);
+            return;
+        }
         String label = adapter.labelAt(position);
         int color = adapter.ambientColorAt(position);
         float y = dockTopInRoot - 14 * density - 26 * density - hero.getHeight();
@@ -2555,6 +2614,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
                     grid.playSoundEffect(SoundEffectConstants.NAVIGATION_RIGHT);
                     onLibraryRequested();
                 }
+                return true;
+            }
+            if (!forward && position == 0 && cinemaOn() && kodiRow.focus()) {
+                grid.playSoundEffect(SoundEffectConstants.NAVIGATION_LEFT);   // Cinema home: the posters left of the apps
                 return true;
             }
             return !forward && position == 0;
@@ -3129,6 +3192,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (weatherNow != null) weatherNow.refreshIfStale();
         if (exchangeRate != null) exchangeRate.refreshIfStale();
         if (kodiRow != null) kodiRow.refreshIfStale();
+        if (ember != null) ember.refreshHal();
     }
 
     /** Where layoutKodiRow puts the shelf (screen y); the scroll listener moves it from here. */
@@ -3140,6 +3204,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     /** Up from the dock: onto the Kodi row when it shows (true), else the top bar takes it (false). */
     private boolean upToKodiRow() {
+        if (cinemaOn()) return false;   // Cinema home: the row is beside the apps, Up goes to the top bar
         if (!kodiRowShown() || !kodiRow.focus()) return false;
         grid.playSoundEffect(SoundEffectConstants.NAVIGATION_UP);
         return true;
@@ -3157,6 +3222,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         boolean kodi = kodiRowShown();
         boolean news = newsTicker != null && newsFeed != null && newsFeed.hasHeadlines() && dockRow;
         if (!kodi) kodiBlock.setVisibility(View.GONE);
+        if (ember != null) {
+            if (kodi && cinemaLayout) {
+                layoutCinema();
+                return;
+            }
+            if (kodi) {
+                if (!ember.shown()) {
+                    ember.setShown(true);
+                    ember.show(kodiRow.current());
+                }
+                ember.layout(root.getWidth(), root.getHeight(), 0, root.getHeight(), animations && !reducedMotion);
+            } else {
+                ember.setShown(false);
+            }
+        }
         if (newsTicker != null && !news) newsTicker.setVisibility(View.GONE);
         if (!kodi && !news) return;
         Rect r = new Rect(0, 0, grid.getWidth(), grid.getHeight());
@@ -3185,7 +3265,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         int shown = 0;
         if (kodi) {
             int room = bottom - top - tickerH - shelfExtra - (blocks + 1) * minGap;
-            shown = Math.min(room, (int) (205 * density));
+            shown = Math.min(room, (int) (170 * density));   // NZB-CC: a little smaller than the 205dp before
             kodiRow.setPosterHeight(shown);
         }
         int kodiH = kodi ? shown + shelfExtra : 0;
@@ -3240,10 +3320,75 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         }
     }
 
+    /**
+     * NZB-CC Cinema home: the posters at the bottom left, level with the apps (which the grid moves to the right),
+     * and the focused item's big picture above them.
+     */
+    private void layoutCinema() {
+        if (newsTicker != null) newsTicker.setVisibility(View.GONE);
+        int w = root.getWidth(), h = root.getHeight();
+        if (w == 0 || h == 0) return;
+        int posterH = (int) (112 * density);
+        kodiRow.setPosterHeight(posterH);
+        ViewGroup head = (ViewGroup) ((ViewGroup) kodiBlock).getChildAt(0);
+        if (!cinemaHeader) {
+            cinemaHeader = true;
+            for (int i = 0; i < head.getChildCount(); i++) head.getChildAt(i).setVisibility(i == 1 ? View.VISIBLE : View.GONE);
+            TextView label = (TextView) head.getChildAt(1);
+            label.setText("Recently watched");
+            label.setAllCaps(true);
+            label.setLetterSpacing(0.24f);
+            label.setTextSize(9);
+            label.setTextColor(0x99FFDCCD);
+            LinearLayout.LayoutParams hl = (LinearLayout.LayoutParams) label.getLayoutParams();
+            hl.setMarginStart(0);
+            label.setLayoutParams(hl);
+            View list = ((ViewGroup) kodiBlock).getChildAt(1);
+            LinearLayout.LayoutParams ll = (LinearLayout.LayoutParams) list.getLayoutParams();
+            ll.gravity = Gravity.START;
+            list.setLayoutParams(ll);
+        }
+        LinearLayout.LayoutParams hlp = (LinearLayout.LayoutParams) head.getLayoutParams();
+        if (hlp.getMarginStart() != (int) (6 * density)) {
+            hlp.setMarginStart((int) (6 * density));
+            head.setLayoutParams(hlp);
+        }
+        // The posters' foot level with the foot of the app tiles.
+        int dockBottom = h - (int) (44 * density);
+        RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(0);
+        View card = vh == null ? null : vh.itemView.findViewById(R.id.card);
+        if (card != null && card.getHeight() > 0) {
+            Rect c = new Rect(0, 0, card.getWidth(), card.getHeight());
+            root.offsetDescendantRectToMyCoords(card, c);
+            dockBottom = c.bottom;
+        }
+        int headH = head.getHeight() > 0 ? head.getHeight() : (int) (20 * density);
+        int y = dockBottom + (int) (4 * density) - posterH - (int) (8 * density) - headH - kodiBlock.getPaddingTop();
+        kodiBaseY = y;
+        kodiBlock.setY(y);
+        // 48dp from the left edge, like the text above: the block's 46dp margin, 14dp padding and 6dp card margin.
+        kodiBlock.setTranslationX((48 - 46 - 14 - 6) * density);
+        kodiCount.setVisibility(View.GONE);
+        if (kodiBlock.getVisibility() != View.VISIBLE) {
+            kodiBlock.setVisibility(View.VISIBLE);
+            ViewGroup bar = findViewById(R.id.topButtons);
+            for (int i = 0; i < bar.getChildCount(); i++) bar.getChildAt(i).setNextFocusDownId(R.id.kodiRow);
+        }
+        if (!ember.shown()) {
+            ember.setShown(true);
+            ember.show(kodiRow.current());
+        }
+        Rect cb = new Rect(0, 0, clockBlock.getWidth(), clockBlock.getHeight());
+        root.offsetDescendantRectToMyCoords(clockBlock, cb);
+        ember.layout(w, h, cb.bottom + (int) (20 * density), y + kodiBlock.getPaddingTop() - (int) (18 * density),
+                animations && !reducedMotion);
+    }
+
     @Override
     public void onKodiItemFocused(KodiRow.Item item) {
         hideGlass();
         hideHero();
+        if (ember != null && ember.shown()) ember.show(item);
         kodiFocusTitle.setText(item.title);
         kodiFocusMeta.setText(item.meta());
     }
@@ -3300,7 +3445,26 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     }
 
     @Override
+    public boolean onKodiRowRightEnd() {
+        if (!cinemaOn()) return false;
+        focusTile(0);
+        grid.playSoundEffect(SoundEffectConstants.NAVIGATION_RIGHT);
+        return true;
+    }
+
+    @Override
+    public void onEmberUp() {
+        firstTopButton().requestFocus();
+    }
+
+    @Override
+    public void onEmberDown() {
+        if (!kodiRow.focus()) focusTile(0);
+    }
+
+    @Override
     public void onKodiRowDown() {
+        if (cinemaOn()) return;   // Cinema home: nothing under the row
         int pos = singleRow ? Math.max(0, lastFocused) : lastFocused >= 0 && lastFocused < COLUMNS ? lastFocused : 0;
         focusTile(Math.max(0, Math.min(pos, adapter.appCount() - 1)));
         grid.playSoundEffect(SoundEffectConstants.NAVIGATION_DOWN);
@@ -3308,11 +3472,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     @Override
     public void onKodiRowUp() {
+        if (cinemaOn() && ember.focusButtons()) return;
         firstTopButton().requestFocus();
     }
 
     @Override
     public void onKodiRowChanged() {
+        if (ember != null && ember.shown() && kodiRow.current() != null && !kodiRow.list.hasFocus()) ember.show(kodiRow.current());
         if (!kodiRowShown()) {
             ViewGroup bar = findViewById(R.id.topButtons);
             for (int i = 0; i < bar.getChildCount(); i++) bar.getChildAt(i).setNextFocusDownId(R.id.grid);
