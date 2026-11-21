@@ -252,14 +252,22 @@ let seed=7;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
 const sparks=Array.from({length:2},()=>({x:rnd()*FW,y:rnd()*FH,v:18+rnd()*40,r:1+rnd()*2.6,ph:rnd()*6.28,dr:(rnd()-.5)*20}));
 const motes=Array.from({length:5},()=>({s:Math.floor(rnd()*4),o:rnd(),v:.12+rnd()*.18,w:(rnd()-.5)*120,r:1+rnd()*1.8}));
 const srcPts=[[314*2,115*2],[314*2,312*2],[646*2,115*2],[646*2,312*2]];
+const IDLE={from:[0,0],to:[0,0],at:-9,next:2+Math.random()*3,room:-1,nextRoom:25+Math.random()*60};
+function idleGaze(t,sx,sy){const sm=x=>x<=0?0:x>=1?1:x*x*(3-2*x),G=IDLE;
+ if(G.room<0&&t>=G.nextRoom){G.room=t;G.nextRoom=t+35+Math.random()*85}
+ if(G.room>=0){const rc=t-G.room,d=Math.random()<.5?1:-1,k=G.rk||(G.rk=[[0,0,0],[.4,-d,.05],[1.3,-d,.05],[1.6,d,.05],[2.5,d,.05],[2.8,-.5*d,0],[3.3,-.5*d,0],[3.7,0,0],[4.4,0,0]]);
+  if(rc<4.4){for(let i=0;i<k.length-1;i++){const[a,ax,ay]=k[i],[b,bx,by]=k[i+1];if(rc>=a&&rc<=b){const e=sm((rc-a)/Math.min(.3,b-a));return[ax+(bx-ax)*e,ay+(by-ay)*e]}}}
+  G.room=-1;G.rk=null;G.from=[0,0];G.to=[0,0];G.at=t;G.next=t+1+Math.random()*3}
+ if(t>=G.next){const e0=sm((t-G.at)/.25);G.from=[G.from[0]+(G.to[0]-G.from[0])*e0,G.from[1]+(G.to[1]-G.from[1])*e0];
+  G.to=Math.random()<.35?[0,0]:[(Math.random()*2-1)*sx,(Math.random()*2-1)*sy];G.at=t;G.next=t+(Math.random()<.2?5+Math.random()*4:1+Math.random()*3.5)}
+ const e=sm((t-G.at)/.28);return[G.from[0]+(G.to[0]-G.from[0])*e,G.from[1]+(G.to[1]-G.from[1])*e]}
 function gaze(t){
  if(t<1.5)return[0,0];
  const lt=say.start>=0?now()-say.start:99,typed=.6+String(say.text).length/24;
  const path=k=>{for(let i=0;i<k.length-1;i++){const[a,ax,ay]=k[i],[b,bx,by]=k[i+1];if(lt>=a&&lt<=b){const e=sm((lt-a)/Math.min(.35,b-a));return[ax+(bx-ax)*e,ay+(by-ay)*e]}}return null};
  if(say.look==='room'){const p=path([[0,0,0],[typed,0,0],[typed+.4,-1,.05],[typed+1.3,-1,.05],[typed+1.6,1,.05],[typed+2.5,1,.05],[typed+2.8,-.6,0],[typed+3.3,-.6,0],[typed+3.7,0,0],[99,0,0]]);if(p)return p}
  if(say.target&&where[say.target]){const w=where[say.target];const p=path([[0,0,0],[.6,0,0],[1,w[0],w[1]],[Math.max(3,typed),w[0],w[1]],[Math.max(3.4,typed+.4),0,0],[99,0,0]]);if(p)return p}
- const k=Math.floor(t/2.3),f=t/2.3-k,r=i=>{const x=Math.sin(i*12.9898)*43758.5453;return x-Math.floor(x)},to=[(r(k)-.5)*.7,(r(k+.5)-.5)*.5],fr=[(r(k-1)-.5)*.7,(r(k-.5)-.5)*.5],e=sm(f/.25);
- return[fr[0]+(to[0]-fr[0])*e,fr[1]+(to[1]-fr[1])*e]}
+ return idleGaze(t,.38,.28)}
 function pathD(vals,w,h,lo,hi,step){const pts=vals.map((v,i)=>`${(i*w/Math.max(1,vals.length-1)).toFixed(1)} ${(h-(v-lo)/Math.max(1e-6,hi-lo)*h*.8-h*.1).toFixed(1)}`);return'M'+pts.join(' L')}
 // While HAL talks his eye brightens on the sounds and dims at the pauses, as on the phone (same rule).
 let tgB=1,tgCur=1,tgNext=0;
