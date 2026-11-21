@@ -474,7 +474,7 @@ final class EmberHome {
         int y = Math.max(0, Math.min(topY, bottomY - info.getMeasuredHeight()));
         info.setY(y);
         // Mild motion: the art drifts slowly (a slow push in and back), only where animations are on.
-        if (motion && breathe == null && !cinemaLayout) {
+        if (motion && breathe == null && !cinemaLayout && !floor.hal) {   // HAL's backdrop: still, no embers
             // HAL's glow breathes (about every 6 seconds) and a few embers drift up behind the posters.
             breathe = ValueAnimator.ofFloat(0.72f, 1f);
             breathe.setDuration(3000L);
