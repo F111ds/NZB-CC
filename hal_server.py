@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.26.0"
+VERSION = "1.27.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -465,6 +465,9 @@ DEFAULT_SETTINGS = {
     "down_after_s": 45,             # how long a service must be silent before it counts as down
     "cpu_alert": 90, "ram_alert": 90, "cpu_temp_alert": 90, "gpu_temp_alert": 85,
     "drive_free_alert": 10, "disk_temp_alert": 55, "drive_days_alert": 14,
+    # more temperatures (from LibreHardwareMonitor, where the PC has these sensors)
+    "gpu_hot_alert": 100, "gpu_mem_alert": 100, "vrm_temp_alert": 100, "chipset_temp_alert": 90, "nvme_temp_alert": 80,
+    "fan_alert": True,              # tell me when a fan that normally spins stops
     "ping_host": "1.1.1.1",
     "phone_port": 8765,
     "nut_host": "", "nut_port": 3493, "nut_ups": "",   # Network UPS Tools (blank host: not used)
@@ -505,7 +508,8 @@ def load_settings(path: Path | None = None) -> dict:
 
 SETTING_RANGES = {"down_after_s": (15, 900), "cpu_alert": (50, 100), "ram_alert": (50, 100), "cpu_temp_alert": (60, 110),
                   "gpu_temp_alert": (60, 110), "drive_free_alert": (1, 50), "disk_temp_alert": (35, 80),
-                  "drive_days_alert": (1, 90), "phone_port": (1, 65535), "nut_port": (1, 65535),
+                  "drive_days_alert": (1, 90), "gpu_hot_alert": (70, 120), "gpu_mem_alert": (70, 120),
+                  "vrm_temp_alert": (60, 125), "chipset_temp_alert": (50, 110), "nvme_temp_alert": (50, 100), "phone_port": (1, 65535), "nut_port": (1, 65535),
                   "ups_shutdown_pct": (5, 90), "ups_shutdown_min": (1, 60)}
 
 
@@ -1442,6 +1446,79 @@ def event_summary(events: list[dict], now: float | None = None, days: int = 7) -
 ISSUE_GROUPS = {"router": "net", "internet": "net", "loss": "net", "dns": "net"}
 
 
+# ---------------------------------------------------------------------------------------------
+# More temperatures and fans (LibreHardwareMonitor sensors: {"hw": "/gpu-nvidia/0", "name": "GPU Hot Spot", "value": 71})
+# ---------------------------------------------------------------------------------------------
+
+# (kind, setting, what it is, which hardware, sensor names)
+EXTRA_TEMPS = (
+    ("gpu_hot", "gpu_hot_alert", "graphics card hot spot", ("/gpu",), r"hot ?spot"),
+    ("gpu_mem", "gpu_mem_alert", "graphics card memory", ("/gpu",), r"memory( junction)?$|junction"),
+    ("vrm", "vrm_temp_alert", "motherboard power circuits (VRM)", ("/lpc", "/mainboard", "/hw"), r"\bvrm\b|\bmos(fet)?\b|\bvcore\b"),
+    ("chipset", "chipset_temp_alert", "chipset", ("/lpc", "/mainboard", "/hw"), r"chipset|\bpch\b"),
+    ("nvme", "nvme_temp_alert", "NVMe drive", ("/nvme",), r"temperature|composite|controller|sensor"),
+)
+
+
+def extra_temps(temps: list[dict]) -> list[dict]:
+    """The other temperatures worth watching: the hottest reading of each kind (one per NVMe drive)."""
+    out: dict[str, dict] = {}
+    for t in temps or []:
+        hw, name, v = str(t.get("hw") or "").lower(), str(t.get("name") or ""), t.get("value")
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            continue
+        for kind, setting, label, hws, pat in EXTRA_TEMPS:
+            if hw.startswith(hws) and re.search(pat, name, re.I) and not (kind == "vrm" and re.search(r"cpu|gpu", name, re.I) and "vrm" not in name.lower()):
+                dev = str(t.get("label") or "").strip()
+                key = f"{kind}:{dev or hw}" if kind == "nvme" else kind
+                if key not in out or v > out[key]["value"]:
+                    out[key] = {"key": key, "kind": kind, "setting": setting, "label": label, "device": dev, "sensor": name, "value": float(v)}
+                break
+    return list(out.values())
+
+
+class FanWatch:
+    """Which fans normally spin, and which of those have stopped.
+
+    A fan counts as one that normally spins once it has kept spinning for 30 minutes. Graphics card
+    fans are left out (most stop by design when the card is cool), and so is a fan that has stopped and
+    started again by itself twice (its fan curve lets it stop)."""
+    SPIN_RPM = 150
+    WATCH_AFTER_S = 1800
+
+    def __init__(self):
+        self.f: dict[str, dict] = {}
+
+    def update(self, fans: list[dict], now: float) -> list[dict]:
+        stopped = []
+        for x in fans or []:
+            hw, name = str(x.get("hw") or ""), str(x.get("name") or "")
+            rpm = x.get("value")
+            if not name or hw.lower().startswith("/gpu") or not isinstance(rpm, (int, float)):
+                continue
+            k = hw + "|" + name
+            f = self.f.setdefault(k, {"name": name, "spin_since": None, "zero_since": None, "watch": False, "stops": 0, "typ": 0.0})
+            if rpm >= self.SPIN_RPM:
+                if f["zero_since"] is not None and f["watch"]:
+                    f["stops"] += 1           # it came back by itself
+                f["zero_since"] = None
+                f["spin_since"] = f["spin_since"] or now
+                f["typ"] = rpm if not f["typ"] else f["typ"] * .9 + rpm * .1
+                if now - f["spin_since"] >= self.WATCH_AFTER_S:
+                    f["watch"] = True
+            else:
+                if f["zero_since"] is None:
+                    f["zero_since"] = now
+                    f["watch"] = bool(f["spin_since"]) and now - f["spin_since"] >= self.WATCH_AFTER_S
+                f["spin_since"] = None
+                if f["watch"] and f["stops"] < 2:
+                    stopped.append({"key": k, "name": name, "typ": round(f["typ"]), "since": f["zero_since"]})
+        return stopped
+
+    def stopped_names(self) -> set:
+        return {f["name"] for f in self.f.values() if f["zero_since"] is not None and f["watch"] and f["stops"] < 2}
+
+
 def recovery_title(key: str, issue: dict) -> str:
     """What HAL says when a problem goes away."""
     kind, _, arg = key.partition(":")
@@ -1459,7 +1536,8 @@ def recovery_title(key: str, issue: dict) -> str:
              "sig": "Defender is up to date again", "firewall": "The firewall is back on",
              "logons": "Failed sign-ins have stopped", "evdrive": "No drive errors in the last 7 days", "unexpected": "No unexpected shutdowns this week",
              "ups_rb": "The UPS battery is fine again", "ups_load": "UPS load is back to normal",
-             "ups_err": "The UPS is talking to me again"}
+             "ups_err": "The UPS is talking to me again", "fan": f"The {arg.split('|')[-1]} is spinning again",
+             "vtemp": issue.get("title", "").replace(" is running hot", " has cooled down")}
     return fixed.get(kind, f"All clear: {title}")
 
 
@@ -2239,7 +2317,7 @@ def tv_screen(st: dict) -> dict:
     up_txt = _dur(st.get("uptime")) + (f" · {upd} update{'s' if upd != 1 else ''}" if upd else " · restart due" if sec.get("pending_reboot") else "")
     full_keys = {i["key"].split(":", 1)[1] for i in issues if i["key"].startswith(("full:", "days:", "health:"))}
     drives = [{"mount": d["mount"].rstrip(":"), "pct": round(d["pct"]), "warn": d["mount"] in full_keys} for d in st["drives"]][:4]
-    pc = {"level": lvl("cpu", "cpu_temp", "ram", "gpu", "full", "days", "health", "dtemp", "ups_ob", "ups_rb", "ups_load", "ups_err"),
+    pc = {"level": lvl("cpu", "cpu_temp", "ram", "gpu", "full", "days", "health", "dtemp", "fan", "vtemp", "ups_ob", "ups_rb", "ups_load", "ups_err"),
           "rows": [["CPU", f"{cpu.get('pct') or 0:.0f}%" + (f" · {cpu['temp']:.0f}°C" if cpu.get("temp") is not None else ""), lvl("cpu", "cpu_temp")],
                    ["GPU", (f"{g.get('util') or 0:.0f}%" + (f" · {g['temp']:.0f}°C" if g.get("temp") is not None else "")) if g else "—", lvl("gpu")],
                    ["Memory", f"{gb(mem.get('used'))} of {(mem.get('total') or 0) / 1073741824:.0f} GB", lvl("ram")],
@@ -3384,6 +3462,7 @@ class Hal(FunMixin):
         self.kuma_hist: dict[str, deque] = {}   # monitor -> its last statuses, an hour of them (for the TV's details)
         self.kuma_ms: dict[str, deque] = {}     # monitor -> its last hour of response times (ms, None when down)
         self.kuma_down_t: dict[str, float] = {}  # monitor -> when it went down
+        self.fan_watch = FanWatch()
         self.pi_temp_hist: deque = deque(maxlen=120)
         self.pi_cpu_hist: deque = deque(maxlen=120)
         self.tv_phrases: list[str] = [str(x)[:120] for x in (st.get("tv_phrases") or []) if str(x).strip()][:TV_PHRASES_MAX]
@@ -4219,6 +4298,17 @@ class Hal(FunMixin):
         for g in snap.get("gpus") or []:
             if g.get("temp") is not None and g["temp"] >= s["gpu_temp_alert"]:
                 add(f"gpu:{g['key']}", "critical", "The GPU is overheating", f"{g['name']} at {g['temp']:.0f}°C.", "vitals", 10)
+        sens = snap.get("sensors") or {}
+        for x in extra_temps(sens.get("temps") or []):
+            lim = s.get(x["setting"])
+            if lim and x["value"] >= lim:
+                what = x["label"] + (f" ({x['device']})" if x["kind"] == "nvme" and x["device"] else "")
+                add(f"vtemp:{x['key']}", "critical" if x["value"] >= lim + 10 else "warning", f"The {what} is running hot",
+                    f"{x['value']:.0f}°C (limit {lim}°C). Check the fans and that air can get round the case.", "vitals", 60)
+        for f in self.fan_watch.update(sens.get("fans") or [], now):
+            if s.get("fan_alert", True):
+                add(f"fan:{f['key']}", "critical", f"The {f['name']} has stopped",
+                    f"It usually spins at about {f['typ']:,} rpm. Check it's plugged in and nothing is stuck in it.", "vitals", 30)
         for d in drives:
             m = d["mount"]
             free_pct = 100 - d["pct"]
@@ -4498,7 +4588,8 @@ class Hal(FunMixin):
                 "mem": {"used": mem.get("used"), "total": mem.get("total"), "pct": mem.get("percent")},
                 "gpus": gpus,
                 "temps": [{"name": f"{t['hw']} · {t['name']}", "value": t["value"]} for t in (sensors.get("temps") or [])][:24],
-                "fans": [{"name": f["name"], "value": f["value"]} for f in (sensors.get("fans") or []) if f.get("value")][:12],
+                "fans": [{"name": f["name"], "value": f["value"] or 0} for f in (sensors.get("fans") or [])
+                         if f.get("value") or f.get("name") in self.fan_watch.stopped_names()][:12],
                 "top_cpu": [{"name": p["name"], "cpu": p["cpu"], "mem": p["mem"]} for p in procs[:5]], "procs": len(procs),
                 "top_mem": [{"name": p["name"], "cpu": p["cpu"], "mem": p["mem"]} for p in sorted(procs, key=lambda p: -p["mem"])[:5]],
                 "sensor_source": snap.get("sensor_source") or "",
