@@ -221,7 +221,33 @@ body.noscroll{overflow:hidden}
 #pair{max-width:420px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 50px) 22px 40px;text-align:center}
 #pair input{width:100%;background:var(--card);border:1px solid #26262b;border-radius:10px;padding:12px;font:16px var(--mono);margin:14px 0 10px}
 /* (16px: an iPhone zooms into smaller text boxes, and a home-screen app then stays zoomed in) */
-</style></head><body>
+
+/* ===== Ember: glass over a live ember glow (owner-approved look) ===== */
+:root{--bg:#0a0405;--card:rgba(255,236,228,.075);--card2:rgba(255,236,228,.13);--line:rgba(255,255,255,.09);--red2:#FF7A45;--soft:#C9B9B4;--muted:#9A8A86;
+ --mono:"JetBrains Mono",ui-monospace,"SF Mono","Cascadia Mono",Consolas,monospace}
+html{background:#0a0405}body{background:transparent!important}
+body{font-family:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
+#ember{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;display:block}
+.card,.list,.cbox{background:linear-gradient(160deg,rgba(255,255,255,.11),rgba(255,255,255,.035) 60%);border:1px solid rgba(255,255,255,.12);border-radius:20px;
+ backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);box-shadow:0 12px 30px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.14)}
+.qb,.ib,.seg,.vt div,.pbtn,.tvchips button,.chiprow button,.pctl button,.search input{background:rgba(255,236,228,.08);border:1px solid rgba(255,255,255,.12);
+ backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
+.qb{border-radius:18px}.qb.warn{color:#ffc46b}
+.qb[data-tvoff]{background:linear-gradient(135deg,rgba(255,106,58,.85),rgba(225,29,72,.85));color:#fff;box-shadow:0 0 20px rgba(255,80,40,.45),inset 0 1px 0 rgba(255,255,255,.3)}
+.btn.r{background:linear-gradient(135deg,#ff6a3a,#e11d48);color:#fff}.btn.r.big{box-shadow:0 8px 24px rgba(225,29,72,.35)}
+.k{color:rgba(255,220,205,.62)}
+nav.tabs{left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));border-radius:28px;padding:8px 6px;background:rgba(40,12,10,.5);
+ border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(22px) saturate(150%);-webkit-backdrop-filter:blur(22px) saturate(150%);box-shadow:0 14px 34px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.14)}
+nav.tabs button.on{color:#ffb59a;text-shadow:0 0 12px rgba(255,90,40,.9)}nav.tabs button.on svg{filter:drop-shadow(0 0 6px rgba(255,90,40,.9))}
+/* Home: HAL with his gauges round him, and his voice under his words */
+.eyewrap{position:relative;width:236px;height:236px;margin:0 auto;display:grid;place-items:center}
+.eyewrap svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.hero.center .eyewrap .eye{width:132px;height:132px;box-shadow:0 0 0 2px #3a3a40,0 0 0 6px #0d0d0f,0 0 0 8px #6c7178,0 0 60px 12px rgba(255,42,18,.35)}
+.hero.center .eyewrap .eye::before{inset:19px}
+.hwave{display:flex;gap:3px;justify-content:center;align-items:center;height:22px;margin-top:8px}
+.hwave i{width:3px;height:3px;border-radius:2px;background:linear-gradient(#ffb347,#ff3a1e);box-shadow:0 0 6px rgba(255,90,40,.8)}
+@media (prefers-reduced-motion:reduce){#ember{opacity:.9}}
+</style><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet"></head><body><canvas id="ember" aria-hidden="true"></canvas>
 
 <aside class="side" id="side">
   <div style="display:flex;align-items:center;gap:12px;padding:4px 8px 22px"><div class="eye sm" id="seye"></div><span class="brand"><b>HAL</b> 9000</span></div>
@@ -469,10 +495,21 @@ function piCard(hw){if(!hw||(hw.temp==null&&hw.cpu_pct==null&&!hw.model))return'
     '<div class="wgrid" style="margin-top:10px"><div><span class="k">UP FOR</span><b>'+upFor(hw.uptime)+'</b></div><div><span class="k">LOAD</span><b>'+(hw.load&&hw.load.length?hw.load[0].toFixed(2):'—')+'</b></div><div><span class="k">UPDATES</span><b style="color:var(--'+(hw.update?'sky':'green')+')">'+(hw.update?'yes':'none')+'</b></div></div>'+
     (hw.update?'<div class="sub" style="color:var(--soft);font-size:13px;margin-top:10px">To update, on the Pi: sudo pihole -up</div>':'')+'</div>'}
 function renderHome(){const el=$('t-home');
-  if(!$('heye'))el.innerHTML='<div id="hhead"></div><div class="hero'+(DESK?'':' center')+'"><button class="eye'+(DESK?' big':'')+'" id="heye" aria-label="Hear HAL"></button><div><div class="g" id="hgreet"></div><div class="q" id="hquote"></div></div></div><div id="hbody"></div>';
+  if(!$('heye'))el.innerHTML='<div id="hhead"></div><div class="hero'+(DESK?'':' center')+'">'+(DESK?'<button class="eye big" id="heye" aria-label="Hear HAL"></button>':'<div class="eyewrap"><svg id="hrings" viewBox="0 0 236 236"></svg><button class="eye" id="heye" aria-label="Hear HAL"></button></div>')+'<div><div class="g" id="hgreet"></div><div class="q" id="hquote"></div>'+(DESK?'':'<div class="hwave" id="hwave">'+'<i></i>'.repeat(30)+'</div>')+'</div></div><div id="hbody"></div>';
   $('hhead').innerHTML=topbar('',true);$('hbody').innerHTML=homeBody();$('hgreet').textContent=greeting();
   const eye=$('heye');eye.className='eye'+(DESK?' big':'')+' '+(S?S.hal.level:'')+(eye.classList.contains('talking')?' talking':'');
+  if($('hrings'))$('hrings').innerHTML=heroRings();
   const line=homeLine();if(line!==lastQuote){const first=!lastQuote;lastQuote=line;talk(eye,$('hquote'),line,!first&&talkative()&&unlocked)}}
+// HAL's gauges round his eye on Home: CPU, temperature and memory, with a ring of ticks and a slow sweep.
+function heroRings(){const v=S&&S.vitals,c=118,arc=(r,frac,g)=>{const L=2*Math.PI*r,f=Math.max(0,Math.min(1,frac||0));
+  return'<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="6"/><circle class="hr" cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="url(#'+g+')" stroke-width="6" stroke-linecap="round" stroke-dasharray="'+(L*f).toFixed(1)+' '+L.toFixed(1)+'" transform="rotate(-90 '+c+' '+c+')" filter="url(#hglow)"/>'};
+  let tk='';for(let i=0;i<72;i++){const a=i*5*Math.PI/180,r1=110,r2=i%6?113:116;tk+='<line x1="'+(c+r1*Math.sin(a)).toFixed(1)+'" y1="'+(c-r1*Math.cos(a)).toFixed(1)+'" x2="'+(c+r2*Math.sin(a)).toFixed(1)+'" y2="'+(c-r2*Math.cos(a)).toFixed(1)+'" stroke="rgba(255,210,190,'+(i%6?.25:.55)+')" stroke-width="1"/>'}
+  const cpu=v?v.cpu.pct:0,tmp=v?v.cpu.temp:null,mem=v?v.mem.pct:0;
+  return'<defs><linearGradient id="hga" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd27a"/><stop offset="1" stop-color="#ff4b2b"/></linearGradient><linearGradient id="hgb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff9a3c"/><stop offset="1" stop-color="#e11d48"/></linearGradient><linearGradient id="hgc" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9ff5d0"/><stop offset="1" stop-color="#2dd4bf"/></linearGradient>'+
+   '<linearGradient id="hsw" gradientUnits="userSpaceOnUse" x1="'+c+'" y1="'+(c-106)+'" x2="'+(c+75)+'" y2="'+(c-75)+'"><stop offset="0" stop-color="#ffb07a" stop-opacity="0"/><stop offset="1" stop-color="#ffe0c8" stop-opacity=".9"/></linearGradient><filter id="hglow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>'+
+   tk+'<g id="hsweep"><path d="M'+c+' '+(c-106)+' A106 106 0 0 1 '+(c+75)+' '+(c-75)+'" fill="none" stroke="url(#hsw)" stroke-width="7" stroke-linecap="round" opacity=".55"/></g>'+
+   arc(100,cpu/100,'hga')+arc(91,(tmp||0)/100,'hgb')+arc(82,mem/100,'hgc')+
+   '<g font-family="JetBrains Mono,monospace" font-size="8.5" font-weight="700" text-anchor="end"><text x="'+(c-6)+'" y="'+(c-97)+'" fill="#ffe2d6">CPU '+f0(cpu)+'%</text><text x="'+(c-6)+'" y="'+(c-88)+'" fill="#ffb59a">TEMP '+(tmp==null?'—':Math.round(tmp)+'°')+'</text><text x="'+(c-6)+'" y="'+(c-79)+'" fill="#9ff5d0">MEM '+f0(mem)+'%</text></g>'}
 function shownResults(){let r=(results||[]).slice();
   if(getCat==='2000')r=r.filter(x=>x.kind!=='tv');            // an indexer's mis-filed episode stays out of Movies
   const by={'size_desc':(a,b)=>(b.size_bytes||0)-(a.size_bytes||0),'size_asc':(a,b)=>(a.size_bytes||0)-(b.size_bytes||0),
@@ -1113,4 +1150,35 @@ function start(){$('app').classList.remove('hidden');$('tabs').classList.remove(
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&token)refresh()});
 (function pairFromLink(){const m=(location.hash||'').match(/^#k=([A-Za-z0-9_-]+)$/);if(m){token=m[1];LS.set('app_token',token);try{history.replaceState(null,'',location.pathname)}catch(e){}}})();
 if(token)start();else showPair();
+
+// ===== Ember background: slow smoke drawn by the graphics chip, brightest behind HAL. Low resolution and ~24 frames
+// a second to spare the battery; paused when the app is in the background; one still frame for reduced motion. =====
+(function(){const cv=document.getElementById('ember');if(!cv)return;const gl=cv.getContext('webgl',{antialias:false,alpha:false});
+ if(!gl){cv.style.background='radial-gradient(ellipse at 50% 22%,rgba(255,60,20,.5),transparent 60%),#0a0405';return}
+ const vs='attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}';
+ const fs='precision mediump float;uniform vec2 r;uniform float t;uniform float cy;'+
+  'float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}'+
+  'float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y);}'+
+  'float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<5;i++){v+=a*n(p);p=p*2.03+vec2(1.7,9.2);a*=.5;}return v;}'+
+  'void main(){vec2 uv=gl_FragCoord.xy/r;vec2 p=uv*vec2(r.x/r.y,1.)*2.4;vec2 q=vec2(fbm(p+vec2(0.,t*.04)),fbm(p+vec2(5.2,1.3)-t*.03));'+
+  'float w=fbm(p+1.9*q+vec2(t*.02,-t*.06));vec2 c=(uv-vec2(.5,cy))*vec2(r.x/r.y,1.);float d=length(c);float pu=.88+.12*sin(t*1.6);'+
+  'vec3 col=vec3(.03,.008,.01)+vec3(.30,.04,.02)*pow(w,2.6)*1.25+vec3(.9,.36,.05)*smoothstep(.7,.98,w)*.18*(1.-uv.y*.6)+vec3(1.,.22,.05)*exp(-d*d*18.)*.42*pu;'+
+  'col*=1.-.65*smoothstep(.35,1.1,length((uv-vec2(.5,.62))*vec2(1.3,1.)));gl_FragColor=vec4(col,1.);}';
+ const sh=(ty,src)=>{const x=gl.createShader(ty);gl.shaderSource(x,src);gl.compileShader(x);return x};
+ const pr=gl.createProgram();gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs));gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(pr);
+ if(!gl.getProgramParameter(pr,gl.LINK_STATUS)){cv.style.background='#0a0405';return}
+ gl.useProgram(pr);const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+ const pl=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,2,gl.FLOAT,false,0,0);
+ const ur=gl.getUniformLocation(pr,'r'),ut=gl.getUniformLocation(pr,'t'),uc=gl.getUniformLocation(pr,'cy');
+ const size=()=>{const k=.35;cv.width=Math.max(64,Math.round(innerWidth*k));cv.height=Math.max(64,Math.round(innerHeight*k));gl.viewport(0,0,cv.width,cv.height);gl.uniform2f(ur,cv.width,cv.height)};
+ size();addEventListener('resize',size);
+ const still=matchMedia('(prefers-reduced-motion: reduce)').matches;let last=0;const t0=performance.now();
+ function frame(now){if(!document.hidden&&now-last>40){last=now;const t=(now-t0)/1000+30;
+   const home=document.getElementById('heye'),hv=home&&home.offsetParent?home.getBoundingClientRect():null;
+   gl.uniform1f(uc,hv?1-((hv.top+hv.height/2)/innerHeight):.78);gl.uniform1f(ut,still?30:t);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+   const sw=document.getElementById('hsweep');if(sw&&!still)sw.setAttribute('transform','rotate('+(t*40%360).toFixed(1)+' 118 118)');
+   const wv=document.getElementById('hwave');if(wv&&wv.offsetParent){const talking=home&&home.classList.contains('talking');
+    [...wv.children].forEach((el,i)=>{const v=Math.abs(Math.sin(t*6+i*.45)*.5+Math.sin(t*2.9+i*1.7)*.3+Math.sin(t*12.1+i*2.3)*.2);el.style.height=(3+(talking?18:3)*(still?0:v))+'px'})}}
+  if(!still)requestAnimationFrame(frame)}
+ requestAnimationFrame(frame);if(still)setTimeout(()=>frame(1e6),300)})();
 </script></body></html>"""

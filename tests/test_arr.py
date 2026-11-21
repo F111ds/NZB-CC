@@ -148,7 +148,7 @@ except m.ConfigError as exc:
 # ---- the page ----
 page = m.PAGE
 assert 'id="pvr"' in page and 'data-tab="pvr"' in page and "/api/arr/art?ref=" in page and 'id="homeup"' in page
-assert m.VERSION == "3.21.8"
+assert m.VERSION == "3.22.0"
 
 for s in servers.values():
     s.shutdown()
