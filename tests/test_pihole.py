@@ -58,8 +58,16 @@ class PH6(BaseHTTPRequestHandler):
                                  "clients": {"active": 14}, "gravity": {"domains_being_blocked": 412806, "last_update": int(time.time()) - 86400}})
         if self.path == "/api/dns/blocking":
             return self._j(200, {"blocking": "enabled" if PH6.blocking else "disabled", "timer": PH6.timer})
+        if self.path.startswith("/api/stats/top_domains?blocked=true"):
+            return self._j(200, {"domains": [{"domain": "cdn.allowed.example", "count": 90}, {"domain": "ads.x.com", "count": 50},
+                                             {"domain": "t1.rx-allowed.example", "count": 40}, {"domain": "old.off.example", "count": 30}]})
         if self.path.startswith("/api/stats/top_domains"):
             return self._j(200, {"domains": [{"domain": "ads.x.com", "count": 50}]})
+        if self.path == "/api/domains/allow":
+            return self._j(200, {"domains": [{"domain": "CDN.allowed.example", "kind": "exact", "enabled": True},
+                                             {"domain": r"(^|\.)rx-allowed\.example$", "kind": "regex", "enabled": True},
+                                             {"domain": "old.off.example", "kind": "exact", "enabled": False},
+                                             {"domain": "[bad", "kind": "regex", "enabled": True}]})
         if self.path.startswith("/api/stats/top_clients"):
             return self._j(200, {"clients": [{"name": "", "ip": "192.168.68.20", "count": 900}]})
         if self.path == "/api/info/system":
@@ -120,7 +128,11 @@ class PH5(BaseHTTPRequestHandler):
             body = {"dns_queries_today": 1000, "ads_blocked_today": 250, "ads_percentage_today": 25.0, "unique_clients": 6,
                     "domains_being_blocked": 99000, "status": PH5.status, "gravity_last_updated": {"absolute": int(time.time()) - 20 * 86400}}
         elif "topItems" in q:
-            body = {"top_queries": {}, "top_ads": {"ads.y.com": 77}}
+            body = {"top_queries": {}, "top_ads": {"ok.allowed5.example": 120, "ads.y.com": 77}}
+        elif q.get("list") == ["white"]:
+            body = {"data": [{"domain": "ok.allowed5.example", "enabled": 1}]}
+        elif q.get("list") == ["regex_white"]:
+            body = {"data": []}
         elif "topClients" in q:
             body = {"top_sources": {"tv|192.168.68.30": 400}}
         elif "disable" in q:
@@ -164,7 +176,9 @@ print("detect ok")
 p = hs.PiHole(base6, PW6, 6)
 sm = p.summary()
 assert sm["blocked"] == 18204 and sm["percent"] == 21.6 and sm["clients"] == 14 and sm["blocking"] is True
-assert sm["top_blocked"] == [["ads.x.com", 50]] and sm["top_clients"] == [["192.168.68.20", 900]]
+# Allowed domains (exact, any case, or by regex) drop off "Most blocked"; a switched-off allow entry doesn't count.
+assert sm["top_blocked"] == [["ads.x.com", 50], ["old.off.example", 30]], sm["top_blocked"]
+assert sm["top_clients"] == [["192.168.68.20", 900]]
 hw = sm["hw"]
 assert hw["model"].startswith("Raspberry Pi 4") and hw["temp"] == 47.2 and hw["cpu_pct"] == 3.1 and hw["mem_pct"] == 21.4
 assert hw["uptime"] == 90000 and hw["cores"] == 4 and hw["mem_total"] == 3884000 * 1024 and hw["version"] == "v6.1.0" and hw["update"] is False

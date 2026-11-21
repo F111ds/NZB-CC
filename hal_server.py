@@ -719,9 +719,9 @@ class PiHole:
                        "gravity_t": to_int(g.get("last_update")) or None,
                        "blocking": str(b.get("blocking")) == "enabled", "timer": to_float(b.get("timer")) or None}
                 try:
-                    td = self._v6("GET", "/api/stats/top_domains?blocked=true&count=5")
+                    td = self._v6("GET", "/api/stats/top_domains?blocked=true&count=20")
                     tc = self._v6("GET", "/api/stats/top_clients?count=200")
-                    out["top_blocked"] = [[str(x.get("domain")), to_int(x.get("count"))] for x in td.get("domains") or []][:5]
+                    out["top_blocked"] = self._drop_allowed([[str(x.get("domain")), to_int(x.get("count"))] for x in td.get("domains") or []])[:5]
                     ta = self._v6("GET", "/api/stats/top_domains?count=5")
                     out["top_allowed"] = [[str(x.get("domain")), to_int(x.get("count"))] for x in ta.get("domains") or []][:5]
                     out["top_clients"] = [[str(x.get("name") or x.get("ip")), to_int(x.get("count"))] for x in tc.get("clients") or []][:5]
@@ -738,8 +738,8 @@ class PiHole:
                    "gravity_t": to_int((d.get("gravity_last_updated") or {}).get("absolute")) or None,
                    "blocking": str(d.get("status")) == "enabled", "timer": None, "top_blocked": [], "top_clients": []}
             try:
-                ti = self._v5("topItems=5")
-                out["top_blocked"] = [[k, to_int(v)] for k, v in (ti.get("top_ads") or {}).items()][:5]
+                ti = self._v5("topItems=20")
+                out["top_blocked"] = self._drop_allowed([[k, to_int(v)] for k, v in (ti.get("top_ads") or {}).items()])[:5]
                 out["top_allowed"] = [[k, to_int(v)] for k, v in (ti.get("top_queries") or {}).items()][:5]
                 tc = self._v5("topClients=200")
                 src = (tc.get("top_sources") or {}).items()
@@ -749,6 +749,46 @@ class PiHole:
                 pass
             out["hourly"] = self._hourly(lambda: self._v5("overTimeData10mins"), "v5")
             return out
+
+    def _allowlist(self) -> tuple[set, list]:
+        """Pi-hole's allowlist (exact domains, regexes), kept 2 minutes. Blank when it can't be read."""
+        if time.time() - getattr(self, "_allow_t", 0) < 120:
+            return self._allow_v
+        exact, rx = set(), []
+        try:
+            if self.version == 6:
+                rows = [(str(x.get("domain") or ""), str(x.get("kind") or ""), bool(x.get("enabled", True)))
+                        for x in self._v6("GET", "/api/domains/allow").get("domains") or [] if isinstance(x, dict)]
+            else:
+                rows = []
+                for lst, kind in (("white", "exact"), ("regex_white", "regex")):
+                    try:
+                        rows += [(str(x.get("domain") or ""), kind, bool(x.get("enabled", 1)))
+                                 for x in self._v5(f"list={lst}").get("data") or [] if isinstance(x, dict)]
+                    except PiHoleAuthError:       # an empty list reads like a refused token on Pi-hole 5
+                        pass
+            for dom, kind, on in rows:
+                if not on or not dom:
+                    continue
+                if kind == "regex":
+                    try:
+                        rx.append(re.compile(dom.split(";", 1)[0], re.I))   # ";querytype=..." is Pi-hole's own extension
+                    except re.error:
+                        pass
+                else:
+                    exact.add(dom.lower().rstrip("."))
+        except (OSError, PiHoleAuthError):
+            pass
+        self._allow_t, self._allow_v = time.time(), (exact, rx)
+        return self._allow_v
+
+    def _drop_allowed(self, rows: list) -> list:
+        """Top blocked domains minus those now on the allowlist. Pi-hole counts the last 24 hours, so a domain
+        allowed this morning would otherwise stay on "Most blocked" until its old blocks age out."""
+        exact, rx = self._allowlist()
+        if not exact and not rx:
+            return rows
+        return [r for r in rows if r[0].lower().rstrip(".") not in exact and not any(p.search(r[0]) for p in rx)]
 
     def _hourly(self, fetch, kind: str) -> list:
         """Queries and blocked per hour over the last 24 hours ([[total, blocked], ...], oldest first); kept 5 minutes."""
