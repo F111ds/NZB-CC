@@ -122,4 +122,32 @@ assert grid["The PC"][1][0]["drive_grid"] is False
 assert any(x["key"] == "MOST BLOCKED" and x["badge"] == "LAST 24 H" for row in grid["Raspberry Pi"] for x in row)
 print("fans card and live readings ok")
 
+
+# ---------------- drive temperatures from LibreHardwareMonitor (the drive's own sensor) ----------------
+import system_monitor as sm
+lines = ["Temperature|/ssd/1|Temperature|32", "Temperature|/ssd/1|Airflow Temperature|68",
+         "Temperature|/nvme/0|Temperature|49", "Temperature|/nvme/0|Temperature 2|61", "Temperature|/amdcpu/0|Core (Tctl/Tdie)|60"]
+sens = sm.parse_sensor_lines(lines, ["/ssd/1|Samsung SSD 860 EVO 500GB", "/nvme/0|Samsung SSD 970 EVO Plus 500GB", "/amdcpu/0|AMD Ryzen"])
+assert sens["temps"][0]["label"] == "Samsung SSD 860 EVO 500GB"
+dt = sm.disk_temps(sens["temps"])
+assert sorted((d["label"], d["value"]) for d in dt) == [("Samsung SSD 860 EVO 500GB", 32), ("Samsung SSD 970 EVO Plus 500GB", 49)], dt
+assert sm.match_disk_temp("Samsung SSD 860 EVO 500GB", dt) == 32
+assert sm.match_disk_temp("Samsung SSD 970 EVO Plus 500GB", dt) == 49
+assert sm.match_disk_temp("WDC WD40EFRX", dt) is None
+two = dt + [{"label": "Samsung SSD 860 EVO 500GB", "value": 35}]
+assert sm.match_disk_temp("Samsung SSD 860 EVO 500GB", two) is None        # two of the same model: can't tell them apart
+assert sm.parse_sensor_lines(["Temperature|/ssd/1|Temperature|32"])["temps"][0]["label"] == ""   # older feed without names
+# in HAL's drive list: the sensor wins over Windows' figure
+h2 = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=hs.DemoMonitor(), start_threads=False)
+snap2 = h2.monitor.snapshot()
+snap2["inventory"]["disks"][0]["temp"] = 68
+nm = snap2["inventory"]["disks"][0]["name"]
+snap2["sensors"] = {"temps": [{"hw": "/ssd/0", "label": nm, "name": "Temperature", "value": 32}], "fans": [], "power": []}
+d0 = h2.drives(snap2)[0]["disk"]
+assert d0["temp"] == 32 and d0["temp_src"] == "LibreHardwareMonitor", d0
+snap2["sensors"] = {"temps": [], "fans": [], "power": []}
+d0 = h2.drives(snap2)[0]["disk"]
+assert d0["temp"] == 68 and d0["temp_src"] == "Windows", d0
+print("drive temperatures from the drive's own sensor ok")
+
 print("\nALL FAN AND TEMPERATURE TESTS PASSED")

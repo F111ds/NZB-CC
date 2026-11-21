@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.29.0"
+VERSION = "1.29.1"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -4280,6 +4280,7 @@ class Hal(FunMixin):
         parts = {str(p.get("letter", "")).upper(): str(p.get("disk")) for p in inv.get("parts") or []}
         labels = {str(v.get("letter", "")).upper(): v.get("label") for v in inv.get("volumes") or []}
         io = snap.get("disk_io") or {}
+        dtemps = sm.disk_temps((snap.get("sensors") or {}).get("temps") or [])
         out = []
         for v in snap.get("volumes") or []:
             letter = v["mount"][:1].upper() if IS_WINDOWS or re.match(r"[A-Za-z]:", v["mount"]) else ""
@@ -4287,7 +4288,11 @@ class Hal(FunMixin):
             with self.lock:
                 samples = list(self.free_samples.get(v["mount"], []))
             dl, rate = days_left(samples, v["free"])
-            temp = sm.safe_num(d.get("temp"))
+            # the drive's own sensor through LibreHardwareMonitor (as CrystalDiskInfo shows it) first; Windows' figure
+            # (Get-StorageReliabilityCounter) can be wrong for some drives, e.g. Samsung SATA SSDs
+            lhm_t = sm.match_disk_temp(d.get("name") or "", dtemps) if d else None
+            temp = lhm_t if lhm_t is not None else sm.safe_num(d.get("temp"))
+            temp_src = "LibreHardwareMonitor" if lhm_t is not None else ("Windows" if temp is not None else "")
             limit = sm.disk_temp_limit(d, self.settings["disk_temp_alert"]) if d else None
             busy = None
             for name, r in io.items():
@@ -4298,7 +4303,7 @@ class Hal(FunMixin):
                 "mount": v["mount"], "label": labels.get(letter) or "", "total": v["total"], "free": v["free"], "pct": v["percent"],
                 "days_left": round(dl, 1) if dl is not None else None, "per_day": rate,
                 "disk": {"name": d.get("name"), "media": d.get("media_name"), "bus": d.get("bus_name"), "health": d.get("health_name"),
-                         "temp": temp, "temp_limit": limit, "wear": sm.safe_num(d.get("wear")), "hours": sm.safe_num(d.get("hours")),
+                         "temp": temp, "temp_src": temp_src, "temp_limit": limit, "wear": sm.safe_num(d.get("wear")), "hours": sm.safe_num(d.get("hours")),
                          "read_errors": sm.safe_num(d.get("read_errors")), "write_errors": sm.safe_num(d.get("write_errors")),
                          "spindle": d.get("spindle")} if d else None,
                 "read": (busy or {}).get("read"), "write": (busy or {}).get("write"), "fs": v.get("fstype"),
