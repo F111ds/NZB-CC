@@ -36,8 +36,8 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 .quote{position:absolute;left:332px;width:296px;top:310px;text-align:center;font-size:15px;font-weight:600;font-style:italic;line-height:1.3;color:#ffe9e0;min-height:42px;max-height:60px;overflow:hidden}
 .quote.long{font-size:13px}.quote.vlong{font-size:11.5px}
 .caret{display:inline-block;width:2px;height:1em;background:#ffb59a;vertical-align:-2px;margin-left:2px}
-.wave{position:absolute;left:390px;width:180px;top:360px;height:22px;display:flex;align-items:center;gap:3px;justify-content:center}
-.wave i{width:3px;height:3px;border-radius:2px;background:linear-gradient(#ffb347,#ff3a1e);box-shadow:0 0 6px rgba(255,90,40,.8)}
+.wave{position:absolute;left:420px;width:120px;top:372px;height:12px;display:flex;align-items:center;gap:2px;justify-content:center}
+.wave i{width:2px;height:2px;border-radius:1px;background:linear-gradient(#ffb347,#ff3a1e);box-shadow:0 0 4px rgba(255,90,40,.6)}
 .alert{position:absolute;left:345px;width:270px;top:388px;padding:9px 14px;display:flex;gap:10px;align-items:center;border-radius:14px}
 .alert .ic{width:24px;height:24px;border-radius:8px;background:linear-gradient(135deg,#ffc46b,#ff6a3a);display:grid;place-items:center;font-weight:800;font-size:13px;color:#2a0a00;flex:none}
 .alert.critical .ic{background:linear-gradient(135deg,#ff8a6b,#e11d48);color:#fff}
@@ -143,7 +143,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
  <div class="mono" style="font-size:9.5px;opacity:.6;margin-top:10px;letter-spacing:.08em" id="dnsk">DNS · LAST 24 H</div>
  <div id="dns" style="display:flex;align-items:flex-end;gap:2px;height:52px;margin-top:6px"></div>
 </div>
-<div class="quote" id="quote"></div>
+<div class="quote" id="quote"></div><div class="wave" id="wave"></div>
 <div class="card glass alert" id="alert"><div class="ic">!</div><div><b id="at"></b><span id="ad"></span></div></div>
 <div class="card glass strip" id="strip"><div class="art"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg></div>
  <div class="t"><b id="dlt"></b><span id="dli"></span></div><div class="p"><div class="bar"><i id="pb"></i></div><span><b id="pct"></b><em id="dle" style="font-style:normal"></em></span></div></div>
@@ -222,7 +222,8 @@ setInterval(()=>{if(APP&&!say.speaking&&now()>60&&Math.random()<.5)try{HAL.say('
 // ---------- scene ----------
 const T0=performance.now(),now=()=>(performance.now()-T0)/1000;
 let tk='';for(let i=0;i<72;i++){const a=i*5*Math.PI/180,r1=139,r2=i%6?143:147;tk+=`<line x1="${(150+r1*Math.sin(a)).toFixed(1)}" y1="${(150-r1*Math.cos(a)).toFixed(1)}" x2="${(150+r2*Math.sin(a)).toFixed(1)}" y2="${(150-r2*Math.cos(a)).toFixed(1)}" stroke="rgba(255,210,190,${i%6?.25:.55})" stroke-width="1.2"/>`}
-$('ticks').innerHTML=tk;const tickEls=[...$('ticks').children];
+$('ticks').innerHTML=tk;$('wave').innerHTML='<i></i>'.repeat(24);const waveEls=[...$('wave').children];
+const tickEls=[...$('ticks').children];
 
 const cards=[...document.querySelectorAll('#main .card')];
 // WebGL smoke + god rays
@@ -288,7 +289,8 @@ function render(t){
  speakSelf(t);
  const txt=String(say.text||''),shown=t<1.5?0:(say.frac>=0?Math.round(txt.length*Math.min(1,say.frac<0?1:say.frac)):txt.length);
  $('quote').className='quote'+(txt.length>110?' vlong':txt.length>70?' long':'');$('quote').innerHTML=t<1.5||!txt?'':'“'+esc(txt.slice(0,shown))+(shown<txt.length?'<span class="caret"></span>':'”');
- const speaking=say.speaking&&t>=3.6;
+ const speaking=say.speaking&&t>=1.5;
+ waveEls.forEach((el,i)=>{const v=Math.abs(nz(t*7+i*.45,i));el.style.height=(2+(speaking?9:1)*v).toFixed(1)+'px'});
  
  const g=gaze(t);$('iris').setAttribute('transform',`translate(${(g[0]*17).toFixed(2)} ${(g[1]*17).toFixed(2)})`);
  document.querySelectorAll('.dv').forEach((b,i)=>b.style.width=(+b.dataset.w*ease((t-.6-i*.12)/1.2))+'%');
