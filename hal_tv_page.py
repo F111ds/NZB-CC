@@ -89,7 +89,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 #main.off{opacity:0}
 #sweep{position:absolute;left:50%;top:50%;width:266px;height:266px;margin:-133px 0 0 -133px;pointer-events:none;will-change:transform;animation:spin 9s linear infinite;background:conic-gradient(from 0deg,rgba(255,176,122,0) 0deg,rgba(255,176,122,.08) 120deg,rgba(255,200,160,.35) 300deg,rgba(255,232,210,.95) 358deg,rgba(255,176,122,0) 360deg);border-radius:50%;-webkit-mask:radial-gradient(closest-side,transparent calc(100% - 8px),#000 calc(100% - 7px));mask:radial-gradient(closest-side,transparent calc(100% - 8px),#000 calc(100% - 7px))}@keyframes spin{to{transform:rotate(360deg)}}
 </style></head><body><div id="stage">
-<canvas id="gl" class="full" width="1920" height="1080"></canvas><canvas id="sp" class="full" width="960" height="540"></canvas><canvas id="fx" class="full" width="960" height="540"></canvas>
+<canvas id="gl" class="full" width="1920" height="1080"></canvas>
 
 <div id="main">
 <div id="eyewrap" style="position:absolute;left:345px;top:14px;width:270px;height:270px;transform-origin:135px 135px"><svg id="eye" style="position:absolute;left:0;top:0" width="270" height="270" viewBox="0 0 300 300">
@@ -161,7 +161,7 @@ const nz=(x,s)=>Math.sin(x*1.3+s)*.5+Math.sin(x*2.9+s*1.7)*.3+Math.sin(x*6.1+s*2
 const APP=!!window.HAL;   // inside the TV app: it speaks, and hands us the keys
 // fit 960x540 to whatever the screen is
 let K=1,PX='';function fit(){const s=Math.min(innerWidth/960,innerHeight/540);K=Math.min(4,s*(window.devicePixelRatio||1));PX=Math.round(innerWidth*(window.devicePixelRatio||1))+'x'+Math.round(innerHeight*(window.devicePixelRatio||1));
- ['sp','fx'].forEach(id=>{const c=document.getElementById(id);if(c){c.width=Math.round(960*K);c.height=Math.round(540*K)}});$('stage').style.transform=`translate(${(innerWidth-960*s)/2}px,${(innerHeight-540*s)/2}px) scale(${s})`;
+ $('stage').style.transform=`translate(${(innerWidth-960*s)/2}px,${(innerHeight-540*s)/2}px) scale(${s})`;
  document.body.style.width=innerWidth+'px';document.body.style.height=innerHeight+'px'}
 addEventListener('resize',fit);fit();
 // ---------- data ----------
@@ -245,12 +245,7 @@ void main(){vec2 uv=gl_FragCoord.xy/r;vec2 p=uv*vec2(r.x/r.y,1.)*2.2;vec2 q=vec2
   $('gl').width=960;$('gl').height=540;W=960;H=540;gl.viewport(0,0,W,H);gl.uniform2f(gl.getUniformLocation(pr,'r'),W,H);ut=gl.getUniformLocation(pr,'t');glOK=true}}catch(e){}}
 $('gl').style.background='radial-gradient(ellipse 420px 300px at 50% 28%,rgba(255,60,20,.42),rgba(120,16,8,.18) 55%,transparent 75%),radial-gradient(ellipse 900px 500px at 50% 60%,#1a0706,#0a0405 70%)';
 $('gl').style.opacity=0;
-const DOT=document.createElement('canvas');DOT.width=DOT.height=128;{const d=DOT.getContext('2d'),g=d.createRadialGradient(64,64,0,64,64,64);g.addColorStop(0,'rgba(255,215,160,1)');g.addColorStop(1,'rgba(255,90,30,0)');d.fillStyle=g;d.fillRect(0,0,128,128)}
-const sp=$('sp').getContext('2d'),fx=$('fx').getContext('2d'),FW=1920,FH=1080,EX=960,EY=298;
-let seed=7;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
-const sparks=Array.from({length:2},()=>({x:rnd()*FW,y:rnd()*FH,v:18+rnd()*40,r:1+rnd()*2.6,ph:rnd()*6.28,dr:(rnd()-.5)*20}));
-const motes=Array.from({length:5},()=>({s:Math.floor(rnd()*4),o:rnd(),v:.12+rnd()*.18,w:(rnd()-.5)*120,r:1+rnd()*1.8}));
-const srcPts=[[314*2,115*2],[314*2,312*2],[646*2,115*2],[646*2,312*2]];
+const FW=1920,FH=1080,EX=960,EY=298;   // no particles on this screen (they cost the TV too much)
 const IDLE={from:[0,0],to:[0,0],at:-9,next:2+Math.random()*3,room:-1,nextRoom:25+Math.random()*60};
 function idleGaze(t,sx,sy){const sm=x=>x<=0?0:x>=1?1:x*x*(3-2*x),G=IDLE;
  if(G.room<0&&t>=G.nextRoom){G.room=t;G.nextRoom=t+35+Math.random()*85}
@@ -276,10 +271,6 @@ function talkGlow(speaking,txt,shown){const n=performance.now();
 function render(t){
  const boot=ease(t/2.6);
  $('gl').style.opacity=Math.min(1,t/1.2);
- // sparks
- sp.setTransform(1,0,0,1,0,0);sp.clearRect(0,0,sp.canvas.width,sp.canvas.height);sp.setTransform(K/2,0,0,K/2,0,0);
- for(const s of sparks){const y=((s.y-t*s.v)%FH+FH)%FH,x=s.x+Math.sin(t*.8+s.ph)*s.dr,a=(.35+.35*Math.sin(t*3+s.ph))*Math.min(1,y/FH*2)*boot;
-  if(a>.01){sp.globalAlpha=a;sp.drawImage(DOT,x-s.r*4,y-s.r*4,s.r*8,s.r*8)}}sp.globalAlpha=1;
  // boot: the veil lifts, the lens assembles, ticks light in turn, panels unfold from the eye
  $('veil').style.opacity=1-ease((t-.1)/.6);
  const eye=$('eyewrap'),px=Math.sin(t*.23),py=Math.cos(t*.17);
@@ -322,11 +313,6 @@ function render(t){
  if(dl&&dl.state==='downloading'){$('pb').style.width=dl.pct+'%';$('pb').style.background=`linear-gradient(90deg,#ff6a3a 0%,#ffc46b ${(30+((t*40)%100)).toFixed(0)}%,#ff6a3a 100%)`}else $('pb').style.width='0';
  // clock
  const d=new Date();$('clock').textContent=d.toLocaleDateString([], {weekday:'short',day:'numeric',month:'short'}).toUpperCase()+' · '+d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
- // canvas effects: data streams into HAL, his voice round the lens, the scanning beam
- fx.setTransform(1,0,0,1,0,0);fx.clearRect(0,0,fx.canvas.width,fx.canvas.height);fx.setTransform(K/2,0,0,K/2,0,0);
- if(t>1.4&&!detOn){const a=Math.min(1,(t-1.4)/1);for(const m of motes){const[sx,sy]=srcPts[m.s],p=(m.o+t*m.v)%1,cx=(sx+EX)/2+m.w,cy=Math.min(sy,EY)-80+m.w*.3;
-  const x=(1-p)*(1-p)*sx+2*(1-p)*p*cx+p*p*EX,y=(1-p)*(1-p)*sy+2*(1-p)*p*cy+p*p*EY,al=a*Math.sin(p*Math.PI)*.85*(p<.92?1:0);
-  if(al>.01){fx.globalAlpha=al;fx.drawImage(DOT,x-m.r*5,y-m.r*5,m.r*10,m.r*10)}}fx.globalAlpha=1}
 
 
 }
