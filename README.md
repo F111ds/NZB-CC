@@ -361,19 +361,64 @@ pip install customtkinter psutil pillow
 python system_command_center.py
 ```
 
-## How it fits together
+## How data gets to the TV
 
-```
- phone (HAL app, /app)  ──Wi-Fi / Tailscale──▶  mobile_server.py on the PC (port 8765)
-                                                  ├─ HAL 9000 (hal_server.py, /hal): watches the PC, alerts, history
-                                                  ├─ SABnzbd · Sonarr · Radarr · Prowlarr · your indexers
-                                                  ├─ AltMount (port 8090): streams Usenet releases to Kodi, nothing downloaded
-                                                  ├─ Kodi and Jellyfin
-                                                  ├─ Pi-hole · Uptime Kuma · the UPS (NUT)
-                                                  └─ the TV over ADB (tv-launcher/tools): HAL's screen, volume, what's on
- Android TV  ◀── tv-launcher (NZB-CC TV Launcher APK, with HAL's screen)
- Windows desktop: nzb_command_center.py and system_command_center.py (same settings files)
-```
+<p align="center"><img src="docs/data-flow.png" alt="How NZB-CC works: iPhone to the Windows PC, the PC to the Sony TV, and the Denon amp" width="600"></p>
+
+The Windows PC does all the work. One program, **mobile_server.py**, runs on it all the time and holds everything
+together: the phone app, HAL, and the screen HAL shows on the TV.
+
+**1. HAL's screen.** When you open HAL on the TV, the TV app loads HAL's animated screen from the PC
+(`http://PC:8765/hal/tv`) and shows it full screen. The screen keeps asking the PC for fresh numbers: everything at a
+glance every 10 seconds, the last hour's graphs and the five details pages every minute. HAL collects those numbers on
+the PC:
+- **The PC itself:** CPU, memory, graphics, temperatures and drives (psutil, LibreHardwareMonitor, nvidia-smi and Windows' own tools).
+- **The download programs:** SABnzbd, Sonarr, Radarr and Prowlarr, through their own connections.
+- **The network:** Pi-hole on the Raspberry Pi, Uptime Kuma, the router, and an internet ping.
+- **Power:** the UPS through NUT.
+
+**2. HAL's voice.** HAL writes what he wants to say, and the TV speaks it with its own text-to-speech voice. The TV
+tells the screen how far it has got, so the words type out and the eye glows in time with the voice.
+
+**3. The PC controlling the TV.** The PC reaches the TV in three ways:
+- **ADB** (Android's own remote-control link, through `tools/tv.py`). Used to open HAL, change the volume, open and
+  search Netflix, Prime and YouTube, find out what's on screen, and install updates to the TV app.
+- **Sony's IP control and Wake-on-LAN.** Used to turn the TV on and off.
+- **Kodi's remote control** (JSON-RPC). Used to play, pause and start movies.
+
+**4. The home screen.** The TV app asks the PC for your Kodi row: recently watched and ready to watch, with posters.
+It also asks for the photos for the screensaver. Weather (Open-Meteo) and the peso rate (AllRatesToday) come straight
+from the internet.
+
+**5. Voice.** "Hey Siri, Ask HAL 9000…" runs a Shortcut on your iPhone. It sends your words to HAL (`/hal/api/siri`),
+HAL does the job (play a movie, turn the TV off, read out the status) and sends back what Siri says.
+
+**6. Games.** The PS5 and Switch go through the Denon amp. When the TV shows that input, HAL asks the amp which device
+is on, so it can say "PlayStation's on".
+
+## Everything that makes it work
+
+| What | Where | What it does |
+|---|---|---|
+| mobile_server.py | PC | The hub: phone app, HAL, TV screen, all the connections |
+| HAL 9000 (hal_server.py) | PC | Watches everything, alerts, speaks, Siri |
+| System Command Center, NZB Command Center | PC | The original desktop apps |
+| SABnzbd · Sonarr · Radarr · Prowlarr | PC | Downloading, and following shows and movies |
+| AltMount | PC | Streams from Usenet to Kodi without downloading |
+| Jellyfin | PC | Your media library, on any device |
+| LibreHardwareMonitor · nvidia-smi · NUT | PC | Temperatures, graphics card, UPS |
+| NZB-CC TV Launcher | TV | Home screen, HAL's screen, screensaver |
+| Kodi | TV | Plays your library and Usenet streams |
+| Pi-hole | Raspberry Pi | Blocks ads for the whole house |
+| Uptime Kuma | Network | Checks your services and devices are up |
+| Denon amp | Living room | Tells HAL which console is on |
+| HAL 9000 app · Siri Shortcut · Scriptable widget | iPhone | How you use it all |
+| Tailscale | iPhone + PC | Use the app away from home |
+| ntfy | Internet | Alerts to your phone |
+| Usenet indexers + provider | Internet | Where downloads and streams come from |
+| Open-Meteo · AllRatesToday · TMDb | Internet | Weather, peso rate, movie art |
+
+### The files in this repo
 
 | Part | What it is |
 |---|---|
