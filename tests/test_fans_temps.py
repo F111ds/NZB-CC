@@ -363,4 +363,17 @@ assert not r["ok"] and fc2.mode == "auto" and "didn't switch" in r["say"] and lo
 fc2.refresh(); assert fc2.view()["available"]     # available through Fan Control even without LibreHardwareMonitor
 print("Fan Control profiles ok")
 
+# pumps are left alone: by name, or by speed (an AIO pump on CPU_OPT at 6,000+ rpm)
+assert hs.is_pump({"name": "CPU Optional Fan", "rpm": 6366}) and hs.is_pump({"name": "AIO Pump", "rpm": 0}) and not hs.is_pump({"name": "Fan #1", "rpm": 1392})
+assert hs.fan_targets([{"name": "Fan #1", "control_id": "a", "rpm": 1392}, {"name": "CPU Optional Fan", "control_id": "b", "rpm": 6366}], "quiet") == {"a": 40}
+_cfg3 = {"Main": {"Controls": [{"Name": "Fan #1", "Identifier": "/lpc/x/control/0", "ManualControl": False, "ManualControlValue": 50},
+                               {"Name": "CPU Optional Fan", "Identifier": "/lpc/x/control/6", "ManualControl": False, "ManualControlValue": 100}]}}
+p3 = {c["Name"]: c for c in hs.fc_controls(hs.fc_profile(_cfg3, "quiet", {"/lpc/x/control/0": 1392, "/lpc/x/control/6": 6366}))}
+assert p3["Fan #1"]["ManualControl"] and not p3["CPU Optional Fan"]["ManualControl"], p3
+# the TV card with the modes: at most 4 rows, no extra "Graphics card" row when GPU fans are listed
+vv = {"fans": [{"name": n, "value": 1000} for n in ("Fan #1", "Fan #2", "CPU Optional Fan", "GPU Fan 1", "GPU Fan 2")], "gpus": [{"fan": 30}]}
+c4 = hs.tv_fan_card(vv, {"available": True, "mode": "max", "modes": hs.FAN_ORDER, "fans": []})
+assert len(c4["rows"]) == 4 and not any(r[0] == "Graphics card" for r in c4["rows"]), c4["rows"]
+print("pumps and the TV card ok")
+
 print("\nALL FAN AND TEMPERATURE TESTS PASSED")
