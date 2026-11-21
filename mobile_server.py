@@ -83,7 +83,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.23.6"
+VERSION = "3.24.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -4080,6 +4080,16 @@ def tv_poster(item_id: str) -> bytes | None:
         return None
 
 
+def tv_backdrop(item_id: str) -> bytes | None:
+    """A Recently watched item's background art (saved by _tv_save_watched_backdrop), or None."""
+    if not TV_WATCHED_ID_RE.fullmatch(item_id or ""):
+        raise ValueError("Invalid item.")
+    try:
+        return (TV_WATCHED_ART_DIR / f"{item_id}.bg").read_bytes()
+    except OSError:
+        return None
+
+
 def _tv_wait_for_kodi(wait: float) -> None:
     deadline = time.monotonic() + wait
     while True:
@@ -4801,10 +4811,10 @@ def tv_kodi_watched(limit: int = TV_WATCHED_SIZE) -> list[dict]:
     common = {"filter": _TV_SEEN_FILTER, "sort": {"method": "lastplayed", "order": "descending"},
               "limits": {"start": 0, "end": limit * 2}}
     movies = _kdict(kodi_call("VideoLibrary.GetMovies", dict(common, properties=[
-        "title", "year", "runtime", "art", "thumbnail", "playcount", "resume", "lastplayed", "streamdetails"]),
-        timeout=10)).get("movies") or []
+        "title", "year", "runtime", "art", "thumbnail", "playcount", "resume", "lastplayed", "streamdetails",
+        "plot", "genre"]), timeout=10)).get("movies") or []
     episodes = _kdict(kodi_call("VideoLibrary.GetEpisodes", dict(common, properties=[
-        "title", "showtitle", "season", "episode", "runtime", "art", "playcount", "resume", "lastplayed"]),
+        "title", "showtitle", "season", "episode", "runtime", "art", "playcount", "resume", "lastplayed", "plot"]),
         timeout=10)).get("episodes") or []
     out = []
     for mv in movies:
@@ -4815,7 +4825,8 @@ def tv_kodi_watched(limit: int = TV_WATCHED_SIZE) -> list[dict]:
         out.append({"id": f"m{to_int(mv.get('movieid'))}", "movieid": to_int(mv.get("movieid")),
                     "title": str(mv.get("title") or "Untitled"), "year": to_int(mv.get("year")) or None,
                     "quality": "4K" if quality == "2160p" else quality,
-                    "lastplayed": str(mv.get("lastplayed") or ""),
+                    "lastplayed": str(mv.get("lastplayed") or ""), "plot": str(mv.get("plot") or "")[:400],
+                    "genres": [str(g) for g in (mv.get("genre") or [])][:3], "bg_ref": _art_ref(art.get("fanart")),
                     "art_ref": _art_ref(art.get("poster") or mv.get("thumbnail"))} | _tv_progress(mv))
     for ep in episodes:
         if not isinstance(ep, dict) or to_int(ep.get("episodeid")) <= 0:
@@ -4825,7 +4836,8 @@ def tv_kodi_watched(limit: int = TV_WATCHED_SIZE) -> list[dict]:
         out.append({"id": f"e{to_int(ep.get('episodeid'))}", "episodeid": to_int(ep.get("episodeid")),
                     "title": show or str(ep.get("title") or "Untitled"), "episode_title": str(ep.get("title") or ""),
                     "season": to_int(ep.get("season")), "episode": to_int(ep.get("episode")),
-                    "lastplayed": str(ep.get("lastplayed") or ""),
+                    "lastplayed": str(ep.get("lastplayed") or ""), "plot": str(ep.get("plot") or "")[:400],
+                    "bg_ref": _art_ref(art.get("tvshow.fanart") or art.get("fanart")),
                     "art_ref": _art_ref(art.get("tvshow.poster") or art.get("season.poster"))} | _tv_progress(ep))
     out.sort(key=lambda x: x["lastplayed"], reverse=True)   # "YYYY-MM-DD HH:MM:SS" sorts as text
     now = _tv_now_watching()
@@ -4847,7 +4859,8 @@ def _tv_now_watching() -> dict | None:
             return None
         pid = to_int(video[0].get("playerid"))
         item = _kdict(_kdict(kodi_call("Player.GetItem", {"playerid": pid, "properties": [
-            "title", "showtitle", "season", "episode", "year", "art", "thumbnail", "streamdetails"]}, timeout=4)).get("item"))
+            "title", "showtitle", "season", "episode", "year", "art", "thumbnail", "streamdetails", "plot", "genre"]},
+            timeout=4)).get("item"))
         props = _kdict(kodi_call("Player.GetProperties", {"playerid": pid, "properties": ["time", "totaltime"]}, timeout=4))
     except (UpstreamError, ConfigError):
         return None
@@ -4859,7 +4872,10 @@ def _tv_now_watching() -> dict | None:
     base = {"lastplayed": time.strftime("%Y-%m-%d %H:%M:%S"), "progress": progress,
             "remaining": round((total - pos) / 60) if total > pos else 0, "runtime": round(total / 60), "watched": False}
     art = _kdict(item.get("art"))
+    base["plot"] = str(item.get("plot") or "")[:400]
+    base["bg_ref"] = _art_ref(art.get("fanart") or art.get("tvshow.fanart"))
     if kind == "movie":
+        base["genres"] = [str(g) for g in (item.get("genre") or [])][:3]
         quality, _hdr = video_quality(item.get("streamdetails"))
         return base | {"id": f"m{kid}", "movieid": kid, "title": str(item.get("title") or item.get("label") or "Untitled"),
                        "year": to_int(item.get("year")) or None, "quality": "4K" if quality == "2160p" else quality,
@@ -4890,6 +4906,25 @@ def _tv_save_watched_poster(item: dict) -> bool:
     return True
 
 
+def _tv_save_watched_backdrop(item: dict) -> bool:
+    """The movie's or show's background art (Kodi's fanart), for the big picture behind the TV's home screen."""
+    dest = TV_WATCHED_ART_DIR / f"{item['id']}.bg"
+    if dest.exists():
+        return True
+    if not item.get("bg_ref"):
+        return False
+    try:
+        raw = kodi_art(item["bg_ref"])[0]
+    except (UpstreamError, ValueError, ConfigError):
+        return False
+    if not raw or not _image_type(raw):
+        return False
+    tmp = dest.with_suffix(".tmpbg")
+    tmp.write_bytes(raw)
+    replace_retry(tmp, dest)
+    return True
+
+
 def tv_watched_load() -> dict:
     try:
         with _tv_files_lock:
@@ -4914,12 +4949,14 @@ def tv_watched_refresh() -> dict:
         for it in found:   # no poster, no tile
             if _tv_save_watched_poster(it):
                 it.pop("art_ref", None)
+                it["backdrop"] = _tv_save_watched_backdrop(it)
+                it.pop("bg_ref", None)
                 items.append(it)
             if len(items) >= TV_WATCHED_SIZE:
                 break
         if TV_WATCHED_ART_DIR.exists():
-            keep = {f"{it['id']}.img" for it in items}
-            for f in TV_WATCHED_ART_DIR.glob("*.img"):
+            keep = {f"{it['id']}.img" for it in items} | {f"{it['id']}.bg" for it in items}
+            for f in list(TV_WATCHED_ART_DIR.glob("*.img")) + list(TV_WATCHED_ART_DIR.glob("*.bg")):
                 if f.name not in keep:
                     f.unlink(missing_ok=True)
         state = {"updated": time.time(), "items": items}
@@ -4951,8 +4988,10 @@ def tv_watched_row(background: bool = True, fresh: bool = False) -> dict:
 
 def tv_watched_row_from(state: dict) -> dict:
     keys = ("id", "title", "episode_title", "year", "season", "episode", "runtime", "quality", "watched",
-            "progress", "remaining", "movieid", "episodeid", "lastplayed")
-    items = [{k: it.get(k) for k in keys} | {"poster": f"/api/tv/poster?id={it['id']}"} for it in state["items"]]
+            "progress", "remaining", "movieid", "episodeid", "lastplayed", "plot", "genres")
+    items = [{k: it.get(k) for k in keys} | {"poster": f"/api/tv/poster?id={it['id']}",
+                                             "backdrop": f"/api/tv/backdrop?id={it['id']}" if it.get("backdrop") else ""}
+             for it in state["items"]]
     return {"updated": state["updated"], "items": items}
 
 
@@ -6248,6 +6287,12 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
             raw = tv_poster(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
             if not raw:
                 self.send_json(404, {"error": "No poster for this movie."})
+                return
+            self._send(200, raw, _image_type(raw) or "image/jpeg", {"Cache-Control": "private, max-age=604800"})
+        elif path == "/api/tv/backdrop":
+            raw = tv_backdrop(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0])
+            if not raw:
+                self.send_json(404, {"error": "No background art for this item."})
                 return
             self._send(200, raw, _image_type(raw) or "image/jpeg", {"Cache-Control": "private, max-age=604800"})
         elif path == "/api/history":

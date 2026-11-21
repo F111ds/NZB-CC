@@ -24,7 +24,8 @@ def fake_kodi(method, params=None, timeout=6):
     if method == "VideoLibrary.GetMovies":
         assert params["sort"] == {"method": "lastplayed", "order": "descending"}
         return {"movies": [
-            {"movieid": 3, "title": "Half Way", "year": 2024, "runtime": 6000, "art": {"poster": "image://p3/"},
+            {"movieid": 3, "title": "Half Way", "year": 2024, "runtime": 6000, "art": {"poster": "image://p3/", "fanart": "image://f3/"},
+             "plot": "A long trip.", "genre": ["Drama", "Sci-Fi"],
              "playcount": 0, "resume": {"position": 1500, "total": 6000}, "lastplayed": "2026-11-15 21:00:00",
              "streamdetails": {"video": [{"width": 3840, "height": 2160}]}},
             {"movieid": 4, "title": "No Art", "runtime": 5400, "art": {}, "playcount": 1,
@@ -62,6 +63,14 @@ assert done["progress"] == 1.0 and done["watched"] is True
 assert all(it["poster"] == f"/api/tv/poster?id={it['id']}" for it in row["items"])
 assert m.tv_poster("e42") == JPEG and m.tv_poster("m3") == JPEG
 assert m.tv_poster("m4") is None
+# The home screen's big picture: the story, genres and background art (only when Kodi has fanart)
+assert half["plot"] == "A long trip." and half["genres"] == ["Drama", "Sci-Fi"]
+assert half["backdrop"] == "/api/tv/backdrop?id=m3" and ep["backdrop"] == "" and m.tv_backdrop("m3") == JPEG
+assert m.tv_backdrop("e42") is None
+try:
+    m.tv_backdrop("../x"); raise AssertionError("bad id")
+except ValueError:
+    pass
 
 # A movie left open in Kodi (paused behind Home) has no resume point or "last played" yet: it still comes first,
 # with where the player is now; the same movie further down the list isn't shown twice.
