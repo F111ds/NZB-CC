@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.30.0"
+VERSION = "1.31.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1519,6 +1519,179 @@ class FanWatch:
         return {f["name"] for f in self.f.values() if f["zero_since"] is not None and f["watch"] and f["stops"] < 2}
 
 
+# ---------------------------------------------------------------------------------------------
+# Fan control, through LibreHardwareMonitor's web server (its /Sensor?action=Set: a % or "null" for the BIOS curve)
+# ---------------------------------------------------------------------------------------------
+
+FAN_MODES = {"quiet": 35, "normal": 50, "cool": 70, "max": 100}
+FAN_ORDER = ["auto", "quiet", "normal", "cool", "max"]
+FAN_FLOOR_CPU, FAN_FLOOR = 40, 25
+
+
+def _num(v) -> float | None:
+    m = re.match(r"\s*(-?\d+(?:[.,]\d+)?)", str(v if v is not None else ""))
+    return float(m.group(1).replace(",", ".")) if m else None
+
+
+def lhm_fan_controls(data) -> list[dict]:
+    """Each motherboard fan paired with its control in LibreHardwareMonitor's data.json (".../fan/N" with
+    ".../control/N"): [{"name", "fan_id", "control_id", "rpm", "pct"}]. Graphics card fans are left to the card."""
+    fans, ctrls = {}, {}
+
+    def walk(n):
+        kids = n.get("Children") or []
+        for k in kids:
+            if isinstance(k, dict):
+                walk(k)
+        if kids:
+            return
+        sid = str(n.get("SensorId") or "")
+        m = re.match(r"(.+)/(fan|control)/(\d+)$", sid)
+        if not m or m.group(1).lower().startswith("/gpu"):
+            return
+        (fans if m.group(2) == "fan" else ctrls)[(m.group(1), m.group(3))] = {"id": sid, "name": str(n.get("Text") or ""), "value": _num(n.get("Value"))}
+    if isinstance(data, dict):
+        walk(data)
+    out = []
+    for key, c in sorted(ctrls.items(), key=lambda kv: (kv[0][0], int(kv[0][1]))):
+        f = fans.get(key)
+        if f:
+            out.append({"name": f["name"] or c["name"], "fan_id": f["id"], "control_id": c["id"], "rpm": f["value"], "pct": c["value"]})
+    return out
+
+
+def fan_targets(fans: list[dict], mode: str) -> dict:
+    """control id -> % for a mode. Never below 40% for the CPU fan (every fan, if none is called CPU) and 25% for the
+    rest; pumps are left on their own curve."""
+    pct = FAN_MODES[mode]
+    cpu_named = any("cpu" in f["name"].lower() for f in fans)
+    out = {}
+    for f in fans:
+        nm = f["name"].lower()
+        if "pump" in nm:
+            continue
+        floor = FAN_FLOOR_CPU if ("cpu" in nm or not cpu_named) else FAN_FLOOR
+        out[f["control_id"]] = max(pct, floor)
+    return out
+
+
+class FanControl:
+    """Fan modes for the phone and TV: Auto (the BIOS curves) or a fixed % from LibreHardwareMonitor, with HAL
+    handing back to Auto by himself when anything runs hot."""
+
+    def __init__(self, port: int = 8085):
+        self.port = port
+        self.mode = "auto"
+        self.since = 0.0
+        self.note = ""
+        self.fans: list[dict] = []
+        self.available = False
+        self.reason = "checking"
+        self.lock = threading.RLock()
+
+    def _open(self, url: str, method: str = "GET", timeout: float = 3.0):
+        req = urllib.request.Request(url, method=method, data=b"" if method == "POST" else None)
+        return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=timeout)
+
+    def refresh(self) -> None:
+        try:
+            with self._open(f"http://127.0.0.1:{self.port}/data.json") as r:
+                data = json.loads(r.read(8_000_000).decode("utf-8", "replace"))
+        except Exception:  # noqa: BLE001
+            with self.lock:
+                self.fans, self.available, self.reason = [], False, "LibreHardwareMonitor isn't answering (its web server on port 8085)"
+            return
+        fans = [f for f in lhm_fan_controls(data) if f["rpm"]]   # headers with a fan on them
+        with self.lock:
+            self.fans = fans
+            self.available = bool(fans_controllable(fans))
+            self.reason = "" if self.available else "LibreHardwareMonitor shows no fans it can control on this PC"
+
+    def _set(self, cid: str, value) -> bool:
+        q = urllib.parse.urlencode({"action": "Set", "id": cid, "value": value})
+        for method in ("POST", "GET"):
+            try:
+                with self._open(f"http://127.0.0.1:{self.port}/Sensor?{q}", method=method) as r:
+                    if r.status == 200:
+                        return True
+            except Exception:  # noqa: BLE001
+                continue
+        return False
+
+    def set_mode(self, mode: str, why: str = "") -> dict:
+        mode = str(mode or "").lower()
+        if mode not in FAN_ORDER:
+            raise ValueError("Unknown fan mode.")
+        self.refresh()
+        with self.lock:
+            fans = list(self.fans)
+            if not self.available:
+                return {"ok": False, "say": self.reason or "I can't control the fans on this PC."}
+        if mode == "auto":
+            ok = all(self._set(f["control_id"], "null") for f in fans)
+        else:
+            ok = all(self._set(cid, v) for cid, v in fan_targets(fans, mode).items())
+            if not ok:
+                for f in fans:
+                    self._set(f["control_id"], "null")
+        if not ok:
+            with self.lock:
+                self.mode, self.since = "auto", time.time()
+            return {"ok": False, "say": "LibreHardwareMonitor didn't accept the change, so the fans stay on your BIOS curves."}
+        with self.lock:
+            self.mode, self.since, self.note = mode, time.time(), why
+        return {"ok": True, "say": "The fans are back on Automatic: your BIOS curves." if mode == "auto" else f"The fans are on {mode.title()}."}
+
+    def watch(self, hot: str) -> str:
+        """Every few seconds: back to Auto if something runs hot; else keep a manual setting applied (it's lost if
+        LibreHardwareMonitor restarts). Returns why it went back to Auto, or ""."""
+        with self.lock:
+            mode = self.mode
+        if mode == "auto":
+            self.refresh()
+            return ""
+        if hot:
+            self.set_mode("auto", why=hot)
+            return hot
+        self.refresh()
+        with self.lock:
+            fans = list(self.fans)
+        if not fans:
+            with self.lock:
+                self.mode = "auto"
+            return ""
+        want = fan_targets(fans, mode)
+        for f in fans:
+            if f["control_id"] in want and f["pct"] is not None and abs(f["pct"] - want[f["control_id"]]) > 8:
+                self._set(f["control_id"], want[f["control_id"]])
+        return ""
+
+    def view(self) -> dict:
+        with self.lock:
+            return {"mode": self.mode, "since": self.since, "note": self.note, "available": self.available, "reason": self.reason,
+                    "modes": FAN_ORDER, "fans": [{"name": f["name"], "rpm": f["rpm"], "pct": f["pct"]} for f in self.fans]}
+
+
+def fans_controllable(fans: list[dict]) -> list[dict]:
+    return [f for f in fans if "pump" not in f["name"].lower()]
+
+
+def fan_hot_reason(snap: dict, s: dict) -> str:
+    """Why the fans must go back to Auto now ("" if nothing is hot): the CPU or graphics card within 5 °C of its
+    alert, or one of the other critical temperatures at its limit."""
+    cpu = snap.get("cpu") or {}
+    if cpu.get("temp") is not None and cpu["temp"] >= s["cpu_temp_alert"] - 5:
+        return f"the CPU reached {cpu['temp']:.0f}°C"
+    for g in snap.get("gpus") or []:
+        if g.get("temp") is not None and g["temp"] >= s["gpu_temp_alert"] - 5:
+            return f"the graphics card reached {g['temp']:.0f}°C"
+    for x in extra_temps((snap.get("sensors") or {}).get("temps") or []):
+        lim = s.get(x["setting"])
+        if lim and x["value"] >= lim:
+            return f"the {x['label']} reached {x['value']:.0f}°C"
+    return ""
+
+
 def recovery_title(key: str, issue: dict) -> str:
     """What HAL says when a problem goes away."""
     kind, _, arg = key.partition(":")
@@ -2430,7 +2603,7 @@ def tv_grids(hal, st: dict, sc: dict, hist: dict) -> dict:
                        "free": sm.fmt_bytes(d["free"]), "info": " · ".join(b for b in bits if b), "warn": d["mount"] in full_keys})
     free_total = sum(d.get("free") or 0 for d in st["drives"])
     disk_now = [x for x in _hist(hist.get("disk"))][-1:] or [None]
-    fan_card = tv_fan_card(v)
+    fan_card = tv_fan_card(v, st.get("fanctl"))
 
     pc = [[
         {"key": "PROCESSOR", "badge": re.sub(r"\s+\d+-Core Processor$|\(R\)|\(TM\)|CPU @.*$|Intel |AMD ", "", str(cpu.get("name") or "")).strip()[:20],
@@ -2592,11 +2765,14 @@ def tv_grids(hal, st: dict, sc: dict, hist: dict) -> dict:
     return {"The PC": pc, "Network": net, "Uptime Kuma": kuma, "Raspberry Pi": pi}
 
 
-def tv_fan_card(v: dict) -> dict | None:
-    """The FANS card on the TV's PC page: each fan's speed (a stopped one in red) and the graphics card fan."""
+def tv_fan_card(v: dict, fc: dict | None = None) -> dict | None:
+    """The FANS card on the TV's PC page: each fan's speed (a stopped one in red) and the graphics card fan; with fan
+    control, each fan's power and the modes (OK on the TV steps through them)."""
     fans = v.get("fans") or []
     g = (v.get("gpus") or [{}])[0] if v.get("gpus") else {}
-    rows = [[f["name"], "STOPPED" if f.get("stopped") else f"{f['value']:,.0f} rpm", "critical" if f.get("stopped") else "ok"] for f in fans[:5]]
+    pct = {f["name"]: f.get("pct") for f in (fc or {}).get("fans") or []} if fc and fc.get("available") else {}
+    rows = [[f["name"], "STOPPED" if f.get("stopped") else f"{f['value']:,.0f} rpm" + (f" · {pct[f['name']]:.0f}%" if pct.get(f["name"]) is not None else ""),
+             "critical" if f.get("stopped") else "ok"] for f in fans[:5]]
     if g.get("fan") is not None and len(rows) < 6:
         rows.append(["Graphics card", f"{g['fan']:.0f}%", "ok"])
     if not rows:
@@ -2604,7 +2780,13 @@ def tv_fan_card(v: dict) -> dict | None:
     stopped = sum(1 for f in fans if f.get("stopped"))
     spinning = sum(1 for f in fans if not f.get("stopped"))
     badge = f"{stopped} STOPPED" if stopped else (f"{spinning} SPINNING" if spinning else "GRAPHICS ONLY")
-    return {"key": "FANS", "weight": 0.85, "badge": badge, "rows": rows}
+    card = {"key": "FANS", "weight": 0.85, "badge": badge, "rows": rows}
+    if fc and fc.get("available"):
+        mode = fc.get("mode") or "auto"
+        if not stopped:
+            card["badge"] = mode.upper()
+        card.update({"modes": [m.upper() for m in fc.get("modes") or FAN_ORDER], "mode": mode.upper(), "lit": mode != "auto"})
+    return card
 
 
 def tv_brief_with_history(hal, st: dict) -> dict:
@@ -3492,6 +3674,8 @@ class Hal(FunMixin):
         self.kuma_ms: dict[str, deque] = {}     # monitor -> its last hour of response times (ms, None when down)
         self.kuma_down_t: dict[str, float] = {}  # monitor -> when it went down
         self.fan_watch = FanWatch()
+        self.fan_ctl = FanControl()
+        self._fan_was = str(st.get("fan_mode") or "auto")   # a manual mode left over from before a restart
         self.pi_temp_hist: deque = deque(maxlen=120)
         self.pi_cpu_hist: deque = deque(maxlen=120)
         self.tv_phrases: list[str] = [str(x)[:120] for x in (st.get("tv_phrases") or []) if str(x).strip()][:TV_PHRASES_MAX]
@@ -3556,7 +3740,7 @@ class Hal(FunMixin):
             self.monitor.start()
         for fn, name in ((self._service_loop, "services"), (self._network_loop, "network"), (self._power_loop, "power"),
                          (self._slow_loop, "slow"), (self._history_loop, "history"), (self._pihole_loop, "pihole"),
-                         (self._kuma_loop, "kuma")):
+                         (self._kuma_loop, "kuma"), (self._fan_loop, "fans")):
             threading.Thread(target=self._guard(fn), name=f"hal-{name}", daemon=True).start()
 
     def stop(self) -> None:
@@ -3587,7 +3771,8 @@ class Hal(FunMixin):
                     "launch": self.launch, "power_log": self.power_log[-50:], "snoozed": self.snoozed,
                     "update_seen": self.update_seen, "known_devices": dict(list(self.known_devices.items())[-1000:]),
                     "new_devices": self.new_devices, "devices_seeded": self.devices_seeded, "pihole_found": self.pihole_found,
-                    "counters": self.counters, "brief_sent": self.brief_sent, "tv_phrases": self.tv_phrases}
+                    "counters": self.counters, "brief_sent": self.brief_sent, "tv_phrases": self.tv_phrases,
+                    "fan_mode": self.fan_ctl.mode if hasattr(self, "fan_ctl") else "auto"}
         save_json(STATE_FILE, data)
 
     def update_settings(self, s: dict) -> None:
@@ -3976,6 +4161,28 @@ class Hal(FunMixin):
         if gone:
             self.save()
         return bool(gone)
+
+    def _fan_loop(self) -> None:
+        """Fan control: after a restart the fans go back to Auto; while a manual mode is on, HAL checks every 5 s
+        that nothing runs hot (else back to Auto, and he says why)."""
+        if self._fan_was != "auto":
+            self.fan_ctl.set_mode("auto", why="HAL restarted")
+            self._fan_was = "auto"
+            self.save()
+        while not self.stop_evt.is_set():
+            snap = self.monitor.snapshot() if self.monitor else {}
+            why = self.fan_ctl.watch(fan_hot_reason(snap, self.settings))
+            if why:
+                self.add_event("warning", "Fans back on Automatic", f"I handed the fans back to your BIOS curves: {why}.", push=True)
+                self.save()
+            self.stop_evt.wait(5 if self.fan_ctl.mode != "auto" else 15)
+
+    def set_fans(self, mode: str, who: str = "") -> dict:
+        res = self.fan_ctl.set_mode(mode)
+        if res.get("ok"):
+            self.add_event("info", f"Fans: {self.fan_ctl.mode.title()}", res["say"] + (f" ({who})" if who else ""))
+            self.save()
+        return {**res, "fans": self.fan_ctl.view()}
 
     def _kuma_loop(self) -> None:
         while not self.stop_evt.is_set():
@@ -4649,6 +4856,7 @@ class Hal(FunMixin):
             "unread": self.unread,
             "update": update_view(),
             "pihole": ph,
+            "fanctl": self.fan_ctl.view(),
             "kuma": kv,
             "record": self.record(),
             "tvhal": {"open": now - self.tv_seen < 45},
@@ -5365,6 +5573,8 @@ class HalRoutes:
                 if rng not in ("live", "1h", "24h", "7d"):
                     raise ValueError("Unknown range.")
                 self._h_json(200, {"range": rng, "series": hal.history(rng)})
+            elif path == "/api/fans":
+                self._h_json(200, hal.fan_ctl.view())
             elif path == "/api/live":   # the last 2 minutes, a reading every 2 s (the TV and phone's live graphs)
                 self._h_json(200, hal.live())
             elif path == "/api/events":
@@ -5473,6 +5683,8 @@ class HalRoutes:
                 self._h_json(200, pihole_settings(hal, body))
             elif path == "/api/kuma":
                 self._h_json(200, kuma_settings(hal, body))
+            elif path == "/api/fans":
+                self._h_json(200, hal.set_fans(str(body.get("mode") or ""), str(body.get("from") or "")[:20]))
             elif path == "/api/tv/show":
                 self._h_json(200, tv_show(hal, str(body.get("say") or "")))
             elif path == "/api/tv/key":

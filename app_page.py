@@ -331,6 +331,10 @@ nav.tabs button.on{color:#ffb59a;text-shadow:0 0 12px rgba(255,90,40,.9)}nav.tab
 }
 .netg .k{display:flex;align-items:center;gap:5px}
 .live{color:#ff3a1e;font-weight:700;letter-spacing:.12em}
+.fmodes{display:flex;gap:6px;margin:10px 0 6px}.fmodes button{flex:1;padding:9px 0;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(255,236,228,.06);font:700 11px var(--mono);letter-spacing:.08em;color:rgba(255,235,228,.75)}
+.fmodes button.on{background:linear-gradient(135deg,rgba(255,106,58,.9),rgba(225,29,72,.9));color:#fff;border-color:transparent;box-shadow:0 0 14px rgba(255,80,40,.4)}
+.fpct{display:inline-block;width:64px;height:5px;border-radius:3px;background:rgba(255,255,255,.12);margin:0 10px;vertical-align:middle;overflow:hidden}.fpct i{display:block;height:100%;background:#c9b9b4;border-radius:3px}
+.fnote{font-size:12px;color:var(--soft);margin-top:8px;line-height:1.35}
 .fanscard .fanrow{display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid rgba(255,255,255,.08);font-size:14px}.fanscard h3{margin-bottom:4px}
 .sparkwrap span.ntleg{display:flex;justify-content:space-between;text-align:left;width:100%;align-self:stretch}.sparkwrap span.ntleg i{font-style:normal}
 .na{width:12px;height:12px;display:inline-block;background:currentColor;-webkit-mask-size:contain;mask-size:contain;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-position:center;mask-position:center}
@@ -560,11 +564,22 @@ function liveNet(){const v=LIVE&&Date.now()-liveAt<15000?(LIVE.net_down||[]).map
 async function pollLive(){let next=2000;try{if(!document.hidden&&$('netlive')){LIVE=await api('/hal/api/live');liveAt=Date.now();const el=$('netlive'),h=liveNet();if(el&&h)el.outerHTML=h}}catch(e){next=10000}setTimeout(pollLive,next)}
 setTimeout(pollLive,1500);
 // Each fan's speed (a stopped one in red), and the graphics card fan.
-function fansCard(){const v=S&&S.vitals;if(!v)return'';const fans=v.fans||[],g=(v.gpus||[])[0],rows=fans.slice(0,5).map(f=>[f.name,f.stopped?'STOPPED':f0(f.value,' rpm'),f.stopped]);
-  if(g&&g.fan!=null)rows.push(['Graphics card',f0(g.fan,'%'),false]);if(!rows.length)return'';
-  const stopped=fans.filter(f=>f.stopped).length,spin=fans.length-stopped,st=stopped?['red2',stopped+' STOPPED']:['green',spin?spin+' SPINNING':'GRAPHICS ONLY'];
-  return'<button class="card cardbtn fanscard" data-hal="vitals"><h3><span class="k">FANS</span><span class="mono" style="color:var(--'+st[0]+')">● '+st[1]+'</span></h3>'+
-    rows.map(r=>'<div class="fanrow"><span>'+esc(r[0])+'</span><span class="mono"'+(r[2]?' style="color:var(--red2)"':'')+'>'+esc(r[1])+'</span></div>').join('')+'</button>'}
+function fansCard(){const v=S&&S.vitals;if(!v)return'';const fans=v.fans||[],g=(v.gpus||[])[0],fc=S.fanctl&&S.fanctl.available?S.fanctl:null,pct={};
+  if(fc)(fc.fans||[]).forEach(f=>{if(f.pct!=null)pct[f.name]=f.pct});
+  const rows=fans.slice(0,5).map(f=>[f.name,f.stopped?'STOPPED':f0(f.value,' rpm'),f.stopped,pct[f.name]]);
+  if(g&&g.fan!=null)rows.push(['Graphics card',fc?f0(g.fan,'%')+' · set by the card':f0(g.fan,'%'),false,null,true]);if(!rows.length)return'';
+  const stopped=fans.filter(f=>f.stopped).length,spin=fans.length-stopped,mode=fc?fc.mode:'auto';
+  const st=stopped?['red2',stopped+' STOPPED']:fc?(mode==='auto'?['green','AUTOMATIC']:['amber',mode.toUpperCase()]):['green',spin?spin+' SPINNING':'GRAPHICS ONLY'];
+  const row=r=>'<div class="fanrow"><span>'+esc(r[0])+'</span><span class="mono"'+(r[2]?' style="color:var(--red2)"':r[4]?' style="color:var(--soft)"':'')+'>'+esc(r[1])+
+    (r[3]!=null?'<span class="fpct"><i style="width:'+Math.min(100,r[3])+'%"></i></span>'+Math.round(r[3])+'%':'')+'</span></div>';
+  if(!fc)return'<button class="card cardbtn fanscard" data-hal="vitals"><h3><span class="k">FANS</span><span class="mono" style="color:var(--'+st[0]+')">● '+st[1]+'</span></h3>'+rows.map(row).join('')+'</button>';
+  return'<div class="card fanscard"><h3><span class="k">FANS</span><span class="mono" style="color:var(--'+st[0]+')">● '+st[1]+'</span></h3>'+
+    '<div class="fmodes">'+(fc.modes||['auto','quiet','normal','cool','max']).map(m=>'<button data-fanmode="'+m+'" class="'+(m===mode?'on':'')+'">'+m.toUpperCase()+'</button>').join('')+'</div>'+
+    rows.map(row).join('')+
+    '<div class="fnote">'+(fc.note&&mode==='auto'&&fc.since&&Date.now()/1000-fc.since<3600?'Back on Auto: '+esc(fc.note)+'. ':'')+'Auto = your BIOS fan curves. Never below 40% (CPU) / 25%; back to Auto by itself if anything runs hot.</div></div>'}
+async function setFans(mode){document.querySelectorAll('[data-fanmode]').forEach(b=>b.classList.toggle('on',b.dataset.fanmode===mode));
+  try{const r=await api('/hal/api/fans',{mode,from:'phone'});if(S&&r&&r.fans)S.fanctl=r.fans;toast(r&&r.say||'Done',!(r&&r.ok))}catch(e){toast('I couldn\'t reach the PC.',true)}
+  refresh()}
 function restartCard(){if(!S||!S.boot)return'';const pend=S.security&&S.security.pending_reboot,days=Math.floor((Date.now()/1000-S.boot)/86400);
   return'<div class="card" style="display:flex;align-items:center;gap:12px"><div style="flex:1"><span class="k">LAST RESTART</span><div style="font-weight:600;margin-top:4px">'+(days<1?'Today':days===1?'Yesterday':days+' days ago')+'</div>'+
     (pend?'<div class="sub" style="color:var(--amber);font-size:13px">Windows is waiting for a restart to finish updates.</div>':'')+'</div>'+
@@ -1196,6 +1211,7 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if(d.tab){show(d.tab);return}
   if('settings' in d){openSettings();return}
   if('alerts' in d){openHal('/hal/?tab=log');return}
+  if(d.fanmode){setFans(d.fanmode);return}
   if(d.hal){openHal('/hal/?tab='+encodeURIComponent(d.hal));return}
   if(d.halurl){$('sheet').classList.add('hidden');openHal(d.halurl);return}
   if('talk' in d){LS.set('hal_talk',talkative()?'off':'on');if(!talkative()&&CAN_SPEAK)speechSynthesis.cancel();else{unlocked=true;talk($('heye'),$('hquote'),'Thank you, '+NAME()+'. I\'ll talk to you from now on.',true)}render();return}

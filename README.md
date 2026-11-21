@@ -648,6 +648,12 @@ Pair with the **same access code as the NZB phone app**, then add it to your hom
   The TV's details pages are live too: the PC's processor, memory, graphics and disk activity graphs and ping on the
   Network page (last 2 minutes, every 2 seconds), the traffic speeds now, and the rest refreshed every 10 seconds; while
   they are open HAL asks Uptime Kuma every 15 seconds. Their graphs are smooth curves through the readings.
+  **Fan control:** the FANS card on the phone has AUTO · QUIET · NORMAL · COOL · MAX (about 35 / 50 / 70 / 100 %), and on
+  the TV's PC details page OK steps through them. It works through LibreHardwareMonitor's web server, for the fans on the
+  motherboard's headers (not the graphics card's, not pumps). Auto is your BIOS fan curves. HAL never sets the CPU fan below
+  40 % (every fan, if none is called CPU) or the others below 25 %, and hands back to Auto by himself when the CPU or graphics
+  card gets within 5 °C of its alert or the VRM, chipset, hot spot or an NVMe drive reaches its limit, and after a restart.
+  Other fan software (ASUS Fan Xpert / Armoury Crate, iCUE for its own fans) should not control the same fans.
 - **Services**: SABnzbd, Jellyfin, Sonarr, Radarr, Prowlarr and the NZB phone server: answering, response time and
   what each is doing. **Restart / Start** from the phone (through its Task Scheduler task, its Windows service, or
   the command line it was last running with). Optional: HAL restarts a service by himself when it stops answering
