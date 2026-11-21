@@ -638,6 +638,9 @@ Pair with the **same access code as the NZB phone app**, then add it to your hom
   the motherboard's power circuits (VRM), the chipset or an NVMe drive runs hot (limits in `hal_settings.json`:
   `gpu_hot_alert` 100, `gpu_mem_alert` 100, `vrm_temp_alert` 100, `chipset_temp_alert` 90, `nvme_temp_alert` 80 °C;
   `fan_alert` turns the fan check off), on top of the CPU, graphics card, drive and Raspberry Pi temperatures.
+  Fan speeds also show on the phone's Home screen (FANS card) and on the TV's PC details page; a stopped fan reads
+  STOPPED in red. The CPU graph and download bars on HAL's TV page, and the download bars on the phone, are live:
+  the last 2 minutes, a new reading every 2 seconds (`/api/live`), slowing to every 10 seconds if the TV starts dropping frames.
 - **Services**: SABnzbd, Jellyfin, Sonarr, Radarr, Prowlarr and the NZB phone server: answering, response time and
   what each is doing. **Restart / Start** from the phone (through its Task Scheduler task, its Windows service, or
   the command line it was last running with). Optional: HAL restarts a service by himself when it stops answering

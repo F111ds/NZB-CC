@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.27.1"
+VERSION = "1.28.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2430,6 +2430,7 @@ def tv_grids(hal, st: dict, sc: dict, hist: dict) -> dict:
                        "free": sm.fmt_bytes(d["free"]), "info": " · ".join(b for b in bits if b), "warn": d["mount"] in full_keys})
     free_total = sum(d.get("free") or 0 for d in st["drives"])
     disk_now = [x for x in _hist(hist.get("disk"))][-1:] or [None]
+    fan_card = tv_fan_card(v)
 
     pc = [[
         {"key": "PROCESSOR", "badge": re.sub(r"\s+\d+-Core Processor$|\(R\)|\(TM\)|CPU @.*$|Intel |AMD ", "", str(cpu.get("name") or "")).strip()[:20],
@@ -2448,10 +2449,11 @@ def tv_grids(hal, st: dict, sc: dict, hist: dict) -> dict:
          "chips": ([["VRAM ", f"{_gb(g.get('vram_used'))} / {(g.get('vram_total') or 0) / 1073741824:.0f} GB", ""]] if g.get("vram_total") else [])
                   + [["video engine ", f"{g.get('video') or 0:.0f}%", ""]] + ([["fan ", f"{g['fan']:.0f}%", ""]] if g.get("fan") is not None else [])},
     ], [
-        {"key": "DRIVES", "weight": 2, "badge": ("ALL HEALTHY" if not any(d["warn"] for d in drives) else "CHECK") + f" · {sm.fmt_bytes(free_total)} FREE",
-         "drives": drives, "drive_grid": True,
+        {"key": "DRIVES", "weight": 1.55 if fan_card else 2, "badge": ("ALL HEALTHY" if not any(d["warn"] for d in drives) else "CHECK") + f" · {sm.fmt_bytes(free_total)} FREE",
+         "drives": drives, "drive_grid": not fan_card,
          "footer_key": "DISK ACTIVITY · LAST HOUR", "footer_badge": f"NOW {sm.fmt_bytes(disk_now[0])}/s" if disk_now[0] is not None else "",
          "footer_graph": hrs(hist.get("disk")), "footer_color": "#34D399"},
+        *([fan_card] if fan_card else []),
         {"key": "BUSIEST NOW", "badge": "CPU · MEM",
          "rows": [[_app(p["name"]), f"{p.get('cpu') or 0:.0f}% · {sm.fmt_bytes(p.get('mem'))}", "ok"] for p in (v.get("top_cpu") or [])[:5]],
          "chips": [["up ", _dur(st.get("uptime")), ""]] + ([["", str(upd), f" update{'s' if upd != 1 else ''}"]] if upd else [])
@@ -2582,12 +2584,27 @@ def tv_grids(hal, st: dict, sc: dict, hist: dict) -> dict:
                   ["Block lists", f"{lists_age} old" if ph.get("gravity_t") else "—", "ok"],
                   ["Sites on the lists", f"{int(ph.get('domains') or 0):,}" if ph.get("domains") else "—", "ok"],
                   ["Devices", str(ph.get("clients") or "—"), "ok"]]},
-        {"key": "MOST BLOCKED", "badge": "TODAY", "weight": 1.25,
+        {"key": "MOST BLOCKED", "badge": "LAST 24 H", "weight": 1.25,
          "rows": [[d[0][:34], f"{d[1]:,}", "ok", round(d[1] * 100 / bmax), DNS_BLOCKED] for d in top_b[:5]] or [["Nothing yet", "", "ok"]]},
         {"key": "MOST ASKED FOR", "badge": "ALLOWED", "weight": 1.25,
          "rows": [[d[0][:34], f"{d[1]:,}", "ok", round(d[1] * 100 / amax), DNS_ALLOWED] for d in top_a[:5]] or [["Nothing yet", "", "ok"]]},
     ]]
     return {"The PC": pc, "Network": net, "Uptime Kuma": kuma, "Raspberry Pi": pi}
+
+
+def tv_fan_card(v: dict) -> dict | None:
+    """The FANS card on the TV's PC page: each fan's speed (a stopped one in red) and the graphics card fan."""
+    fans = v.get("fans") or []
+    g = (v.get("gpus") or [{}])[0] if v.get("gpus") else {}
+    rows = [[f["name"], "STOPPED" if f.get("stopped") else f"{f['value']:,.0f} rpm", "critical" if f.get("stopped") else "ok"] for f in fans[:5]]
+    if g.get("fan") is not None and len(rows) < 6:
+        rows.append(["Graphics card", f"{g['fan']:.0f}%", "ok"])
+    if not rows:
+        return None
+    stopped = sum(1 for f in fans if f.get("stopped"))
+    spinning = sum(1 for f in fans if not f.get("stopped"))
+    badge = f"{stopped} STOPPED" if stopped else (f"{spinning} SPINNING" if spinning else "GRAPHICS ONLY")
+    return {"key": "FANS", "weight": 0.85, "badge": badge, "rows": rows}
 
 
 def tv_brief_with_history(hal, st: dict) -> dict:
@@ -4149,6 +4166,15 @@ class Hal(FunMixin):
                 vals = [v for v in list(self.minutes[k])[-60:] if v is not None]
                 self.hours[k].append(round(sum(vals) / len(vals), 1) if vals else None)
 
+    def live(self) -> dict:
+        """CPU and network over the last 2 minutes: the monitor's 1-a-second readings, averaged in pairs (60 points)."""
+        m = self.monitor
+
+        def pairs(key):
+            vals = [x for x in (m.hist(key) if m else []) if isinstance(x, (int, float))][-120:]
+            return [round((vals[i] + vals[i + 1]) / 2 if i + 1 < len(vals) else vals[i], 1) for i in range(len(vals) % 2, len(vals), 2)]
+        return {"cpu": pairs("cpu"), "net_down": pairs("net_down"), "net_up": pairs("net_up"), "every_s": 2, "t": time.time()}
+
     def history(self, rng: str) -> dict:
         with self.lock:
             if rng == "1h":
@@ -4600,7 +4626,7 @@ class Hal(FunMixin):
                 "mem": {"used": mem.get("used"), "total": mem.get("total"), "pct": mem.get("percent")},
                 "gpus": gpus,
                 "temps": [{"name": f"{t['hw']} · {t['name']}", "value": t["value"]} for t in (sensors.get("temps") or [])][:24],
-                "fans": [{"name": f["name"], "value": f["value"] or 0} for f in (sensors.get("fans") or [])
+                "fans": [{"name": f["name"], "value": f["value"] or 0, "stopped": not f.get("value")} for f in (sensors.get("fans") or [])
                          if f.get("value") or f.get("name") in self.fan_watch.stopped_names()][:12],
                 "top_cpu": [{"name": p["name"], "cpu": p["cpu"], "mem": p["mem"]} for p in procs[:5]], "procs": len(procs),
                 "top_mem": [{"name": p["name"], "cpu": p["cpu"], "mem": p["mem"]} for p in sorted(procs, key=lambda p: -p["mem"])[:5]],
@@ -5327,6 +5353,8 @@ class HalRoutes:
                 if rng not in ("live", "1h", "24h", "7d"):
                     raise ValueError("Unknown range.")
                 self._h_json(200, {"range": rng, "series": hal.history(rng)})
+            elif path == "/api/live":   # the last 2 minutes, a reading every 2 s (the TV and phone's live graphs)
+                self._h_json(200, hal.live())
             elif path == "/api/events":
                 with hal.lock:
                     hal.unread = 0

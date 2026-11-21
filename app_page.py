@@ -330,6 +330,8 @@ nav.tabs button.on{color:#ffb59a;text-shadow:0 0 12px rgba(255,90,40,.9)}nav.tab
  body.withpi::after{content:"";position:fixed;left:0;right:0;bottom:0;height:calc(120px + env(safe-area-inset-bottom));z-index:4;pointer-events:none;background:linear-gradient(rgba(6,2,3,0),rgba(6,2,3,.96) 40%,#060203 60%)}
 }
 .netg .k{display:flex;align-items:center;gap:5px}
+.live{color:#ff3a1e;font-weight:700;letter-spacing:.12em}
+.fanscard .fanrow{display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid rgba(255,255,255,.08);font-size:14px}.fanscard h3{margin-bottom:4px}
 .sparkwrap span.ntleg{display:flex;justify-content:space-between;text-align:left;width:100%;align-self:stretch}.sparkwrap span.ntleg i{font-style:normal}
 .na{width:12px;height:12px;display:inline-block;background:currentColor;-webkit-mask-size:contain;mask-size:contain;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-position:center;mask-position:center}
 .na.dn{color:#4aa8ff;-webkit-mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 4v14M6 12l6 6 6-6'/%3E%3C/svg%3E");mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 4v14M6 12l6 6 6-6'/%3E%3C/svg%3E")}
@@ -531,7 +533,7 @@ function systemsList(skip){if(!S)return'<div class="list"><div class="empty">'+(
 // Home keeps HAL's eye and line in place (so he isn't cut off mid-sentence) and redraws the rest.
 function homeBody(){if(DESK)return'<div class="cols"><div>'+attention(3)+downloadsCard()+arrivedList(5)+totals()+'</div><div>'+tvCard(true)+jfList()+upcomingList(5,'COMING UP')+'</div><div>'+vitals()+systemsList()+'<p class="hint" style="text-align:left">“'+esc(S?S.hal.quote:'')+'”</p></div></div>';
   // Phone: the PC and the house at a glance. Downloads live on Get.
-  return attention(3)+upsCard()+netCard()+piholeCard()+kumaCard()+vitals()+drivesCard()+restartCard()+tvCard(false)+jfList()+'<div class="sec"><span>EVERYTHING ELSE</span></div>'+systemsList(['network','storage','hardware','pihole','kuma'])+'<div class="sec"><span>QUICK BUTTONS</span></div>'+quickRow()}
+  return attention(3)+upsCard()+netCard()+fansCard()+piholeCard()+kumaCard()+vitals()+drivesCard()+restartCard()+tvCard(false)+jfList()+'<div class="sec"><span>EVERYTHING ELSE</span></div>'+systemsList(['network','storage','hardware','pihole','kuma'])+'<div class="sec"><span>QUICK BUTTONS</span></div>'+quickRow()}
 // TV off takes two taps (the first turns it amber for 4 seconds), so a stray one can't end a movie.
 let tvOffArmed=0;
 function tvOffBtn(){return Date.now()-tvOffArmed<4000?'<button class="qb warn" data-tvoff><span><i class="ic ic-power"></i></span>Tap again</button>':'<button class="qb" data-tvoff><span><i class="ic ic-power"></i></span>TV off</button>'}
@@ -548,8 +550,21 @@ function netCard(){if(!S)return'';const n=S.net,keys=(S.issues||[]).map(i=>i.key
   const st=down?['red2','DOWN']:shaky?['amber','SHAKY']:n.ping_ms==null?['soft','CHECKING']:['green','ONLINE'];
   return'<button class="card cardbtn" data-hal="shield"><h3><span class="k"><i class="ic ic-globe"></i> INTERNET</span><span class="mono" style="color:var(--'+st[0]+')">● '+st[1]+'</span></h3>'+
     '<div class="wgrid netg" style="margin-top:10px"><div><span class="k"><i class="na dn"></i>DOWNLOAD</span><b>'+(n.down==null?'—':fb(n.down,1)+'/s')+'</b></div><div><span class="k"><i class="na up"></i>UPLOAD</span><b>'+(n.up==null?'—':fb(n.up,1)+'/s')+'</b></div><div><span class="k"><i class="na pg"></i>PING</span><b>'+f0(n.ping_ms,' ms')+'</b></div></div>'+
-    (HHIST&&HHIST.net_down&&HHIST.net_down.length>1?'<div class="sparkwrap netbars"><span class="ntleg"><i>DOWNLOAD · LAST HOUR</i><i>↓ '+(n.down==null?'—':fb(n.down,1)+'/s')+'</i></span>'+bars(HHIST.net_down,'linear-gradient(#5ff2e0,#16a99a)')+'</div>':'')+
+    (liveNet()||(HHIST&&HHIST.net_down&&HHIST.net_down.length>1?'<div class="sparkwrap netbars" id="netlive"><span class="ntleg"><i>DOWNLOAD · LAST HOUR</i><i>↓ '+(n.down==null?'—':fb(n.down,1)+'/s')+'</i></span>'+bars(HHIST.net_down,'linear-gradient(#5ff2e0,#16a99a)')+'</div>':''))+
     '<div class="sub netfoot">'+esc([n.loss?Math.round(n.loss)+'% packets lost':'No packet loss',n.gateway?'Router '+n.gateway:'',n.tailscale?'Tailscale on':''].filter(Boolean).join(' · '))+'</div></button>'}
+// Live download bars: the last 2 minutes, a reading every 2 s, while the Home screen is showing.
+let LIVE=null,liveAt=0;
+function liveNet(){const v=LIVE&&Date.now()-liveAt<15000?(LIVE.net_down||[]).map(x=>x==null?0:+x):[];if(v.length<2)return'';const mx=Math.max(...v,1),last=v[v.length-1];
+  return'<div class="sparkwrap netbars" id="netlive"><span class="ntleg"><i>DOWNLOAD · LAST 2 MIN <b class="live">● LIVE</b></i><i>↓ '+fb(last,1)+'/s</i></span><div class="vbars" style="gap:1px">'+
+    v.map(x=>'<i style="height:'+Math.max(6,x/mx*100).toFixed(0)+'%;background:linear-gradient(#5ff2e0,#16a99a)"></i>').join('')+'</div></div>'}
+async function pollLive(){let next=2000;try{if(!document.hidden&&$('netlive')){LIVE=await api('/hal/api/live');liveAt=Date.now();const el=$('netlive'),h=liveNet();if(el&&h)el.outerHTML=h}}catch(e){next=10000}setTimeout(pollLive,next)}
+setTimeout(pollLive,1500);
+// Each fan's speed (a stopped one in red), and the graphics card fan.
+function fansCard(){const v=S&&S.vitals;if(!v)return'';const fans=v.fans||[],g=(v.gpus||[])[0],rows=fans.slice(0,5).map(f=>[f.name,f.stopped?'STOPPED':f0(f.value,' rpm'),f.stopped]);
+  if(g&&g.fan!=null)rows.push(['Graphics card',f0(g.fan,'%'),false]);if(!rows.length)return'';
+  const stopped=fans.filter(f=>f.stopped).length,spin=fans.length-stopped,st=stopped?['red2',stopped+' STOPPED']:['green',spin?spin+' SPINNING':'GRAPHICS ONLY'];
+  return'<button class="card cardbtn fanscard" data-hal="vitals"><h3><span class="k">FANS</span><span class="mono" style="color:var(--'+st[0]+')">● '+st[1]+'</span></h3>'+
+    rows.map(r=>'<div class="fanrow"><span>'+esc(r[0])+'</span><span class="mono"'+(r[2]?' style="color:var(--red2)"':'')+'>'+esc(r[1])+'</span></div>').join('')+'</button>'}
 function restartCard(){if(!S||!S.boot)return'';const pend=S.security&&S.security.pending_reboot,days=Math.floor((Date.now()/1000-S.boot)/86400);
   return'<div class="card" style="display:flex;align-items:center;gap:12px"><div style="flex:1"><span class="k">LAST RESTART</span><div style="font-weight:600;margin-top:4px">'+(days<1?'Today':days===1?'Yesterday':days+' days ago')+'</div>'+
     (pend?'<div class="sub" style="color:var(--amber);font-size:13px">Windows is waiting for a restart to finish updates.</div>':'')+'</div>'+

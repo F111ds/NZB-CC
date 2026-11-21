@@ -97,4 +97,25 @@ s = hs.validate_settings({"gpu_hot_alert": 500, "nvme_temp_alert": 75, "fan_aler
 assert s["gpu_hot_alert"] == 120 and s["nvme_temp_alert"] == 75 and s["fan_alert"] is False, s
 print("alerts ok")
 
+# ---------------- the fans card and live readings ----------------
+c = hs.tv_fan_card({"fans": [{"name": "CPU fan", "value": 980, "stopped": False}, {"name": "Fan #2", "value": 0, "stopped": True}],
+                    "gpus": [{"fan": 30}]})
+assert c["key"] == "FANS" and c["badge"] == "1 STOPPED", c
+assert c["rows"][0] == ["CPU fan", "980 rpm", "ok"] and c["rows"][1] == ["Fan #2", "STOPPED", "critical"] and c["rows"][2] == ["Graphics card", "30%", "ok"]
+assert hs.tv_fan_card({"fans": [{"name": "CPU fan", "value": 980}], "gpus": []})["badge"] == "1 SPINNING"
+assert hs.tv_fan_card({"fans": [], "gpus": []}) is None
+class _M:
+    def hist(self, key):
+        return list(range(121)) if key == "cpu" else [1.0, None, 3.0]
+hl = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=_M(), start_threads=False)
+lv = hl.live()
+assert len(lv["cpu"]) == 60 and lv["cpu"][-1] == 119.5 and lv["every_s"] == 2, lv["cpu"][-3:]
+assert lv["net_down"] == [2.0]          # gaps dropped, then averaged in pairs
+grid = hs.tv_grids(h, h.status(), hs.tv_screen(h.status()), h.history("1h"))
+row2 = [x["key"] for x in grid["The PC"][1]]
+assert row2 == ["DRIVES", "FANS", "BUSIEST NOW"], row2
+assert grid["The PC"][1][0]["drive_grid"] is False
+assert any(x["key"] == "MOST BLOCKED" and x["badge"] == "LAST 24 H" for row in grid["Raspberry Pi"] for x in row)
+print("fans card and live readings ok")
+
 print("\nALL FAN AND TEMPERATURE TESTS PASSED")

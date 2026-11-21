@@ -52,6 +52,8 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 .nt3{display:flex;margin-top:12px}.nt3>div{flex:1;min-width:0}.nt3>div+div{border-left:1px solid rgba(255,255,255,.1);padding-left:10px}
 .nt3 .l{font:700 9px "JetBrains Mono",monospace;letter-spacing:.14em;color:rgba(255,235,228,.75);display:flex;align-items:center;gap:5px}
 .nt3 .l svg{width:12px;height:12px;flex:none}.nt3 .v{font:700 14px "JetBrains Mono",monospace;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live{color:#ff3a1e;font-weight:700;letter-spacing:.14em;margin-left:8px}
+#det .dgrid.one{grid-template-columns:1fr;gap:6px}
 .ntleg{display:flex;justify-content:space-between;gap:12px;font:500 9px "JetBrains Mono",monospace;color:rgba(255,235,228,.8);margin-top:10px;border-top:1px solid rgba(255,255,255,.1);padding-top:6px;height:18px}
 .ntbars{display:flex;align-items:flex-end;gap:2px;height:34px;margin-top:4px}.ntbars i{flex:1;border-radius:1px 1px 0 0;background:linear-gradient(#5ff2e0,#16a99a);min-height:3px}
 .ntfoot{font:500 9.5px "JetBrains Mono",monospace;color:rgba(255,235,228,.75);margin-top:7px;display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden}
@@ -146,7 +148,8 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
   <div><div class="num" style="font-size:22px" id="gpu">—</div><div class="mono" style="font-size:10px;opacity:.65;margin-top:3px" id="gpus">GPU</div></div>
   <div><div class="num" style="font-size:22px" id="mem">—</div><div class="mono" style="font-size:10px;opacity:.65;margin-top:3px" id="mems">memory</div></div>
  </div>
- <svg width="254" height="34" style="display:block;margin-top:8px" viewBox="0 0 254 34" preserveAspectRatio="none"><defs><linearGradient id="pcg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff7a3a" stop-opacity=".6"/><stop offset="1" stop-color="#ff7a3a" stop-opacity="0"/></linearGradient></defs><path id="pcf" fill="url(#pcg)"/><path id="pcln" fill="none" stroke="#ff9a5c" stroke-width="1.6"/></svg>
+ <div class="k" id="cpuk" style="margin-top:8px;font-size:9px;letter-spacing:.14em"><span>CPU · LAST HOUR</span><span id="cpul"></span></div>
+ <svg width="254" height="34" style="display:block;margin-top:3px" viewBox="0 0 254 34" preserveAspectRatio="none"><defs><linearGradient id="pcg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff7a3a" stop-opacity=".6"/><stop offset="1" stop-color="#ff7a3a" stop-opacity="0"/></linearGradient></defs><path id="pcf" fill="url(#pcg)"/><path id="pcln" fill="none" stroke="#ff9a5c" stroke-width="1.6"/></svg>
  <div class="drv" id="drv"></div>
 </div>
 <div class="card glass l" id="cnet" style="left:26px;top:220px;width:288px;height:184px">
@@ -195,6 +198,21 @@ async function poll(){try{B=await api('/api/brief?from=tv&px='+PX);apply()}catch
 async function pollSlow(){try{HIST=(await api('/api/history?range=1h')).series}catch(e){}try{DET=await api('/api/tv/details');applyDet();if(detOn)drawDet()}catch(e){}setTimeout(pollSlow,60000)}
 // bytes a second as on the phone: 628 B/s, 4.0 KB/s, 488 KB/s, 37.2 MB/s
 const rate=v=>{if(v==null||isNaN(v))return'—';const u=['B/s','KB/s','MB/s','GB/s'];let i=0;v=+v;while(v>=1000&&i<3){v/=1024;i++}return(i&&v<100?v.toFixed(1):Math.round(v))+' '+u[i]};
+// ---------- live graphs: the last 2 minutes, a new reading every 2 s (10 s if the TV starts dropping frames) ----------
+let LIVE=null,liveAt=0,liveSlow=false;
+const liveFresh=()=>LIVE&&Date.now()-liveAt<15000;
+async function pollLive(){let next=liveSlow?10000:2000;
+ try{if(!document.hidden&&!detOn){LIVE=await api('/api/live');liveAt=Date.now();drawLive()}}catch(e){next=10000}
+ setTimeout(pollLive,next)}
+function drawLive(){if(!LIVE)return;const L='<span class="live">● LIVE</span>';
+ const c=(LIVE.cpu||[]).filter(v=>v!=null);
+ if(c.length>1){const d=pathD(c,254,34,0,Math.max(20,...c)*1.15);$('pcln').setAttribute('d',d);$('pcf').setAttribute('d',d+' V34 H0Z');$('cpuk').firstChild.textContent='CPU · LAST 2 MIN';$('cpul').innerHTML=L}
+ const n=(LIVE.net_down||[]).map(v=>v==null?0:+v);
+ if(n.length>1){const mx=Math.max(...n,1);$('nbars').style.gap='1px';$('nbars').innerHTML=n.map(v=>`<i style="height:${Math.max(6,v*100/mx).toFixed(1)}%"></i>`).join('');$('lgd').innerHTML='DOWNLOAD · LAST 2 MIN'+L}}
+// watch how smoothly the TV draws: if more than 1 frame in 10 is late, live readings slow to every 10 s
+let lfT=0,lfN=0,lfLate=0;
+function frameCheck(){const n=performance.now(),dt=n-lfT;lfT=n;if(dt>0&&dt<1000){lfN++;if(dt>70)lfLate++}
+ if(lfN>=600){liveSlow=lfLate/lfN>.1;lfN=0;lfLate=0}}
 const lv=l=>l==='critical'?'critical':l==='warning'?'warning':'ok';
 function setLevel(id,level,okText,txt){const e=$(id);e.className=lv(level);e.textContent='● '+(txt||(level==='ok'?okText:level==='critical'?'PROBLEM':'CHECK'))}
 let drawnHist=null,drawnMons=null;
@@ -207,7 +225,7 @@ function apply(){if(!B)return;const sc=B.screen||{};
  $('gpu').textContent=g.split(' · ')[0];$('gpus').textContent='GPU'+(g.includes('·')?' · '+g.split(' · ')[1]:'');
  $('mem').textContent=m.split(' of ')[0];$('mems').textContent=m.includes(' of ')?'of '+m.split(' of ')[1]:'memory';
  drives=(pc.drives||[]).slice(0,5);$('drv').innerHTML=drives.map(d=>`<div><span>${esc(d.mount)}<b>${d.pct}%</b></span><i><b class="dv${d.warn?' w':''}" data-w="${d.pct}"></b></i></div>`).join('');
- const dn=rate(B.net_down),up=rate(B.net_up);$('ndn').textContent=dn;$('nup').textContent=up;$('lgd').textContent='DOWNLOAD · LAST HOUR';$('lgu').textContent=B.net_down!=null?'↓ '+dn:'';
+ const dn=rate(B.net_down),up=rate(B.net_up);$('ndn').textContent=dn;$('nup').textContent=up;if(!liveFresh())$('lgd').textContent='DOWNLOAD · LAST HOUR';$('lgu').textContent=B.net_down!=null?'↓ '+dn:'';
  $('npg').textContent=B.ping!=null?Math.max(1,Math.round(B.ping))+' ms':'—';
  {const nr=net.rows||[],r1=nr[1]||[],r2=nr[2]||[],ads=String(r2[1]||'').split(' · ')[0],em=(r,t)=>`<em style="font-style:normal" class="${r[2]==='ok'?'':lv(r[2])}">${esc(t)}</em>`;
   $('nfoot').innerHTML=[r1.length?em(r1,'Router '+String(r1[1]).replace(' · no loss','')):'',r2.length?em(r2,/^[\d,]+$/.test(ads)?ads+' ads blocked':'Ads '+ads):''].filter(Boolean).join(' · ')}
@@ -330,9 +348,9 @@ function render(t){
  document.querySelectorAll('.dv').forEach(b=>b.style.width=b.dataset.w+'%');
  // graphs: still (no motion), drawn again only when their data changes
  if(HIST!==drawnHist){drawnHist=HIST;
-  const ch=(HIST&&HIST.cpu||[]).filter(v=>v!=null).slice(-60);if(ch.length>1){const d=pathD(ch,254,34,0,Math.max(20,...ch)*1.15);$('pcln').setAttribute('d',d);$('pcf').setAttribute('d',d+' V34 H0Z')}
-  const nd=(HIST&&HIST.net_down||[]).map(v=>v==null?0:+v).slice(-30);
-  if(nd.length){const mx=Math.max(...nd,1);$('nbars').innerHTML=nd.map(v=>`<i style="height:${Math.max(6,v*100/mx).toFixed(1)}%"></i>`).join('')}}
+  const ch=liveFresh()?[]:(HIST&&HIST.cpu||[]).filter(v=>v!=null).slice(-60);if(ch.length>1){$('cpuk').firstChild.textContent='CPU · LAST HOUR';$('cpul').innerHTML='';const d=pathD(ch,254,34,0,Math.max(20,...ch)*1.15);$('pcln').setAttribute('d',d);$('pcf').setAttribute('d',d+' V34 H0Z')}
+  const nd=liveFresh()?[]:(HIST&&HIST.net_down||[]).map(v=>v==null?0:+v).slice(-30);
+  if(nd.length){$('nbars').style.gap='2px';const mx=Math.max(...nd,1);$('nbars').innerHTML=nd.map(v=>`<i style="height:${Math.max(6,v*100/mx).toFixed(1)}%"></i>`).join('')}}
  if(mons!==drawnMons){drawnMons=mons;mons.forEach((m,k)=>{const el=$('m'+k);if(!el)return;   // the last hour's real response times
    const h=(m.ms_hist||[]).map(v=>v==null?null:+v),ok=h.filter(v=>v!=null);if(ok.length<2){el.setAttribute('points','');return}
    const lo=Math.min(...ok),hi=Math.max(...ok,lo+Math.max(5,lo*.5)),n=h.length,mid=(lo+hi)/2;   // a steady service draws a calm line
@@ -353,7 +371,7 @@ function graphSvg(v,col,fit,v2,col2){v=v.map(Number);const all=v.concat(v2||[]).
  const P=a=>a.map((x,i)=>(i*100/(a.length-1)).toFixed(2)+','+(50-50*(x-lo)/(hi-lo)).toFixed(2)).join(' ');let o=`<svg class="g" viewBox="0 0 100 50" preserveAspectRatio="none"><polygon points="0,50 ${P(v)} 100,50" fill="${col}" opacity=".18"/><polyline points="${P(v)}" fill="none" stroke="${col}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>`;
  if(v2&&v2.length>1)o+=`<polygon points="0,50 ${P(v2.map(Number))} 100,50" fill="${col2}" opacity=".14"/><polyline points="${P(v2.map(Number))}" fill="none" stroke="${col2}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>`;return o+'</svg>'}
 const lcol=l=>l==='critical'?'#ff7a6b':l==='warning'?'#ffc46b':l==='info'?'#9cc8ff':'#7cf5b5';
-const bcol=b=>{const u=String(b||'').toUpperCase();return/^(CHECK|PAUSED|NOT |WARM)/.test(u)?'warning':/^(DOWN|HOT|PROBLEM)/.test(u)?'critical':/HEALTHY|^UP |^ALL|^ONLINE|^BLOCKING|^COOL|^OK/.test(u)?'ok':''};
+const bcol=b=>{const u=String(b||'').toUpperCase();return/^(CHECK|PAUSED|NOT |WARM)/.test(u)?'warning':/^(DOWN|HOT|PROBLEM)/.test(u)||/STOPPED/.test(u)?'critical':/SPINNING/.test(u)?'ok':/HEALTHY|^UP |^ALL|^ONLINE|^BLOCKING|^COOL|^OK/.test(u)?'ok':''};
 function detCard(c){let h=`<div class="k">${esc(c.key)}${c.badge?`<b class="${bcol(c.badge)}">${esc(c.badge)}</b>`:''}</div>`;
  if(c.big)h+=`<div class="big">${esc(c.big)}${c.bigsub?`<small>${esc(c.bigsub)}</small>`:''}</div>`;
  const fg=c.graph&&c.graph.length>1,fh=!fg&&c.hourly&&c.hourly.length,fill=!fg&&!fh&&!(c.footer_graph&&c.footer_graph.length>1);
@@ -361,7 +379,7 @@ function detCard(c){let h=`<div class="k">${esc(c.key)}${c.badge?`<b class="${bc
  if(c.legend)h+=`<div class="hl">${c.legend.map(l=>`<span style="color:${esc(l[1])}">■&nbsp;</span>${esc(l[0])}&nbsp;&nbsp;&nbsp;`).join('')}</div>`;
  if(c.checks)h+=`<div class="checks">${c.checks.slice(-30).map(x=>`<i style="background:${x==='up'?'#7cf5b5':x==='down'?'#ff6a4d':x?'#ffc46b':'rgba(255,255,255,.08)'}"></i>`).join('')}</div>`;
  if(c.cores&&c.cores.length)h+=`<div class="cores">${c.cores.map(v=>`<i><b style="height:${Math.max(8,Math.min(100,v))}%"></b></i>`).join('')}</div>`;
- if(c.drives)h+=`<div class="dgrid">${c.drives.map(d=>`<div class="dd"><div class="top"><span>${esc(d.mount)} ${esc(d.name)}</span><em style="color:${d.warn?'#ffc46b':'#ffe7dc'}">${d.pct}% · ${esc(d.free)} free</em></div><div class="bar"><b style="width:${d.pct}%;background:${d.warn?'linear-gradient(90deg,#ffc46b,#ffb020)':'linear-gradient(90deg,#ff9a3c,#ff4b2b)'}"></b></div><div class="inf">${esc(d.info)}</div></div>`).join('')}</div>`;
+ if(c.drives)h+=`<div class="dgrid${c.drive_grid===false?' one':''}">${c.drives.map(d=>`<div class="dd"><div class="top"><span>${esc(d.mount)} ${esc(d.name)}</span><em style="color:${d.warn?'#ffc46b':'#ffe7dc'}">${d.pct}% · ${esc(d.free)} free</em></div><div class="bar"><b style="width:${d.pct}%;background:${d.warn?'linear-gradient(90deg,#ffc46b,#ffb020)':'linear-gradient(90deg,#ff9a3c,#ff4b2b)'}"></b></div><div class="inf">${esc(d.info)}</div></div>`).join('')}</div>`;
  if(c.queue)h+=`<div class="q">${c.queue.map(q=>`<div class="n"><span>${esc(q.name)}</span><span class="mono">${q.pct}%</span></div><div class="qb"><b style="width:${q.pct}%;${q.paused?'background:#ffc46b':''}"></b></div><div class="i">${esc(q.info)}</div>`).join('')}</div>`;
  if(c.monitors)h+=`<div class="rows fill">${c.monitors.map(m=>`<div class="row"><span><span style="color:${m.status==='up'?'#7cf5b5':'#ff6a4d'}">●</span> ${esc(m.name)}</span><em style="color:${m.status==='up'?'#ffe7dc':'#ff7a6b'}">${m.status==='up'?(m.ms==null?'up':m.ms+' ms'):esc(m.status)}</em></div>`).join('')}</div>`;
  if(c.rows&&c.rows.length)h+=`<div class="rows${fill?' fill':''}">${c.rows.map(r=>{const l=r[2]||'ok';return`<div class="row"><span>${esc(r[0])}</span>${r.length>3?`<span class="bar"><b style="width:${Math.max(0,Math.min(100,r[3]))}%;background:${r[4]||lcol(l)}"></b></span>`:''}<em style="color:${l==='ok'?'#ffe7dc':lcol(l)}">${esc(r[1])}</em></div>`}).join('')}</div>`;
@@ -388,8 +406,8 @@ window.halKey=function(k){if(k==='down'){if(!detOn)openDet();return true}
 addEventListener('keydown',e=>{const m={ArrowDown:'down',ArrowUp:'up',ArrowLeft:'left',ArrowRight:'right',Escape:'back',Backspace:'back'}[e.key];if(m&&halKey(m))e.preventDefault()});
 // ---------- go ----------
 fit();
-function loop(){render(now());requestAnimationFrame(loop)}
+function loop(){render(now());frameCheck();requestAnimationFrame(loop)}
 window.render=render;
-poll();pollSlow();requestAnimationFrame(loop);
+poll();pollSlow();pollLive();requestAnimationFrame(loop);
 setTimeout(()=>{try{if(APP)HAL.ready()}catch(e){}},300);
 </script></body></html>"""
