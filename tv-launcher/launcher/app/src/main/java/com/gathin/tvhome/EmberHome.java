@@ -86,6 +86,8 @@ final class EmberHome {
         float floorY = -1;
         /** HAL's own backdrop (no movie art): deep red-black space, faint stars, his glow at halY. */
         boolean hal;
+        /** With hal: plain black instead of the red space and stars. */
+        boolean black = true;
         float halY = -1;
         private final android.graphics.Paint base = new android.graphics.Paint(), halGlow = new android.graphics.Paint(),
                 lowGlow = new android.graphics.Paint(), star = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
@@ -127,6 +129,15 @@ final class EmberHome {
                     line.setShader(new android.graphics.LinearGradient(w * 0.1f, 0, w * 0.9f, 0,
                             new int[]{0x00FFBEA0, 0x73FFBEA0, 0x00FFBEA0}, null, android.graphics.Shader.TileMode.CLAMP));
                 }
+            }
+            if (hal && black) {
+                // Plain black behind everything; only the floor's horizon line under the posters.
+                c.drawColor(Color.BLACK);
+                if (floorY > 0) {
+                    line.setStrokeWidth(dp(1));
+                    c.drawLine(w * 0.1f, floorY, w * 0.9f, floorY, line);
+                }
+                return;
             }
             if (hal) {
                 if (madeHalY != halY) {
@@ -170,6 +181,7 @@ final class EmberHome {
         floor.hal = on;
         floor.madeH = -1;
         artBox.setVisibility(on ? View.GONE : View.VISIBLE);
+        if (on && floor.black) glow.setVisibility(View.GONE);   // black: no coloured glow either
         if (on) backdrop.setImageDrawable(null);
         floor.invalidateSelf();
     }
