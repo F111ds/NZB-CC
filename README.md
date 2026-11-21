@@ -15,7 +15,7 @@ Like what you're watching? One more tap downloads a copy to keep. And HAL always
 streaming from Usenet."*
 
 <p align="center">
-  <img src="docs/hero/hal-phone-radar.gif" alt="HAL 9000's main page on the phone, animated: HAL's eye looks around and his gauges fill" width="230">
+  <img src="docs/hero/hal-phone-radar.gif" alt="HAL 9000's main page on the phone, animated: HAL's eye looks around inside a small radar sweep" width="230">
   <img src="docs/app-screenshots/35-watch-usenet.png" alt="A movie streaming on the TV straight from Usenet, with the blue USENET label" width="230">
 </p>
 <p align="center">
