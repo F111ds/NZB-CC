@@ -194,6 +194,8 @@ final class KodiRow {
     static boolean cinema;
     /** NZB-CC HAL-style home: a faint reflection under each poster, as if the row stood on a glossy floor. */
     static boolean reflections;
+    /** NZB-CC HAL-style home: the poster you move to lifts and tilts toward you a little, in 3D. */
+    static boolean tilt;
 
     /** The reflection's height for a poster this tall. */
     static int reflectionPx(int posterH) {
@@ -724,6 +726,7 @@ final class KodiRow {
         });
         card.setClipToOutline(true);
         card.setElevation(dp(4));
+        card.setCameraDistance(9000 * density);
         if (android.os.Build.VERSION.SDK_INT >= 28) {   // NZB-CC: the focused poster's lift glows HAL red
             card.setOutlineSpotShadowColor(0xFFFF3C14);
             card.setOutlineAmbientShadowColor(0xFFFF3C14);
@@ -858,7 +861,9 @@ final class KodiRow {
             ref = (ImageView) v[9];
             cell.setOnFocusChangeListener((view, has) -> {
                 float s = has ? 1.06f : 1f;   // NZB-CC: the bigger posters grow less, clear of the heading
-                card.animate().scaleX(s).scaleY(s).translationZ(has ? dp(6) : 0).setDuration(140).start();
+                boolean t = has && tilt;
+                card.animate().scaleX(s).scaleY(s).translationZ(has ? dp(t ? 10 : 6) : 0)
+                        .rotationY(t ? -7f : 0f).rotationX(t ? 4f : 0f).setDuration(t || tilt ? 260 : 140).start();
                 ring.animate().alpha(has ? 1f : 0f).setDuration(140).start();
                 left.animate().alpha(has && !cinema && left.getText().length() > 0 ? 1f : 0f).setDuration(140).start();
                 if (has && item != null) {

@@ -225,6 +225,35 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private long showcaseMs;
     private int showcaseSwallowUp = -1;
     private final Runnable showShowcase = this::maybeShowShowcase;
+    /** HAL's wake-up plays on the next resume: at start and after the screen went off. */
+    private boolean wakeNext = true, screenOffRegistered;
+    private final BroadcastReceiver screenOff = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            wakeNext = true;
+        }
+    };
+
+    /** HAL's wake-up from his dock tile (or the bottom middle when his tile can't be found). */
+    private void playWake() {
+        if (ember == null || isDestroyed() || root.getWidth() == 0) return;
+        float x = root.getWidth() / 2f, y = root.getHeight() - 80 * density, size = 90 * density;
+        for (int i = 0; adapter != null && i < adapter.appCount(); i++) {
+            String key = adapter.keyAt(i);
+            if (key == null || !key.endsWith(".HalActivity")) continue;
+            RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(i);
+            View card = vh == null ? null : vh.itemView.findViewById(R.id.card);
+            if (card != null && card.getWidth() > 0) {
+                Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
+                root.offsetDescendantRectToMyCoords(card, r);
+                x = r.exactCenterX();
+                y = r.exactCenterY();
+                size = Math.min(r.width(), r.height());
+            }
+            break;
+        }
+        ember.playWake(root, x, y, size);
+    }
 
     private void maybeShowShowcase() {
         if (resumed && showcase != null && kodiRowShown() && openPopup == null && !reordering) showcase.show(kodiRow.items());
@@ -660,6 +689,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             KodiRow.cinema = cinemaLayout;
             KodiRow.reflections = !cinemaLayout;
             AppAdapter.halEyeLive = true;
+            KodiRow.tilt = !cinemaLayout && animations && !reducedMotion;
+            // HAL wakes up when the TV is switched on (the screen went off since Home was last on screen).
+            IntentFilter off = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) registerReceiver(screenOff, off, Context.RECEIVER_NOT_EXPORTED);
+            else registerReceiver(screenOff, off);
+            screenOffRegistered = true;
             perf = new PerfReport(this, extras);
             perf.start();
             showcaseMs = getResources().getInteger(R.integer.ember_showcase_minutes) * MINUTE_MS;
@@ -1254,6 +1289,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             ember.refreshHal();
             restartIdleClock();
             if (perf != null) perf.homeShown(getWindow());
+            if (wakeNext) {
+                wakeNext = false;
+                if (animations && !reducedMotion) root.postDelayed(this::playWake, 120);
+            }
         }
         // A festival that started or ended while Home was in the background: rebuild with or without it.
         if (festive != festival.active(LocalDate.now())) {
@@ -1565,6 +1604,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         cancelHoldOk();
         if (gameDay != null) gameDay.shutdown();
         if (ember != null) ember.shutdown();
+        if (screenOffRegistered) unregisterReceiver(screenOff);
         if (perf != null) perf.stop();
         if (weatherNow != null) weatherNow.shutdown();
         if (exchangeRate != null) exchangeRate.shutdown();
@@ -3437,6 +3477,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         hideGlass();
         hideHero();
         if (ember != null && ember.shown()) ember.show(item);
+        int at = kodiRow.items().indexOf(item), n = Math.min(5, kodiRow.count());
+        if (ember != null && at >= 0) {
+            ember.parallax(at, n);   // the art slides against the selection
+            HalEyeDrawable.watchX = n > 1 ? (at - (n - 1) / 2f) / ((n - 1) / 2f) : 0f;   // HAL watches it
+        }
         kodiFocusTitle.setText(item.title);
         kodiFocusMeta.setText(item.meta());
     }
@@ -3488,6 +3533,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     @Override
     public void onKodiRowLeft() {
+        HalEyeDrawable.watchX = Float.NaN;
         kodiFocusTitle.setText("");
         kodiFocusMeta.setText("");
     }

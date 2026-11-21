@@ -1,6 +1,7 @@
 package com.gathin.tvhome;
 
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.ColorFilter;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
@@ -22,14 +23,20 @@ import androidx.annotation.NonNull;
 final class HalEyeDrawable extends Drawable implements Animatable, Runnable {
     /** The tile with focus is HAL's (set by MainActivity). */
     static volatile boolean focused;
+    /** Where along the poster row the selection is (-1 left .. 1 right), or NaN when it isn't on the row. */
+    static volatile float watchX = Float.NaN;
 
     private static final int SIZE = 192;
     private final Paint rim = new Paint(Paint.ANTI_ALIAS_FLAG), ring = new Paint(Paint.ANTI_ALIAS_FLAG),
-            lens = new Paint(Paint.ANTI_ALIAS_FLAG), halo = new Paint(Paint.ANTI_ALIAS_FLAG);
+            lens = new Paint(Paint.ANTI_ALIAS_FLAG), halo = new Paint(Paint.ANTI_ALIAS_FLAG),
+            shade = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final long start = SystemClock.uptimeMillis();
     private boolean running;
     private float glow;   // 0 at rest, 1 focused (eased)
     private int rimFor = -1;
+    private float gx, gy;   // where the light is (eased)
+    private float nextBlink = 6f;
+    private final java.util.Random rnd = new java.util.Random();
 
     @Override
     public void draw(@NonNull Canvas c) {
@@ -51,9 +58,13 @@ final class HalEyeDrawable extends Drawable implements Animatable, Runnable {
         c.drawCircle(cx, cy, hr, halo);
         c.drawCircle(cx, cy, r, rim);
         c.drawCircle(cx, cy, r * 0.93f, ring);
-        float[] g = HalGaze.at(t);
+        // He watches the selection move along the posters (looking up at the row), else glances around.
+        float wx = watchX;
+        float[] g = Float.isNaN(wx) ? HalGaze.at(t) : new float[]{wx * 0.9f, -0.75f};
+        gx += (g[0] - gx) * 0.25f;
+        gy += (g[1] - gy) * 0.25f;
         float lr = r * 0.85f;
-        float lx = cx + g[0] * lr * 0.16f, ly = cy + g[1] * lr * 0.12f;
+        float lx = cx + gx * lr * 0.16f, ly = cy + gy * lr * 0.12f;
         float bright = 0.85f + 0.15f * glow;
         lens.setShader(new RadialGradient(lx, ly, lr * (1f + 0.08f * glow),
                 new int[]{0xFFFFFBE0, 0xFFFFD27A, 0xFFFF5A1F, 0xFFD4140A, 0xFF5A0402, 0xFF120000, 0xFF000000},
@@ -63,6 +74,15 @@ final class HalEyeDrawable extends Drawable implements Animatable, Runnable {
         clip.addCircle(cx, cy, lr, android.graphics.Path.Direction.CW);
         c.clipPath(clip);
         c.drawCircle(cx, cy, lr, lens);
+        // Now and then he blinks: the lens dims and comes back (every 6 to 14 seconds, 0.6 s long).
+        if (t > nextBlink + 0.6f) nextBlink = t + 6f + rnd.nextFloat() * 8f;
+        if (t >= nextBlink) {
+            float bl = (float) Math.sin((t - nextBlink) / 0.6f * Math.PI);
+            if (bl > 0) {
+                shade.setColor(Color.argb(Math.round(190 * bl), 0, 0, 0));
+                c.drawCircle(cx, cy, lr, shade);
+            }
+        }
         c.restore();
         if (running) scheduleSelf(this, SystemClock.uptimeMillis() + 50);
     }

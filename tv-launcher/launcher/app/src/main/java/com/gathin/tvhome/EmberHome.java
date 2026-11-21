@@ -342,9 +342,15 @@ final class EmberHome {
 
     /** Places the art and the text: the text's foot sits at bottomY (just above the bottom row's label). */
     void layout(int rootW, int rootH, int topY, int bottomY, boolean motion) {
-        int artW = cinemaLayout ? Math.round(rootW * 0.68f) : rootW, artH = cinemaLayout ? Math.round(rootH * 0.76f) : rootH;
+        // Centred home: the art a little wider than the screen, so it can slide sideways (parallax) with no edge.
+        int artW = cinemaLayout ? Math.round(rootW * 0.68f) : rootW + dp(80), artH = cinemaLayout ? Math.round(rootH * 0.76f) : rootH;
         for (View v : new View[]{artBox, scrim}) {
             FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) v.getLayoutParams();
+            int grav = cinemaLayout ? Gravity.TOP | Gravity.END : Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+            if (lp.gravity != grav) {
+                lp.gravity = grav;
+                v.setLayoutParams(lp);
+            }
             if (lp.width != artW || lp.height != artH) {
                 lp.width = artW;
                 lp.height = artH;
@@ -403,6 +409,83 @@ final class EmberHome {
             else if (!a.isStarted()) a.start();
         }
         if (breathe != null) motes.run(true);
+    }
+
+    /** Parallax: the art slides gently against the selection (index of count along the poster row). */
+    void parallax(int index, int count) {
+        if (cinemaLayout || count < 1) return;
+        float centre = (count - 1) / 2f;
+        float x = (index - centre) * -dp(16);
+        if (breathe == null) artBox.setTranslationX(x);
+        else artBox.animate().translationX(x).setDuration(700)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
+    }
+
+    /**
+     * HAL wakes up (the TV was switched on): the screen starts black, his eye lights at (x, y) and a soft red pulse
+     * spreads from it, then Home fades in. About 2.4 seconds; nothing is waited for (keys work at once).
+     */
+    void playWake(FrameLayout root, float x, float y, float eyeSize) {
+        final View cover = new View(ctx) {
+            final HalEyeDrawable eye = new HalEyeDrawable();
+            final android.graphics.Paint pulse = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            final android.graphics.Paint black = new android.graphics.Paint();
+            float t;
+
+            {
+                setTag(this);
+                eye.setCallback(this);
+            }
+
+            @Override
+            protected boolean verifyDrawable(Drawable who) {
+                return who == eye || super.verifyDrawable(who);
+            }
+
+            @Override
+            protected void onDraw(android.graphics.Canvas c) {
+                t = getAlpha() >= 0 ? (float) getTag(R.id.root) : 0f;
+                float cover = 1f - smooth((t - 1.1f) / 1.2f);
+                black.setColor(Color.argb(Math.round(255 * cover), 0, 0, 0));
+                c.drawRect(0, 0, getWidth(), getHeight(), black);
+                float pr = smooth((t - 0.7f) / 1.3f);
+                if (t > 0.7f && pr < 1f) {
+                    float rr = dp(20) + pr * Math.max(getWidth(), getHeight()) * 1.1f;
+                    pulse.setShader(new android.graphics.RadialGradient(x, y, rr,
+                            new int[]{Color.argb(Math.round(140 * (1 - pr)), 255, 50, 20), Color.argb(0, 255, 40, 15)},
+                            new float[]{0f, 1f}, android.graphics.Shader.TileMode.CLAMP));
+                    c.drawCircle(x, y, rr, pulse);
+                }
+                // his eye, lighting up from dark, over the black until Home shows
+                float lit = smooth(t / 0.9f);
+                int s = Math.round(eyeSize);
+                eye.setBounds(Math.round(x - s / 2f), Math.round(y - s / 2f), Math.round(x + s / 2f), Math.round(y + s / 2f));
+                c.saveLayerAlpha(0, 0, getWidth(), getHeight(), Math.round(255 * (0.15f + 0.85f * lit) * cover));
+                eye.draw(c);
+                c.restore();
+            }
+        };
+        cover.setTag(R.id.root, 0f);
+        root.addView(cover, new FrameLayout.LayoutParams(-1, -1));
+        ValueAnimator a = ValueAnimator.ofFloat(0f, 2.4f);
+        a.setDuration(2400);
+        a.setInterpolator(new android.view.animation.LinearInterpolator());
+        a.addUpdateListener(v -> {
+            cover.setTag(R.id.root, v.getAnimatedValue());
+            cover.invalidate();
+        });
+        a.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(android.animation.Animator an) {
+                root.removeView(cover);
+            }
+        });
+        a.start();
+    }
+
+    private static float smooth(float x) {
+        x = Math.max(0f, Math.min(1f, x));
+        return x * x * (3f - 2f * x);
     }
 
     boolean focusButtons() {
