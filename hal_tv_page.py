@@ -15,10 +15,9 @@ html,body{width:960px;height:540px;overflow:hidden;background:#0a0405;color:#fff
 canvas.full{position:absolute;inset:0;width:960px;height:540px}
 .vig{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 45%,transparent 55%,rgba(0,0,0,.55));pointer-events:none}
 .glass{position:absolute;border-radius:20px;padding:15px 17px;overflow:hidden;
- background:linear-gradient(160deg,rgba(70,22,16,.78),rgba(28,8,8,.72) 60%);border:1px solid rgba(255,255,255,.14);
- box-shadow:0 18px 40px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.18)}
-.glass.l{box-shadow:0 18px 40px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.18),inset -2px 0 0 rgba(255,110,60,.55),12px 0 40px -18px rgba(255,80,30,.7)}
-.glass.r{box-shadow:0 18px 40px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.18),inset 2px 0 0 rgba(255,110,60,.55),-12px 0 40px -18px rgba(255,80,30,.7)}
+ background:linear-gradient(170deg,rgba(60,16,14,.80),rgba(18,6,7,.90));border:1px solid rgba(255,90,60,.38);
+ box-shadow:0 0 26px rgba(255,40,20,.18),inset 0 1px 0 rgba(255,255,255,.1)}
+.k .hk{display:flex;align-items:center;gap:7px;color:rgba(255,235,228,.8)}.k .hk svg{width:15px;height:15px;color:#ddd;flex:none}
 .sheen{position:absolute;top:-20%;bottom:-20%;width:90px;left:0;pointer-events:none;background:linear-gradient(100deg,transparent,rgba(255,230,210,.16),transparent)}
 .k{font:700 10px "JetBrains Mono",monospace;letter-spacing:.16em;color:rgba(255,220,200,.6);display:flex;justify-content:space-between;align-items:center;gap:8px;white-space:nowrap}
 .k b{font-weight:700;letter-spacing:.12em}.ok{color:#7cf5b5}.warning{color:#ffc46b}.critical{color:#ff7a6b}.info{color:#9cc8ff}
@@ -33,9 +32,30 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 .mon{display:flex;align-items:center;gap:9px;font-size:12.5px;padding:4.5px 0}
 .mon .d{width:7px;height:7px;border-radius:50%;background:#7cf5b5;flex:none;box-shadow:0 0 6px rgba(124,245,181,.6)}.mon .d.down{background:#ff6a4d;box-shadow:0 0 6px rgba(255,106,77,.6)}
 .mon span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mon svg{width:84px;height:16px;flex:none}.mon em{font:500 11.5px "JetBrains Mono",monospace;font-style:normal;width:44px;text-align:right;flex:none}
-.quote{position:absolute;left:332px;width:296px;top:310px;text-align:center;font-size:15px;font-weight:600;font-style:italic;line-height:1.3;color:#ffe9e0;min-height:42px;max-height:60px;overflow:hidden}
-.quote.long{font-size:13px}.quote.vlong{font-size:11.5px}
-.caret{display:inline-block;width:2px;height:1em;background:#ffb59a;vertical-align:-2px;margin-left:2px}
+#greet{position:absolute;left:300px;width:360px;top:296px;text-align:center;font:500 10.5px "JetBrains Mono",monospace;letter-spacing:.34em;color:rgba(255,235,228,.75);white-space:nowrap;overflow:hidden}
+.quote{position:absolute;left:310px;width:340px;top:316px;text-align:center;font-size:17px;font-weight:300;font-style:italic;line-height:1.3;color:#ffe9e0;max-height:46px;overflow:hidden}
+.quote.long{font-size:14.5px}.quote.vlong{font-size:12.5px}
+.caret{display:inline-block;width:2px;height:1.05em;background:#ff3a1e;vertical-align:-3px;margin-left:3px}
+#hrule{position:absolute;left:330px;width:300px;top:368px;height:1px;background:linear-gradient(90deg,transparent,rgba(255,60,30,.85),transparent);box-shadow:0 0 8px rgba(255,40,20,.8)}
+/* HAL's eye: the phone's chrome eye (the light in the lens follows his gaze, --gx/--gy) */
+.peye{position:absolute;left:55px;top:55px;width:160px;height:160px;border-radius:50%;
+ background:radial-gradient(circle closest-side,#050505 0 84%,transparent 85%),conic-gradient(from 210deg,#f4f6f8,#7c828a 15%,#2a2d32 30%,#d8dce0 48%,#5c6168 62%,#1e2024 78%,#e9ecef 92%,#f4f6f8);
+ box-shadow:0 0 0 2px rgba(0,0,0,.6),0 0 64px 18px rgba(255,30,10,.45)}
+.peye::before{content:"";position:absolute;inset:16%;border-radius:50%;box-shadow:inset 0 0 14px 4px rgba(0,0,0,.95);filter:brightness(var(--tb,1));
+ background:radial-gradient(ellipse 50% 50% at calc(50% + var(--gx,0px)) calc(50% + var(--gy,0px)),#fff3c4 0,#ffb060 5%,#ff4a1a 14%,#d4140a 32%,#6a0603 58%,#140000 85%,#000 100%)}
+.peye::after{content:"";position:absolute;inset:16%;border-radius:50%;background:radial-gradient(ellipse 38% 20% at 38% 22%,rgba(255,255,255,.35),transparent 70%)}
+.hflare{position:absolute;left:-40px;right:-40px;top:50%;height:2px;margin-top:-1px;pointer-events:none;
+ background:linear-gradient(90deg,transparent,rgba(255,70,40,.85) 30%,rgba(255,205,180,1) 50%,rgba(255,70,40,.85) 70%,transparent);filter:blur(.6px)}
+.hflare.s1{top:37%;left:20px;right:20px;opacity:.3}.hflare.s2{top:63%;left:20px;right:20px;opacity:.3}
+#rimc,#ringc,#lensg{display:none}
+/* network card, as on the phone */
+.nt3{display:flex;margin-top:12px}.nt3>div{flex:1;min-width:0}.nt3>div+div{border-left:1px solid rgba(255,255,255,.1);padding-left:10px}
+.nt3 .l{font:700 9px "JetBrains Mono",monospace;letter-spacing:.14em;color:rgba(255,235,228,.75);display:flex;align-items:center;gap:5px}
+.nt3 .l svg{width:12px;height:12px;flex:none}.nt3 .v{font:700 14px "JetBrains Mono",monospace;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ntleg{display:flex;justify-content:flex-end;gap:12px;font:500 9px "JetBrains Mono",monospace;color:rgba(255,235,228,.8);margin-top:10px;border-top:1px solid rgba(255,255,255,.1);padding-top:6px;height:18px}
+.ntbars{display:flex;align-items:flex-end;gap:2px;height:34px;margin-top:4px}.ntbars i{flex:1;border-radius:1px 1px 0 0;background:linear-gradient(#5ff2e0,#16a99a);min-height:3px}
+.ntfoot{font:500 9.5px "JetBrains Mono",monospace;color:rgba(255,235,228,.75);margin-top:7px;display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden}
+.ntfoot span{overflow:hidden;text-overflow:ellipsis}.ntfoot svg{width:13px;height:13px;flex:none}
 .wave{position:absolute;left:420px;width:120px;top:372px;height:12px;display:flex;align-items:center;gap:2px;justify-content:center}
 .wave{display:none!important}   /* no waveform: only the eye and the sweep move */
 .wave i{width:2px;height:2px;border-radius:1px;background:linear-gradient(#ffb347,#ff3a1e);box-shadow:0 0 4px rgba(255,90,40,.6)}
@@ -43,7 +63,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 .alert .ic{width:24px;height:24px;border-radius:8px;background:linear-gradient(135deg,#ffc46b,#ff6a3a);display:grid;place-items:center;font-weight:800;font-size:13px;color:#2a0a00;flex:none}
 .alert.critical .ic{background:linear-gradient(135deg,#ff8a6b,#e11d48);color:#fff}
 .alert b{font-size:12.5px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}.alert span{display:block;font-size:10.5px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
-.strip{left:26px;right:26px;bottom:34px;height:54px;padding:0;display:flex;align-items:center}
+.strip{left:26px;right:26px;bottom:34px;height:54px;padding:0;display:flex;align-items:center;border-radius:27px}
 .strip .art{width:150px;height:100%;position:relative;overflow:hidden;flex:none;background:radial-gradient(circle at 40% 50%,#ff7a3a,#7a1208 60%,#1a0504)}
 .strip .art svg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:30px;height:30px}
 .strip .art:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent 40%,rgba(30,8,8,.95))}
@@ -88,14 +108,13 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 #det .dhint b{color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:5px;padding:0 5px;margin:0 5px 0 16px}
 #main{position:absolute;inset:0;transition:opacity .35s}
 #main.off{opacity:0}
-/* just one small radar sweep round HAL: the gauges, ticks and labels are hidden */
-#ticks,#r1,#r2,#r3,#l1,#l2,#l3{display:none}
-#sweep{position:absolute;left:50%;top:50%;width:214px;height:214px;margin:-107px 0 0 -107px;box-shadow:inset 0 0 0 1px rgba(255,200,180,.14);pointer-events:none;will-change:transform;animation:spin 9s linear infinite;background:conic-gradient(from 0deg,rgba(255,176,122,0) 0deg,rgba(255,176,122,.08) 120deg,rgba(255,200,160,.35) 300deg,rgba(255,232,210,.95) 358deg,rgba(255,176,122,0) 360deg);border-radius:50%;-webkit-mask:radial-gradient(closest-side,transparent calc(100% - 5px),#000 calc(100% - 4px));mask:radial-gradient(closest-side,transparent calc(100% - 5px),#000 calc(100% - 4px))}@keyframes spin{to{transform:rotate(360deg)}}
+/* the phone's gauges round HAL (CPU, temperature, memory) */
+#sweep{display:none;position:absolute;left:50%;top:50%;width:214px;height:214px;margin:-107px 0 0 -107px;box-shadow:inset 0 0 0 1px rgba(255,200,180,.14);pointer-events:none;will-change:transform;animation:spin 9s linear infinite;background:conic-gradient(from 0deg,rgba(255,176,122,0) 0deg,rgba(255,176,122,.08) 120deg,rgba(255,200,160,.35) 300deg,rgba(255,232,210,.95) 358deg,rgba(255,176,122,0) 360deg);border-radius:50%;-webkit-mask:radial-gradient(closest-side,transparent calc(100% - 5px),#000 calc(100% - 4px));mask:radial-gradient(closest-side,transparent calc(100% - 5px),#000 calc(100% - 4px))}@keyframes spin{to{transform:rotate(360deg)}}
 </style></head><body><div id="stage">
 <canvas id="gl" class="full" width="1920" height="1080"></canvas>
 
 <div id="main">
-<div id="eyewrap" style="position:absolute;left:345px;top:14px;width:270px;height:270px;transform-origin:135px 135px"><svg id="eye" style="position:absolute;left:0;top:0" width="270" height="270" viewBox="0 0 300 300">
+<div id="eyewrap" style="position:absolute;left:345px;top:14px;width:270px;height:270px;transform-origin:135px 135px"><i class="hflare"></i><i class="hflare s1"></i><i class="hflare s2"></i><svg id="eye" style="position:absolute;left:0;top:0" width="270" height="270" viewBox="0 0 300 300">
  <defs>
   <radialGradient id="lens"><stop offset="0" stop-color="#fffbe0"/><stop offset=".06" stop-color="#ffd27a"/><stop offset=".16" stop-color="#ff5a1f"/><stop offset=".34" stop-color="#d4140a"/><stop offset=".6" stop-color="#5a0402"/><stop offset=".88" stop-color="#120000"/><stop offset="1" stop-color="#000"/></radialGradient>
   <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9aa0a8"/><stop offset=".5" stop-color="#2b2e33"/><stop offset="1" stop-color="#6c7178"/></linearGradient>
@@ -116,12 +135,12 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
   <circle id="r2" cx="150" cy="150" r="116" stroke="url(#gb)" stroke-width="6" stroke-dasharray="0 729" transform="rotate(-90 150 150)"/>
   <circle id="r3" cx="150" cy="150" r="104" stroke="url(#gc)" stroke-width="6" stroke-dasharray="0 653" transform="rotate(-90 150 150)"/>
  </g>
- <circle cx="150" cy="150" r="88" fill="url(#rim)"/><circle cx="150" cy="150" r="82" fill="#0b0b0d"/>
- <g clip-path="url(#lensclip)"><g id="iris"><circle cx="150" cy="150" r="80" fill="url(#lens)"/><circle id="core" cx="150" cy="150" r="40" fill="url(#coreg)" style="mix-blend-mode:screen"/></g></g>
+ <circle id="rimc" cx="150" cy="150" r="88" fill="url(#rim)"/><circle id="ringc" cx="150" cy="150" r="82" fill="#0b0b0d"/>
+ <g id="lensg" clip-path="url(#lensclip)"><g id="iris"><circle cx="150" cy="150" r="80" fill="url(#lens)"/><circle id="core" cx="150" cy="150" r="40" fill="url(#coreg)" style="mix-blend-mode:screen"/></g></g>
  <g font-family="JetBrains Mono,monospace" font-size="9.5" font-weight="700" fill="#ffe2d6"><text id="l1" x="142" y="26" text-anchor="end"></text><text id="l2" x="142" y="38" text-anchor="end" fill="#ffb59a"></text><text id="l3" x="142" y="50" text-anchor="end" fill="#9ff5d0"></text></g>
-</svg><div id="sweep"></div></div>
+</svg><div id="sweep"></div><div class="peye" id="peye"></div></div>
 <div class="card glass l" id="cpc" style="left:26px;top:22px;width:288px;height:186px">
- <div class="k">THE PC <b id="pcl" class="ok">● OK</b></div>
+ <div class="k"><span class="hk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>THE PC</span><b id="pcl" class="ok">● OK</b></div>
  <div style="display:flex;gap:18px;margin-top:9px;align-items:flex-end">
   <div><div class="num glow" style="font-size:34px"><span id="cpu">—</span><span style="font-size:16px">%</span></div><div class="mono" style="font-size:10px;opacity:.65;margin-top:3px">CPU</div></div>
   <div><div class="num" style="font-size:22px" id="gpu">—</div><div class="mono" style="font-size:10px;opacity:.65;margin-top:3px" id="gpus">GPU</div></div>
@@ -131,21 +150,23 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
  <div class="drv" id="drv"></div>
 </div>
 <div class="card glass l" id="cnet" style="left:26px;top:220px;width:288px;height:184px">
- <div class="k">NETWORK <b id="netl" class="ok">● ALL UP</b></div>
- <div style="display:flex;align-items:baseline;gap:10px;margin-top:8px"><div class="num glow" style="font-size:34px"><span id="ping">—</span><span style="font-size:15px;font-weight:600;opacity:.7"> ms</span></div><div class="mono" style="font-size:11px;opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="rate"></div></div>
- <div style="margin-top:8px" id="netrows"></div>
- <svg width="288" height="44" style="position:absolute;left:0;bottom:0" viewBox="0 0 100 44" preserveAspectRatio="none"><defs><linearGradient id="ntg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffb347" stop-opacity=".5"/><stop offset="1" stop-color="#ffb347" stop-opacity="0"/></linearGradient></defs><path id="ntf" fill="url(#ntg)"/><path id="ntl" fill="none" stroke="#ffc46b" stroke-width="1.3" vector-effect="non-scaling-stroke"/></svg>
+ <div class="k"><span class="hk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>NETWORK</span><b id="netl" class="ok">● ALL UP</b></div>
+ <div class="nt3"><div><div class="l"><svg viewBox="0 0 24 24" fill="none" stroke="#4aa8ff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v14M6 12l6 6 6-6"/></svg>DOWNLOAD</div><div class="v" id="ndn">—</div></div>
+  <div><div class="l"><svg viewBox="0 0 24 24" fill="none" stroke="#5eea9b" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V6M6 12l6-6 6 6"/></svg>UPLOAD</div><div class="v" id="nup">—</div></div>
+  <div><div class="l"><svg viewBox="0 0 24 24" fill="none" stroke="#b07aff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16a8 8 0 0 1 16 0M12 16l4-5"/></svg>PING</div><div class="v" id="npg">—</div></div></div>
+ <div class="ntleg"><span id="lgd"></span><span id="lgu"></span></div><div class="ntbars" id="nbars"></div>
+ <div class="ntfoot"><svg viewBox="0 0 24 24" fill="none" stroke="#bbb" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="12" width="18" height="7" rx="2"/><path d="M7 12V7M17 12V7"/></svg><span id="nfoot"></span></div>
 </div>
 <div class="card glass r" id="ckuma" style="left:646px;top:22px;width:288px;height:186px">
- <div class="k">UPTIME KUMA <b id="kumal" class="ok"></b></div><div style="margin-top:7px" id="mons"></div>
+ <div class="k"><span class="hk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>UPTIME KUMA</span><b id="kumal" class="ok"></b></div><div style="margin-top:7px" id="mons"></div>
 </div>
 <div class="card glass r" id="cpi" style="left:646px;top:220px;width:288px;height:184px">
- <div class="k">RASPBERRY PI <b id="pil" class="ok"></b></div>
+ <div class="k"><span class="hk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2.5v3.5M15 2.5v3.5M9 18v3.5M15 18v3.5M2.5 9H6M2.5 15H6M18 9h3.5M18 15h3.5"/></svg>RASPBERRY PI</span><b id="pil" class="ok"></b></div>
  <div style="display:flex;align-items:baseline;gap:10px;margin-top:8px"><div class="num glow" style="font-size:34px" id="pit">—</div><div class="mono" style="font-size:11px;opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="pis"></div></div>
  <div class="mono" style="font-size:9.5px;opacity:.6;margin-top:10px;letter-spacing:.08em" id="dnsk">DNS · LAST 24 H</div>
  <div id="dns" style="display:flex;align-items:flex-end;gap:2px;height:52px;margin-top:6px"></div>
 </div>
-<div class="quote" id="quote"></div><div class="wave" id="wave"></div>
+<div id="greet"></div><div class="quote" id="quote"></div><div id="hrule"></div><div class="wave" id="wave"></div>
 <div class="card glass alert" id="alert"><div class="ic">!</div><div><b id="at"></b><span id="ad"></span></div></div>
 <div class="card glass strip" id="strip"><div class="art"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg></div>
  <div class="t"><b id="dlt"></b><span id="dli"></span></div><div class="p"><div class="bar"><i id="pb"></i></div><span><b id="pct"></b><em id="dle" style="font-style:normal"></em></span></div></div>
@@ -172,6 +193,8 @@ let B=null,HIST=null,DET=null;
 async function api(p){const r=await fetch(BASE+p,{headers:{'X-Mobile-Token':decodeURIComponent(KEY)},cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}
 async function poll(){try{B=await api('/api/brief?from=tv&px='+PX);apply()}catch(e){}setTimeout(poll,10000)}
 async function pollSlow(){try{HIST=(await api('/api/history?range=1h')).series}catch(e){}try{DET=await api('/api/tv/details');applyDet();if(detOn)drawDet()}catch(e){}setTimeout(pollSlow,60000)}
+// bytes a second as on the phone: 628 B/s, 4.0 KB/s, 488 KB/s, 37.2 MB/s
+const rate=v=>{if(v==null||isNaN(v))return'—';const u=['B/s','KB/s','MB/s','GB/s'];let i=0;v=+v;while(v>=1000&&i<3){v/=1024;i++}return(i&&v<100?v.toFixed(1):Math.round(v))+' '+u[i]};
 const lv=l=>l==='critical'?'critical':l==='warning'?'warning':'ok';
 function setLevel(id,level,okText,txt){const e=$(id);e.className=lv(level);e.textContent='● '+(txt||(level==='ok'?okText:level==='critical'?'PROBLEM':'CHECK'))}
 let drawnHist=null,drawnMons=null;
@@ -184,8 +207,11 @@ function apply(){if(!B)return;const sc=B.screen||{};
  $('gpu').textContent=g.split(' · ')[0];$('gpus').textContent='GPU'+(g.includes('·')?' · '+g.split(' · ')[1]:'');
  $('mem').textContent=m.split(' of ')[0];$('mems').textContent=m.includes(' of ')?'of '+m.split(' of ')[1]:'memory';
  drives=(pc.drives||[]).slice(0,5);$('drv').innerHTML=drives.map(d=>`<div><span>${esc(d.mount)}<b>${d.pct}%</b></span><i><b class="dv${d.warn?' w':''}" data-w="${d.pct}"></b></i></div>`).join('');
- const r0=String(row(net,0)[1]||'');$('rate').textContent=r0.includes('·')?r0.split('·').slice(1).join('·').trim():'';
- $('netrows').innerHTML=(net.rows||[]).slice(2,4).map(r=>`<div class="row"><span>${esc(r[0])}</span><em class="${r[2]==='ok'?'':lv(r[2])}">${esc(r[1])}</em></div>`).join('');
+ const dn=rate(B.net_down),up=rate(B.net_up);$('ndn').textContent=dn;$('nup').textContent=up;$('lgd').textContent=B.net_down!=null?'↓ '+dn:'';$('lgu').textContent=B.net_up!=null?'↑ '+up:'';
+ $('npg').textContent=B.ping!=null?Math.max(1,Math.round(B.ping))+' ms':'—';
+ {const nr=net.rows||[],r1=nr[1]||[],r2=nr[2]||[],ads=String(r2[1]||'').split(' · ')[0],em=(r,t)=>`<em style="font-style:normal" class="${r[2]==='ok'?'':lv(r[2])}">${esc(t)}</em>`;
+  $('nfoot').innerHTML=[r1.length?em(r1,'Router '+String(r1[1]).replace(' · no loss','')):'',r2.length?em(r2,/^[\d,]+$/.test(ads)?ads+' ads blocked':'Ads '+ads):''].filter(Boolean).join(' · ')}
+ $('greet').textContent=String(B.greeting||'').toUpperCase();
  if(k.ok){$('kumal').className=lv(k.level);$('kumal').textContent='● '+String(k.head||'').toUpperCase()}else{$('kumal').className='warning';$('kumal').textContent=k.found?'● NOT ANSWERING':'● NOT SET UP'}
  mons=(k.monitors||[]).slice(0,5);$('mons').innerHTML=mons.map((x,i)=>`<div class="mon"><i class="d${x.status==='up'?'':' down'}" id="md${i}"></i><span>${esc(x.name)}</span><svg viewBox="0 0 84 16" preserveAspectRatio="none"><polyline id="m${i}" fill="none" stroke="${x.status==='up'?'#7cf5b5':'#ff6a4d'}" stroke-width="1.3" opacity=".9"/></svg><em class="${x.status==='up'?'':'critical'}">${x.status==='up'?(x.ms==null?'up':Math.round(x.ms)+' ms'):esc(x.status)}</em></div>`).join('');
  setLevel('pil',pi.level,'OK');const pr=pi.rows||[];
@@ -271,7 +297,7 @@ function pathD(vals,w,h,lo,hi,step){const pts=vals.map((v,i)=>`${(i*w/Math.max(1
 let tgB=1,tgCur=1,tgNext=0;
 function talkGlow(speaking,txt,shown){const n=performance.now();
  if(speaking){if(n>=tgNext){const ch=txt[Math.max(0,shown-1)]||' ';tgB=/[aeiouy]/i.test(ch)?1.5+Math.random()*.45:/[\s,.;:!?]/.test(ch)?.72:1.12+Math.random()*.25;tgNext=n+55+Math.random()*85}}else tgB=1;
- tgCur+=(tgB-tgCur)*.32;$('iris').style.filter=Math.abs(tgCur-1)<.01?'':'brightness('+tgCur.toFixed(3)+')';$('bloomc').style.opacity=(.8*Math.min(1.25,tgCur)).toFixed(3)}
+ tgCur+=(tgB-tgCur)*.32;$('peye').style.setProperty('--tb',tgCur.toFixed(3));$('bloomc').style.opacity=(.8*Math.min(1.25,tgCur)).toFixed(3)}
 function render(t){
  const boot=ease(t/2.6);
  $('gl').style.opacity=Math.min(1,t/1.2);
@@ -289,23 +315,24 @@ function render(t){
  const ring=(id,len,f)=>$(id).setAttribute('stroke-dasharray',`${(len*Math.max(0,Math.min(1,f))*e).toFixed(1)} ${len}`);
  ring('r1',804,cpu/100);ring('r2',729,tmp/100);ring('r3',653,mem/100);
  $('l1').textContent=B?`CPU ${Math.max(0,Math.round(cpu*e))}%`:'CPU';$('l2').textContent=B&&B.cpu_temp!=null?`TEMP ${Math.round(tmp*e)}°`:'TEMP';$('l3').textContent=B?`MEM ${Math.round(mem*e)}%`:'MEM';
- $('cpu').textContent=B?Math.max(0,Math.round(cpu*e)):'—';$('ping').textContent=B&&B.ping!=null?Math.max(1,Math.round(B.ping*e)):'—';
+ $('cpu').textContent=B?Math.max(0,Math.round(cpu*e)):'—';
  $('core').setAttribute('r',40);$('core').setAttribute('opacity',.85);
  // speech
  speakSelf(t);
  const txt=String(say.text||''),shown=t<1.5?0:(say.frac>=0?Math.round(txt.length*Math.min(1,say.frac<0?1:say.frac)):txt.length);
- $('quote').className='quote'+(txt.length>110?' vlong':txt.length>70?' long':'');$('quote').innerHTML=t<1.5||!txt?'':'“'+esc(txt.slice(0,shown))+(shown<txt.length?'<span class="caret"></span>':'”');
+ const gr=B&&B.greeting&&txt.startsWith(B.greeting)?B.greeting.length:0,rest=txt.slice(gr).trim(),sh=Math.max(0,shown-gr-(txt.length-gr-rest.length));
+ $('quote').className='quote'+(rest.length>90?' vlong':rest.length>55?' long':'');$('quote').innerHTML=t<1.5||!rest?'':'“'+esc(rest.slice(0,sh))+(sh<rest.length?'<span class="caret"></span>':'”<span class="caret"></span>');
  const speaking=say.speaking&&t>=1.5;
  talkGlow(speaking,txt,shown);
  
  
- const g=gaze(t);$('iris').setAttribute('transform',`translate(${(g[0]*17).toFixed(2)} ${(g[1]*17).toFixed(2)})`);
+ const g=gaze(t),pe=$('peye');pe.style.setProperty('--gx',(g[0]*13).toFixed(2)+'px');pe.style.setProperty('--gy',(g[1]*10).toFixed(2)+'px');
  document.querySelectorAll('.dv').forEach(b=>b.style.width=b.dataset.w+'%');
  // graphs: still (no motion), drawn again only when their data changes
  if(HIST!==drawnHist){drawnHist=HIST;
   const ch=(HIST&&HIST.cpu||[]).filter(v=>v!=null).slice(-60);if(ch.length>1){const d=pathD(ch,254,34,0,Math.max(20,...ch)*1.15);$('pcln').setAttribute('d',d);$('pcf').setAttribute('d',d+' V34 H0Z')}
-  const pg=(HIST&&HIST.ping||[]).filter(v=>v!=null).slice(-50),src=pg.length>1?pg:Array.from({length:50},()=>10);
-  {const lo=Math.min(...src),hi=Math.max(...src)+1;const np=src.map((v,i)=>`${(i*100/(src.length-1)).toFixed(2)} ${(40-((v-lo)/(hi-lo))*14-8).toFixed(2)}`);$('ntl').setAttribute('d','M'+np.join(' L'));$('ntf').setAttribute('d','M'+np.join(' L')+' V44 H0Z')}}
+  const nd=(HIST&&HIST.net_down||[]).map(v=>v==null?0:+v).slice(-30);
+  if(nd.length){const mx=Math.max(...nd,1);$('nbars').innerHTML=nd.map(v=>`<i style="height:${Math.max(6,v*100/mx).toFixed(1)}%"></i>`).join('')}}
  if(mons!==drawnMons){drawnMons=mons;mons.forEach((m,k)=>{const el=$('m'+k);if(!el)return;let p='';for(let i=0;i<25;i++){const v=8+(m.status==='up'?4.5:1)*nz(i*.35,k*2.1);p+=`${(i*3.5).toFixed(1)},${v.toFixed(2)} `}el.setAttribute('points',p)})}
  if(dnsBars.length&&$('dns').children.length!==dnsBars.length){const mx=Math.max(...dnsBars.map(x=>x[0]),1);$('dns').innerHTML=dnsBars.map(([v,b])=>`<i style="flex:1;height:${Math.max(3,v*100/mx)}%;border-radius:2px 2px 0 0;background:linear-gradient(#ffc46b ${100-(v?b*100/v:0)}%, #ff3a1e ${100-(v?b*100/v:0)}%)"></i>`).join('')}
  // the alert and the download bar, still

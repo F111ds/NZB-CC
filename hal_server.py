@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.25.5"
+VERSION = "1.26.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2666,7 +2666,7 @@ def tv_brief(st: dict) -> dict:
     return {"greeting": st["hal"]["greeting"], "quote": quote, "say": spoken(say), "alerts": alerts, "voice": dict(TV_VOICE), "lines": lines[:16],
             "screen": tv_screen(st),
             "cpu_temp": v["cpu"].get("temp"), "mem_used": v["mem"].get("used"), "mem_total": v["mem"].get("total"),
-            "ping": n.get("ping_ms"), "net_down": n.get("down"), "internet_down": down,
+            "ping": n.get("ping_ms"), "net_down": n.get("down"), "net_up": n.get("up"), "internet_down": down,
             "downloading": det if det.startswith("downloading") else "",
             "kuma_up": km.get("up") if km.get("ok") else None, "kuma_total": len(km.get("monitors") or []) if km.get("ok") else None,
             "ads_on": ph.get("blocking") is not False if ph.get("ok") else None}
