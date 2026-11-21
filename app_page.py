@@ -242,10 +242,18 @@ nav.tabs button.on{color:#ffb59a;text-shadow:0 0 12px rgba(255,90,40,.9)}nav.tab
 /* Home: HAL with his gauges round him, and his voice under his words */
 .eyewrap{position:relative;width:236px;height:236px;margin:0 auto;display:grid;place-items:center}
 .eyewrap svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
-.hero.center .eyewrap .eye{width:132px;height:132px;box-shadow:0 0 0 2px #3a3a40,0 0 0 6px #0d0d0f,0 0 0 8px #6c7178,0 0 60px 12px rgba(255,42,18,.35)}
-.hero.center .eyewrap .eye::before{inset:19px}
+/* HAL's eye as on the TV: a brushed-metal rim, a black ring, the glass lens, a highlight and a small reflection */
+.hero.center .eyewrap .eye{width:140px;height:140px;
+ background:radial-gradient(circle closest-side,#0b0b0d 0 93%,transparent 94%),linear-gradient(180deg,#9aa0a8,#2b2e33 50%,#6c7178);
+ box-shadow:0 0 0 1px rgba(0,0,0,.6),0 14px 30px rgba(0,0,0,.5),0 0 70px 14px rgba(255,42,18,.32)}
+.hero.center .eyewrap .eye.warning{box-shadow:0 0 0 1px rgba(0,0,0,.6),0 0 0 4px rgba(251,191,36,.6),0 0 70px 14px rgba(255,42,18,.32)}
+.hero.center .eyewrap .eye.critical{box-shadow:0 0 0 1px rgba(0,0,0,.6),0 0 0 4px rgba(255,42,31,.7),0 0 80px 18px rgba(255,30,20,.45)}
+.hero.center .eyewrap .eye::before{inset:7.5%;box-shadow:inset 0 0 14px 4px rgba(0,0,0,.9);
+ background:radial-gradient(ellipse 50% 50% at calc(50% + var(--gx,0px)) calc(50% + var(--gy,0px)),#fffbe0 0,#ffd27a 6%,#ff5a1f 16%,#d4140a 34%,#5a0402 60%,#120000 88%,#000 100%)}
+.hero.center .eyewrap .eye::after{content:"";position:absolute;inset:7.5%;border-radius:50%;pointer-events:none;
+ transform:rotate(-28deg);background:radial-gradient(ellipse 22% 10.5% at 48.9% 21.1%,rgba(255,255,255,.17) 0 88%,transparent 100%),radial-gradient(ellipse 3.3% 3.3% at 57.4% 80.8%,rgba(255,255,255,.13) 0 80%,transparent 100%)}
 /* HAL looks around: his light moves inside the lens */
-.eyewrap .eye{overflow:hidden}.eyewrap .eye::before{transform:translate(var(--gx,0px),var(--gy,0px))}
+
 /* the sweep turns on the graphics chip, smooth whatever the page is doing */
 #hsweep{transform-box:view-box;transform-origin:50% 50%;animation:hspin 9s linear infinite}@keyframes hspin{to{transform:rotate(360deg)}}
 #hsparks{position:absolute;left:-40px;top:-40px;width:316px;height:316px;pointer-events:none}
