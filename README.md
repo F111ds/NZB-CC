@@ -653,6 +653,10 @@ Pair with the **same access code as the NZB phone app**, then add it to your hom
   motherboard's headers (not the graphics card's, not pumps). Auto is your BIOS fan curves. HAL never sets the CPU fan below
   40 % (every fan, if none is called CPU) or the others below 25 %, and hands back to Auto by himself when the CPU or graphics
   card gets within 5 °C of its alert or the VRM, chipset, hot spot or an NVMe drive reaches its limit, and after a restart.
+  When **Fan Control** (Rem0o) is running it drives the fans itself, so HAL switches its configurations instead: it writes
+  `HAL-Quiet/Normal/Cool/Max.json` next to your `userConfig.json` (copies of it with each motherboard fan at that mode's
+  fixed %, pumps and the graphics card on your curves) and loads them with `FanControl.exe -c`; Auto loads your
+  `userConfig.json`. HAL checks Fan Control's title bar to confirm each switch.
   Other fan software (ASUS Fan Xpert / Armoury Crate, iCUE for its own fans) should not control the same fans.
 - **Services**: SABnzbd, Jellyfin, Sonarr, Radarr, Prowlarr and the NZB phone server: answering, response time and
   what each is doing. **Restart / Start** from the phone (through its Task Scheduler task, its Windows service, or
