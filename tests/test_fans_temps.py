@@ -150,4 +150,55 @@ d0 = h2.drives(snap2)[0]["disk"]
 assert d0["temp"] == 68 and d0["temp_src"] == "Windows", d0
 print("drive temperatures from the drive's own sensor ok")
 
+
+# ---------------- HWiNFO (shared memory layout from its SDK, and its Gadget registry values) ----------------
+import struct
+def _shm(sensors, readings):
+    s_off, s_size, r_size = 44, 264 + 128, 316 + 64          # newer HWiNFO elements are bigger: we step by the given size
+    r_off = s_off + s_size * len(sensors)
+    buf = bytearray(r_off + r_size * len(readings))
+    struct.pack_into("<IIIqIIIIII", buf, 0, 0x53695748, 2, 0, 0, s_off, s_size, len(sensors), r_off, r_size, len(readings))
+    for i, name in enumerate(sensors):
+        o = s_off + i * s_size
+        struct.pack_into("<II", buf, o, i, 0)
+        buf[o + 8:o + 8 + len(name)] = name.encode()
+        buf[o + 136:o + 136 + len(name)] = name.encode()
+    for i, (kind, si, label, value) in enumerate(readings):
+        o = r_off + i * r_size
+        struct.pack_into("<III", buf, o, kind, si, i)
+        buf[o + 12:o + 12 + len(label)] = label.encode()
+        buf[o + 140:o + 140 + len(label)] = label.encode()
+        struct.pack_into("<d", buf, o + 284, value)
+    return bytes(buf)
+buf = _shm(["CPU [#0]: Intel Core i7-9700K: Enhanced", "GPU [#0]: NVIDIA GeForce RTX 4080", "ASUS ROG STRIX Z390-E (Nuvoton NCT6798D)",
+            "S.M.A.R.T.: Samsung SSD 860 EVO 500GB (S3Z9NB0K123456)"],
+           [(1, 0, "CPU Package", 53.0), (1, 1, "GPU Hot Spot Temperature", 61.5), (1, 1, "GPU Memory Junction Temperature", 58.0),
+            (1, 2, "VRM", 47.0), (3, 2, "CPU", 1092.0), (3, 2, "Chassis1", 588.0), (1, 3, "Drive Temperature", 32.0), (2, 0, "Vcore", 1.2)])
+hw = sm.parse_hwinfo_shm(buf)
+assert [t["name"] for t in hw["temps"]] == ["CPU Package", "GPU Hot Spot Temperature", "GPU Memory Junction Temperature", "VRM", "Drive Temperature"], hw
+assert hw["temps"][0]["hw"].startswith("/cpu/") and hw["temps"][1]["hw"].startswith("/gpu/") and hw["temps"][3]["hw"].startswith("/lpc/")
+assert hw["temps"][4]["hw"].startswith("/ssd/hwinfo/") and hw["temps"][4]["label"] == "Samsung SSD 860 EVO 500GB"
+assert [f["value"] for f in hw["fans"]] == [1092.0, 588.0]
+assert sm.parse_hwinfo_shm(b"DEAD" + bytes(60)) is None and sm.parse_hwinfo_shm(b"") is None
+assert sm.pick_cpu_temp(hw["temps"]) == 53.0
+# HWiNFO fills the gaps in LibreHardwareMonitor's readings
+lhm = {"temps": [{"hw": "/intelcpu/0", "label": "Intel Core i7-9700K", "name": "CPU Package", "value": 52.0}], "fans": [], "power": []}
+mg = sm.merge_hwinfo(lhm, hw)
+names = [t["name"] for t in mg["temps"]]
+assert names == ["CPU Package", "GPU Hot Spot Temperature", "GPU Memory Junction Temperature", "VRM", "Drive Temperature"], names
+assert mg["temps"][0]["value"] == 52.0 and len(mg["fans"]) == 2       # LibreHardwareMonitor's CPU kept, HWiNFO's fans used
+assert sm.merge_hwinfo(lhm, None) is lhm
+assert sm.match_disk_temp("Samsung SSD 860 EVO 500GB", sm.disk_temps(mg["temps"])) == 32.0
+# both tools see the same drive: LibreHardwareMonitor's reading is used, and it isn't counted as two drives
+both = mg["temps"] + [{"hw": "/ssd/1", "label": "Samsung SSD 860 EVO 500GB", "name": "Temperature", "value": 33.0}]
+assert sm.match_disk_temp("Samsung SSD 860 EVO 500GB", sm.disk_temps(both)) == 33.0
+ex = {x["key"]: x["value"] for x in hs.extra_temps(mg["temps"])}
+assert ex["gpu_hot"] == 61.5 and ex["gpu_mem"] == 58.0 and ex["vrm"] == 47.0, ex
+# Gadget values
+gd = sm.parse_hwinfo_gadget({"Sensor0": "S.M.A.R.T.: Samsung SSD 860 EVO 500GB (S3Z9)", "Label0": "Drive Temperature", "Value0": "32 °C", "ValueRaw0": "32",
+                             "Sensor1": "ASUS ROG STRIX Z390-E (Nuvoton NCT6798D)", "Label1": "CPU", "Value1": "1,092 RPM", "ValueRaw1": "1092"})
+assert gd["temps"][0]["value"] == 32 and gd["temps"][0]["label"] == "Samsung SSD 860 EVO 500GB" and gd["fans"][0]["value"] == 1092, gd
+assert sm.parse_hwinfo_gadget({}) is None
+print("HWiNFO ok")
+
 print("\nALL FAN AND TEMPERATURE TESTS PASSED")
