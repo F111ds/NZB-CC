@@ -36,7 +36,13 @@ assert hs.greeting("Dave", 9) == "Good morning, Dave."
 assert hs.greeting("Dave", 15) == "Good afternoon, Dave."
 assert hs.greeting("Dave", 23) == "Good evening, Dave."
 q = hs.hal_quote([], "Frank", now=0)
-assert "Frank" in q or q in [x.format(name="Frank") for x in hs.QUOTES_OK]
+assert "Frank" in q or q in [x.format(name="Frank") for x in hs.QUOTES_OK + hs.QUOTES_NIGHT]
+# all well at night: the night lines; in the day: the everyday ones (all original lines, no long film quotes)
+from datetime import datetime
+night = datetime(2026, 11, 20, 23, 30).timestamp()
+day = datetime(2026, 11, 20, 14, 0).timestamp()
+assert hs.hal_quote([], "Frank", now=night) in [x.format(name="Frank") for x in hs.QUOTES_NIGHT]
+assert hs.hal_quote([], "Frank", now=day) in [x.format(name="Frank") for x in hs.QUOTES_OK]
 crit = [{"level": "critical", "title": "SABnzbd has stopped answering"}]
 for t in range(0, 3 * 180 * 3, 180):
     assert "SABnzbd has stopped answering" in hs.hal_quote(crit, "Dave", now=t)
