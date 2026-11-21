@@ -577,6 +577,12 @@ function fansCard(){const v=S&&S.vitals;if(!v)return'';const fans=v.fans||[],g=(
     '<div class="fmodes">'+(fc.modes||['auto','quiet','normal','cool','max']).map(m=>'<button data-fanmode="'+m+'" class="'+(m===mode?'on':'')+'">'+m.toUpperCase()+'</button>').join('')+'</div>'+
     rows.map(row).join('')+
     '<div class="fnote">'+(fc.note&&fc.since&&Date.now()/1000-fc.since<3600?'<b style="color:var(--amber);font-weight:600">'+(mode==='auto'?'On Auto: ':'Note: ')+esc(fc.note)+'.</b> ':'')+(fc.via==='Fan Control'?'Auto = your own Fan Control setup (userConfig). ':'Auto = your BIOS fan curves. ')+'Never below 40% (CPU) / 25%; Quiet and Normal go back to Auto by themselves if anything runs hot. Cool and Max also speed up the graphics card fans.</div></div>'}
+// Update library: Jellyfin scans for new downloads, then Kodi on the TV refreshes (the old page's "Scan library").
+async function libScan(btn){if(btn.disabled)return;btn.disabled=true;
+  try{const r=await api('/api/kodi/scan',{});
+    toast(r.jellyfin&&r.kodi?'Library update started: Jellyfin, then Kodi on the TV.':r.jellyfin?'Jellyfin is updating. Kodi on the TV didn\'t answer, so it will catch up later.':r.kodi?'Kodi on the TV is updating. Jellyfin didn\'t answer.':'Library update started.')}
+  catch(e){toast(e.message||'I couldn\'t start the library update.',true)}
+  finally{setTimeout(()=>{btn.disabled=false},3000)}}
 async function setFans(mode){document.querySelectorAll('[data-fanmode]').forEach(b=>b.classList.toggle('on',b.dataset.fanmode===mode));
   try{const r=await api('/hal/api/fans',{mode,from:'phone'});if(S&&r&&r.fans)S.fanctl=r.fans;toast(r&&r.say||'Done',!(r&&r.ok))}catch(e){toast('I couldn\'t reach the PC.',true)}
   refresh()}
@@ -991,7 +997,9 @@ function rWatch(){if(libView)return rLibrary();let x='<div class="narrow">'+topb
   if(fresh.length)x+='<div class="sec"><span>NEW IN YOUR LIBRARY</span></div><div class="list">'+fresh.slice(0,8).map(m=>movieRow(m,false)).join('')+'</div>';
   if(K&&K.counts)x+='<p class="hint">Your library: '+[K.counts.movies?K.counts.movies.toLocaleString()+' movies':'',K.counts.shows?K.counts.shows.toLocaleString()+' shows':'',K.counts.episodes?K.counts.episodes.toLocaleString()+' episodes':''].filter(Boolean).join(' · ')+'</p>';
   x+=jfList();
-  x+='<div class="sec"><span>YOUR LIBRARY</span></div><div class="list"><button class="row" data-lib="movies"><span class="t"><b>Movies</b><span>'+(K&&K.counts&&K.counts.movies?K.counts.movies.toLocaleString()+' movies · search them':'Search your movies')+'</span></span><span class="m">›</span></button>'+
+  x+='<div class="sec"><span>YOUR LIBRARY</span></div><div class="list">'+
+     '<button class="row" data-libscan><span class="t"><b>Update library</b><span>Jellyfin looks for new downloads, then Kodi on the TV</span></span><span class="m" style="font-size:20px;color:#ff6a4a">↻</span></button>'+
+     '<button class="row" data-lib="movies"><span class="t"><b>Movies</b><span>'+(K&&K.counts&&K.counts.movies?K.counts.movies.toLocaleString()+' movies · search them':'Search your movies')+'</span></span><span class="m">›</span></button>'+
      '<button class="row" data-lib="shows"><span class="t"><b>Shows</b><span>'+(K&&K.counts&&K.counts.shows?K.counts.shows+' shows · seasons and episodes':'Seasons and episodes')+'</span></span><span class="m">›</span></button>'+
      '<button class="row" data-lib="missing"><span class="t"><b>Missing episodes</b><span>Gaps in your seasons, with Find</span></span><span class="m">›</span></button>'+
      '<a class="row" href="/kodi" style="color:inherit;text-decoration:none"><span class="t"><b>Classic Kodi page</b><span>Full remote, type on TV, Jellyfin details</span></span><span class="m">›</span></a></div>';
@@ -1212,6 +1220,7 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if('settings' in d){openSettings();return}
   if('alerts' in d){openHal('/hal/?tab=log');return}
   if(d.fanmode){setFans(d.fanmode);return}
+  if('libscan' in d){libScan(c);return}
   if(d.hal){openHal('/hal/?tab='+encodeURIComponent(d.hal));return}
   if(d.halurl){$('sheet').classList.add('hidden');openHal(d.halurl);return}
   if('talk' in d){LS.set('hal_talk',talkative()?'off':'on');if(!talkative()&&CAN_SPEAK)speechSynthesis.cancel();else{unlocked=true;talk($('heye'),$('hquote'),'Thank you, '+NAME()+'. I\'ll talk to you from now on.',true)}render();return}
