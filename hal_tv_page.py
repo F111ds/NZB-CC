@@ -105,7 +105,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
   <filter id="glf"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
  </defs>
  <circle cx="150" cy="150" r="150" fill="url(#bloom)"/>
- <g id="ticks"></g>
+ 
  <g fill="none" stroke-linecap="round" filter="url(#glf)">
   <circle id="r1" cx="150" cy="150" r="128" stroke="url(#ga)" stroke-width="6" stroke-dasharray="0 804" transform="rotate(-90 150 150)"/>
   <circle id="r2" cx="150" cy="150" r="116" stroke="url(#gb)" stroke-width="6" stroke-dasharray="0 729" transform="rotate(-90 150 150)"/>
@@ -219,7 +219,7 @@ setInterval(()=>{if(APP&&!say.speaking&&now()>60&&Math.random()<.5)try{HAL.say('
 // ---------- scene ----------
 const T0=performance.now(),now=()=>(performance.now()-T0)/1000;
 let tk='';for(let i=0;i<72;i++){const a=i*5*Math.PI/180,r1=139,r2=i%6?143:147;tk+=`<line x1="${(150+r1*Math.sin(a)).toFixed(1)}" y1="${(150-r1*Math.cos(a)).toFixed(1)}" x2="${(150+r2*Math.sin(a)).toFixed(1)}" y2="${(150-r2*Math.cos(a)).toFixed(1)}" stroke="rgba(255,210,190,${i%6?.25:.55})" stroke-width="1.2"/>`}
-$('ticks').innerHTML=tk;const tickEls=[...$('ticks').children];
+const tickEls=[];
 $('wave').innerHTML='<i></i>'.repeat(34);const waveEls=[...$('wave').children];
 const cards=[...document.querySelectorAll('#main .card')];cards.forEach(c=>{const s=document.createElement('i');s.className='sheen';c.appendChild(s)});
 // WebGL smoke + god rays
@@ -229,7 +229,7 @@ if(gl){try{
  const fs=`precision mediump float;uniform vec2 r;uniform float t;
 float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y);}
-float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<5;i++){v+=a*n(p);p=p*2.03+vec2(1.7,9.2);a*=.5;}return v;}
+float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<4;i++){v+=a*n(p);p=p*2.03+vec2(1.7,9.2);a*=.5;}return v;}
 void main(){vec2 uv=gl_FragCoord.xy/r;vec2 p=uv*vec2(r.x/r.y,1.)*2.2;vec2 q=vec2(fbm(p+vec2(0.,t*.04)),fbm(p+vec2(5.2,1.3)-t*.03));float w=fbm(p+1.9*q+vec2(t*.02,-t*.06));
  vec2 c=(uv-vec2(.5,.71))*vec2(r.x/r.y,1.);float d=length(c);float pulse=.88+.12*sin(t*1.6);vec3 col=vec3(.035,.008,.01);
  col+=vec3(.42,.05,.02)*pow(w,2.2)*1.6;col+=vec3(.95,.38,.05)*smoothstep(.62,.95,w)*.35*(1.-uv.y*.6);col+=vec3(1.,.22,.05)*exp(-d*d*9.)*.62*pulse;col+=vec3(1.,.55,.2)*exp(-d*d*60.)*.25*pulse;
@@ -239,15 +239,15 @@ void main(){vec2 uv=gl_FragCoord.xy/r;vec2 p=uv*vec2(r.x/r.y,1.)*2.2;vec2 q=vec2
  if(gl.getProgramParameter(pr,gl.LINK_STATUS)){gl.useProgram(pr);const bf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,bf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
   const pl=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,2,gl.FLOAT,false,0,0);
   // the smoke is soft, so it is drawn at half size to spare the TV
-  $('gl').width=960;$('gl').height=540;W=960;H=540;gl.viewport(0,0,W,H);gl.uniform2f(gl.getUniformLocation(pr,'r'),W,H);ut=gl.getUniformLocation(pr,'t');glOK=true}}catch(e){}}
+  $('gl').width=480;$('gl').height=270;W=480;H=270;gl.viewport(0,0,W,H);gl.uniform2f(gl.getUniformLocation(pr,'r'),W,H);ut=gl.getUniformLocation(pr,'t');glOK=true}}catch(e){}}
 if(!glOK)$('gl').style.background='radial-gradient(ellipse 520px 380px at 50% 28%,rgba(255,60,20,.5),transparent 70%),#0a0405';
 const sp=$('sp').getContext('2d'),fx=$('fx').getContext('2d'),FW=1920,FH=1080,EX=960,EY=298;
 let seed=7;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
-const sparks=Array.from({length:24},()=>({x:rnd()*FW,y:rnd()*FH,v:18+rnd()*40,r:1+rnd()*2.6,ph:rnd()*6.28,dr:(rnd()-.5)*20}));
-const motes=Array.from({length:40},()=>({s:Math.floor(rnd()*4),o:rnd(),v:.12+rnd()*.18,w:(rnd()-.5)*120,r:1+rnd()*1.8}));
+const sparks=Array.from({length:12},()=>({x:rnd()*FW,y:rnd()*FH,v:18+rnd()*40,r:1+rnd()*2.6,ph:rnd()*6.28,dr:(rnd()-.5)*20}));
+const motes=Array.from({length:0},()=>({s:Math.floor(rnd()*4),o:rnd(),v:.12+rnd()*.18,w:(rnd()-.5)*120,r:1+rnd()*1.8}));
 const srcPts=[[314*2,115*2],[314*2,312*2],[646*2,115*2],[646*2,312*2]];
 function gaze(t){
- if(t<3.6)return[0,0];
+ if(t<1.5)return[0,0];
  const lt=say.start>=0?now()-say.start:99,typed=.6+String(say.text).length/24;
  const path=k=>{for(let i=0;i<k.length-1;i++){const[a,ax,ay]=k[i],[b,bx,by]=k[i+1];if(lt>=a&&lt<=b){const e=sm((lt-a)/Math.min(.35,b-a));return[ax+(bx-ax)*e,ay+(by-ay)*e]}}return null};
  if(say.look==='room'){const p=path([[0,0,0],[typed,0,0],[typed+.4,-1,.05],[typed+1.3,-1,.05],[typed+1.6,1,.05],[typed+2.5,1,.05],[typed+2.8,-.6,0],[typed+3.3,-.6,0],[typed+3.7,0,0],[99,0,0]]);if(p)return p}
@@ -263,17 +263,17 @@ function render(t){
  for(const s of sparks){const y=((s.y-t*s.v)%FH+FH)%FH,x=s.x+Math.sin(t*.8+s.ph)*s.dr,a=(.35+.35*Math.sin(t*3+s.ph))*Math.min(1,y/FH*2)*boot;
   const g=sp.createRadialGradient(x,y,0,x,y,s.r*4);g.addColorStop(0,`rgba(255,200,120,${a})`);g.addColorStop(1,'rgba(255,90,30,0)');sp.fillStyle=g;sp.beginPath();sp.arc(x,y,s.r*4,0,7);sp.fill()}
  // boot: the veil lifts, the lens assembles, ticks light in turn, panels unfold from the eye
- $('veil').style.opacity=1-ease((t-.2)/1.6);
+ $('veil').style.opacity=1-ease((t-.1)/.6);
  const eye=$('eye'),px=Math.sin(t*.23),py=Math.cos(t*.17);
- eye.style.transform=`scale(${.55+.45*ease((t-.15)/1.8)}) translate(${-px*2}px,${-py*2}px)`;eye.style.opacity=Math.min(1,t/.6);
+ eye.style.transform=`scale(${.55+.45*ease((t-.05)/.8)}) translate(${-px*2}px,${-py*2}px)`;eye.style.opacity=Math.min(1,t/.3);
  tickEls.forEach((l,i)=>l.style.opacity=t>.5+i*.018?1:0);
- const bs='HAL 9000 · ONLINE',bn=Math.floor(Math.max(0,t-.9)*14);$('boot').textContent=bs.slice(0,bn);$('boot').style.opacity=t<3.2?1:Math.max(0,1-(t-3.2)/.5);
- cards.forEach((c,i)=>{const e=ease((t-2-i*.12)/.9),left=parseFloat(c.style.left)<480||c.id==='alert'||c.id==='strip';
-  if(t<4.5){c.style.clipPath=i<4?`inset(0 ${left?(1-e)*100:0}% 0 ${left?0:(1-e)*100}% round 20px)`:`inset(0 ${(1-e)*50}% 0 ${(1-e)*50}% round 16px)`;c.style.opacity=Math.min(1,e*1.4)}else if(c.style.clipPath){c.style.clipPath='';c.style.opacity=1}
+ const bs='HAL 9000 · ONLINE',bn=Math.floor(Math.max(0,t-.3)*30);$('boot').textContent=bs.slice(0,bn);$('boot').style.opacity=t<1.2?1:Math.max(0,1-(t-1.2)/.3);
+ cards.forEach((c,i)=>{const e=ease((t-.7-i*.06)/.5),left=parseFloat(c.style.left)<480||c.id==='alert'||c.id==='strip';
+  if(t<2){c.style.clipPath=i<4?`inset(0 ${left?(1-e)*100:0}% 0 ${left?0:(1-e)*100}% round 20px)`:`inset(0 ${(1-e)*50}% 0 ${(1-e)*50}% round 16px)`;c.style.opacity=Math.min(1,e*1.4)}else if(c.style.clipPath){c.style.clipPath='';c.style.opacity=1}
   const d=i<4?5:3;c.style.transform=`translate(${px*d}px,${py*d}px)`});
- document.querySelectorAll('.hint,#clock').forEach(e=>e.style.opacity=ease((t-2.6)/.8));
+ document.querySelectorAll('.hint,#clock').forEach(e=>e.style.opacity=ease((t-1)/.5));
  // rings and numbers: the real values, filled on opening and breathing a little
- const cpu=(B&&B.cpu!=null?B.cpu:0)+1.2*nz(t*.5,1)*(B?1:0),tmp=B&&B.cpu_temp!=null?B.cpu_temp:0,mem=B&&B.ram!=null?B.ram:0,e=ease((t-.3)/1.6);
+ const cpu=(B&&B.cpu!=null?B.cpu:0)+1.2*nz(t*.5,1)*(B?1:0),tmp=B&&B.cpu_temp!=null?B.cpu_temp:0,mem=B&&B.ram!=null?B.ram:0,e=ease((t-.2)/.9);
  const ring=(id,len,f)=>$(id).setAttribute('stroke-dasharray',`${(len*Math.max(0,Math.min(1,f))*e).toFixed(1)} ${len}`);
  ring('r1',804,cpu/100);ring('r2',729,tmp/100);ring('r3',653,mem/100);
  $('l1').textContent=B?`CPU ${Math.max(0,Math.round(cpu*e))}%`:'CPU';$('l2').textContent=B&&B.cpu_temp!=null?`TEMP ${Math.round(tmp*e)}°`:'TEMP';$('l3').textContent=B?`MEM ${Math.round(mem*e)}%`:'MEM';
@@ -281,8 +281,8 @@ function render(t){
  const br=.75+.25*Math.sin(t*1.6);$('core').setAttribute('r',34+8*br);$('core').setAttribute('opacity',.55+.4*br);
  // speech
  speakSelf(t);
- const txt=String(say.text||''),shown=t<3.6?0:(say.frac>=0?Math.round(txt.length*Math.min(1,say.frac<0?1:say.frac)):txt.length);
- $('quote').className='quote'+(txt.length>110?' vlong':txt.length>70?' long':'');$('quote').innerHTML=t<3.6||!txt?'':'“'+esc(txt.slice(0,shown))+(shown<txt.length?'<span class="caret"></span>':'”');
+ const txt=String(say.text||''),shown=t<1.5?0:(say.frac>=0?Math.round(txt.length*Math.min(1,say.frac<0?1:say.frac)):txt.length);
+ $('quote').className='quote'+(txt.length>110?' vlong':txt.length>70?' long':'');$('quote').innerHTML=t<1.5||!txt?'':'“'+esc(txt.slice(0,shown))+(shown<txt.length?'<span class="caret"></span>':'”');
  const speaking=say.speaking&&t>=3.6;
  waveEls.forEach((el,i)=>{const v=Math.abs(nz(t*7+i*.45,i));el.style.height=(3+(speaking?20:2)*v).toFixed(1)+'px'});
  if(speaking)$('core').setAttribute('opacity',.75+.25*Math.abs(nz(t*9,1)));
