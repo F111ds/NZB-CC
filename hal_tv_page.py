@@ -54,6 +54,9 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 .nt3 .l svg{width:12px;height:12px;flex:none}.nt3 .v{font:700 14px "JetBrains Mono",monospace;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .live{color:#ff3a1e;font-weight:700;letter-spacing:.14em;margin-left:8px}
 #det .dgrid.one{grid-template-columns:1fr;gap:6px}
+#det .fm{display:flex;gap:4px;margin-top:8px}#det .fm span{flex:1;text-align:center;padding:5px 0;border-radius:8px;border:1px solid rgba(255,255,255,.12);font:700 8.5px "JetBrains Mono",monospace;letter-spacing:.06em;color:rgba(255,235,228,.7)}
+#det .fm span.on{background:linear-gradient(135deg,rgba(255,106,58,.9),rgba(225,29,72,.9));color:#fff;border-color:transparent}
+#det .c.fanlit{box-shadow:0 0 0 2px rgba(255,90,60,.8),0 0 26px rgba(255,40,20,.35)}
 .ntleg{display:flex;justify-content:space-between;gap:12px;font:500 9px "JetBrains Mono",monospace;color:rgba(255,235,228,.8);margin-top:10px;border-top:1px solid rgba(255,255,255,.1);padding-top:6px;height:18px}
 .ntbars{display:flex;align-items:flex-end;gap:2px;height:34px;margin-top:4px}.ntbars i{flex:1;border-radius:1px 1px 0 0;background:linear-gradient(#5ff2e0,#16a99a);min-height:3px}
 .ntfoot{font:500 9.5px "JetBrains Mono",monospace;color:rgba(255,235,228,.75);margin-top:7px;display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden}
@@ -380,7 +383,7 @@ function graphSvg(v,col,fit,v2,col2){v=v.map(Number);const all=v.concat(v2||[]).
  const one=(a,c)=>{const id='gs'+(++gsId),d=curve(P(a));return`<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".32"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></linearGradient></defs><path d="${d} L100,50 L0,50 Z" fill="url(#${id})"/><path d="${d}" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`};
  let o=`<svg class="g" viewBox="0 0 100 50" preserveAspectRatio="none">`+one(v,col);if(v2&&v2.length>1)o+=one(v2.map(Number),col2);return o+'</svg>'}
 const lcol=l=>l==='critical'?'#ff7a6b':l==='warning'?'#ffc46b':l==='info'?'#9cc8ff':'#7cf5b5';
-const bcol=b=>{const u=String(b||'').toUpperCase();return/^(CHECK|PAUSED|NOT |WARM)/.test(u)?'warning':/^(DOWN|HOT|PROBLEM)/.test(u)||/STOPPED/.test(u)?'critical':/SPINNING/.test(u)?'ok':/HEALTHY|^UP |^ALL|^ONLINE|^BLOCKING|^COOL|^OK/.test(u)?'ok':''};
+const bcol=b=>{const u=String(b||'').toUpperCase();return/^(CHECK|PAUSED|NOT |WARM)/.test(u)?'warning':/^(DOWN|HOT|PROBLEM)/.test(u)||/STOPPED/.test(u)?'critical':/SPINNING|^AUTO$/.test(u)?'ok':/^(QUIET|NORMAL|COOL|MAX)$/.test(u)?'warning':/HEALTHY|^UP |^ALL|^ONLINE|^BLOCKING|^COOL|^OK/.test(u)?'ok':''};
 function detCard(c){let h=`<div class="k">${esc(c.key)}${c.badge?`<b class="${bcol(c.badge)}">${esc(c.badge)}</b>`:''}</div>`;
  if(c.big)h+=`<div class="big">${esc(c.big)}${c.bigsub?`<small>${esc(c.bigsub)}</small>`:''}</div>`;
  const fg=c.graph&&c.graph.length>1,fh=!fg&&c.hourly&&c.hourly.length,fill=!fg&&!fh&&!(c.footer_graph&&c.footer_graph.length>1);
@@ -397,7 +400,8 @@ function detCard(c){let h=`<div class="k">${esc(c.key)}${c.badge?`<b class="${bc
   if(c.hourly_label)h+=`<div class="hl">${esc(c.hourly_label)}</div>`}
  if(c.footer_graph&&c.footer_graph.length>1)h+=`<div class="k" style="margin-top:10px"><span>${esc(c.footer_key||'')}${c.footer_live?'<span class="live">● LIVE</span>':''}</span>${c.footer_badge?`<b>${esc(c.footer_badge)}</b>`:''}</div>`+graphSvg(c.footer_graph,c.footer_color||'#7cf5b5');
  if(c.chips&&c.chips.length)h+=`<div class="chips">${c.chips.map(x=>`<span>${esc(x[0])}<b>${esc(x[1])}</b>${esc(x[2])}</span>`).join('')}</div>`;
- return`<div class="c glass" style="flex:${c.weight||1} 1 0">${h}</div>`}
+ if(c.modes)h+=`<div class="fm">${c.modes.map(m=>`<span class="${m===c.mode?'on':''}">${esc(m)}</span>`).join('')}</div>`;
+ return`<div class="c glass${c.lit?' fanlit':''}" style="flex:${c.weight||1} 1 0">${h}</div>`}
 // The live readings folded into the details pages: the PC's graphs and numbers, ping, and the traffic now.
 function liveDet(){if(!DET||!liveFresh())return;const L=LIVE,last=a=>a[a.length-1],ok=a=>(a||[]).filter(x=>x!=null),pg=t=>(DET.pages||[]).find(p=>p.title===t);
  const cards=t=>{const p=pg(t);return p&&p.grid?[].concat(...p.grid):[]},card=(t,k)=>cards(t).find(c=>String(c.key).startsWith(k));
@@ -408,19 +412,29 @@ function liveDet(){if(!DET||!liveFresh())return;const L=LIVE,last=a=>a[a.length-
  c=card('The PC','DRIVES');if(c&&disk.length>1){c.footer_graph=disk;c.footer_live=1;c.footer_key='DISK ACTIVITY · LAST 2 MIN';c.footer_badge='NOW '+rate(last(disk))}
  c=card('Network','INTERNET');if(c&&ping.length>1){c.graph=ping;c.live=1;c.big=Math.round(last(ping))+' ms';c.bigsub=String(c.bigsub||'').replace(/last (hour|2 min) [^·]*/,`last 2 min ${Math.round(Math.min(...ping))}–${Math.round(Math.max(...ping))} ms `)}
  c=card('Network','TRAFFIC');if(c&&dn.length){c.big='↓ '+rate(last(dn));if(up.length)c.bigsub='↑ '+rate(last(up))+' now'}}
+// the FANS card with its modes, on the PC page (OK there steps through them)
+let animFor=-1;
+function fanCard(){if(!DET||TABS[detAt]!=='The PC')return null;const p=(DET.pages||[]).find(x=>x.title==='The PC');return p&&p.grid?[].concat(...p.grid).find(c=>c.key==='FANS'&&c.modes)||null:null}
+async function nextFanMode(){const c=fanCard();if(!c)return false;const ms=c.modes,next=ms[(ms.indexOf(c.mode)+1)%ms.length];
+ c.mode=next;c.badge=next;c.lit=next!=='AUTO';drawDet();
+ try{const r=await fetch(BASE+'/api/fans',{method:'POST',headers:{'X-Mobile-Token':decodeURIComponent(KEY),'Content-Type':'application/json'},body:JSON.stringify({mode:next.toLowerCase(),from:'TV'})});const j=await r.json();
+  if(j&&j.say){if(APP)try{HAL.say(j.say)}catch(e){}else typeLine(j.say,true)}}catch(e){}
+ pollSlowOnce();return true}
 function drawDet(){liveDet();const pages=(DET&&DET.pages)||[];const pg=pages[detAt];const el=$('det');
  if(!pg){el.innerHTML='<div class="dh"><span class="title">Details</span></div><div class="dhint">I\'m reading it, Dave…</div>';return}
  const grid=pg.grid||[(pg.cols||[]).map(c=>c)];
  el.innerHTML=`<div class="dh"><svg width="34" height="34" viewBox="0 0 34 34"><circle cx="17" cy="17" r="16" fill="#2b2e33"/><circle cx="17" cy="17" r="12" fill="url(#lens)"/></svg><span class="title">${esc(pg.title)}</span><span class="k" style="margin-left:6px"><b class="${lv(pg.level)}">● ${esc(pg.head||'')}</b></span>
  <span class="tabs">${TABS.map((x,k)=>`<span class="k ${k===detAt?'on':''}">${x.toUpperCase()}</span>`).join('')}</span></div>
- <div class="gridw">${grid.map(r=>`<div class="gr">${r.map(detCard).join('')}</div>`).join('')}</div><div class="dhint"><b>◀ ▶</b>other pages<b>OK</b>HAL talks<b>BACK</b>return to HAL</div>`;
+ <div class="gridw">${grid.map(r=>`<div class="gr">${r.map(detCard).join('')}</div>`).join('')}</div><div class="dhint"><b>◀ ▶</b>other pages<b>OK</b>${fanCard()?'fan mode':'HAL talks'}<b>BACK</b>return to HAL</div>`;
+ if(animFor===detAt)return;animFor=detAt;
  el.querySelectorAll('.c').forEach((c,i)=>{c.animate([{opacity:0,transform:'translateY(14px)'},{opacity:1,transform:'none'}],{duration:450,delay:i*60,easing:'cubic-bezier(.2,.8,.2,1)',fill:'both'})})}
-function openDet(){detOn=true;$('main').classList.add('off');$('det').classList.add('on');drawDet();if(!DET)pollSlowOnce()}
+function openDet(){animFor=-1;detOn=true;$('main').classList.add('off');$('det').classList.add('on');drawDet();if(!DET)pollSlowOnce()}
 function closeDet(){detOn=false;$('main').classList.remove('off');$('det').classList.remove('on')}
 async function pollDet(){if(detOn&&!document.hidden)await pollSlowOnce();setTimeout(pollDet,10000)}
 async function pollSlowOnce(){try{DET=await api('/api/tv/details');applyDet();if(detOn)drawDet()}catch(e){}}
 // the TV app hands us the remote: returns true if the page used the key
 window.halKey=function(k){if(k==='down'){if(!detOn)openDet();return true}
+ if(k==='ok')return detOn&&!!fanCard()&&(nextFanMode(),true);
  if(detOn){if(k==='back'||k==='up'){closeDet();return true}if(k==='right'){detAt=(detAt+1)%TABS.length;drawDet();return true}if(k==='left'){detAt=(detAt+TABS.length-1)%TABS.length;drawDet();return true}}
  return false};
 addEventListener('keydown',e=>{const m={ArrowDown:'down',ArrowUp:'up',ArrowLeft:'left',ArrowRight:'right',Escape:'back',Backspace:'back'}[e.key];if(m&&halKey(m))e.preventDefault()});

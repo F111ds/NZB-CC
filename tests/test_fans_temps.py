@@ -201,4 +201,79 @@ assert gd["temps"][0]["value"] == 32 and gd["temps"][0]["label"] == "Samsung SSD
 assert sm.parse_hwinfo_gadget({}) is None
 print("HWiNFO ok")
 
+
+# ---------------- fan control through LibreHardwareMonitor (a fake web server that records what HAL asks) ----------------
+import json as _json, threading as _th, urllib.parse as _up
+from http.server import BaseHTTPRequestHandler as _BH, ThreadingHTTPServer as _TS
+_lhm = {"pct": {"0": 45.0, "1": 35.0, "2": 35.0, "3": 60.0}, "sets": [], "refuse": False}
+def _tree():
+    def fan(i, name, rpm): return {"Text": name, "Value": f"{rpm} RPM", "SensorId": f"/lpc/nct6798d/0/fan/{i}", "Type": "Fan"}
+    def ctl(i, name): return {"Text": name, "Value": f"{_lhm['pct'][str(i)]:.1f} %", "SensorId": f"/lpc/nct6798d/0/control/{i}", "Type": "Control"}
+    board = {"Text": "Nuvoton NCT6798D", "Children": [
+        {"Text": "Fans", "Children": [fan(0, "CPU Fan", 980), fan(1, "Chassis Fan #1", 720), fan(2, "Chassis Fan #2", 715), fan(3, "AIO Pump", 2400), fan(4, "Fan #5", 0)]},
+        {"Text": "Controls", "Children": [ctl(0, "CPU Fan"), ctl(1, "Chassis Fan #1"), ctl(2, "Chassis Fan #2"), ctl(3, "AIO Pump"),
+                                          {"Text": "Fan #5", "Value": "0.0 %", "SensorId": "/lpc/nct6798d/0/control/4", "Type": "Control"}]}]}
+    gpu = {"Text": "NVIDIA GeForce RTX 4080", "Children": [{"Text": "Controls", "Children": [{"Text": "GPU Fan", "Value": "30.0 %", "SensorId": "/gpu-nvidia/0/control/0"}]},
+                                                          {"Text": "Fans", "Children": [{"Text": "GPU Fan", "Value": "1100 RPM", "SensorId": "/gpu-nvidia/0/fan/0"}]}]}
+    return {"Text": "Sensor", "Children": [{"Text": "HAL9000", "Children": [board, gpu]}]}
+class _LH(_BH):
+    def log_message(self, *a): pass
+    def _go(self):
+        u = _up.urlparse(self.path)
+        if u.path == "/data.json":
+            b = _json.dumps(_tree()).encode(); self.send_response(200); self.end_headers(); self.wfile.write(b); return
+        if u.path == "/Sensor" and not _lhm["refuse"]:
+            q = dict(_up.parse_qsl(u.query)); _lhm["sets"].append((q.get("id"), q.get("value")))
+            idx = q["id"].rsplit("/", 1)[-1]
+            _lhm["pct"][idx] = 50.0 if q.get("value") == "null" else float(q["value"])
+            self.send_response(200); self.end_headers(); self.wfile.write(b'{"result":"ok"}'); return
+        self.send_response(404); self.end_headers()
+    do_GET = do_POST = _go
+_srv = _TS(("127.0.0.1", 0), _LH); _th.Thread(target=_srv.serve_forever, daemon=True).start()
+fc = hs.FanControl(port=_srv.server_address[1])
+fc.refresh()
+v = fc.view()
+assert v["available"] and [f["name"] for f in v["fans"]] == ["CPU Fan", "Chassis Fan #1", "Chassis Fan #2", "AIO Pump"], v   # no GPU, no empty header
+tg = hs.fan_targets(fc.fans, "quiet")
+assert tg == {"/lpc/nct6798d/0/control/0": 40, "/lpc/nct6798d/0/control/1": 35, "/lpc/nct6798d/0/control/2": 35}, tg   # CPU floor 40, pump untouched
+assert set(hs.fan_targets(fc.fans, "max").values()) == {100}
+assert hs.fan_targets([{"name": "Fan #1", "control_id": "a"}, {"name": "Fan #2", "control_id": "b"}], "quiet") == {"a": 40, "b": 40}   # no fan called CPU: 40% for all
+r = fc.set_mode("cool")
+assert r["ok"] and fc.mode == "cool" and ("/lpc/nct6798d/0/control/0", "70") in _lhm["sets"] and not any(s[0].endswith("control/3") for s in _lhm["sets"]), (r, _lhm["sets"])
+# LibreHardwareMonitor restarted (its controls back on the BIOS curve): HAL puts the mode back
+_lhm["pct"]["1"] = 50.0; _lhm["sets"].clear()
+assert fc.watch("") == "" and ("/lpc/nct6798d/0/control/1", "70") in _lhm["sets"], _lhm["sets"]
+# something runs hot: back to Auto by itself
+_lhm["sets"].clear()
+assert fc.watch("the CPU reached 88°C") == "the CPU reached 88°C" and fc.mode == "auto" and all(s[1] == "null" for s in _lhm["sets"]) and len(_lhm["sets"]) == 4
+try:
+    fc.set_mode("turbo"); raise AssertionError("unknown mode accepted")
+except ValueError:
+    pass
+# refused: stays on Auto and says so
+_lhm["refuse"] = True
+r = fc.set_mode("max")
+assert not r["ok"] and fc.mode == "auto" and "BIOS" in r["say"], r
+_lhm["refuse"] = False
+# nothing answering
+assert not hs.FanControl(port=1).set_mode("cool")["ok"]
+# why it goes back to Auto
+s0 = dict(hs.DEFAULT_SETTINGS)
+assert hs.fan_hot_reason({"cpu": {"temp": 60}, "gpus": [{"temp": 50}], "sensors": {"temps": []}}, s0) == ""
+assert "CPU" in hs.fan_hot_reason({"cpu": {"temp": 86}}, s0) and "graphics" in hs.fan_hot_reason({"gpus": [{"temp": 81}]}, s0)
+assert "VRM" in hs.fan_hot_reason({"sensors": {"temps": [{"hw": "/lpc/x", "name": "VRM MOS", "value": 101}]}}, s0)
+# HAL: set from the phone, an event logged, the TV card shows the modes
+h3 = hs.Hal(settings=dict(hs.DEFAULT_SETTINGS), monitor=hs.DemoMonitor(), start_threads=False)
+h3.fan_ctl = fc
+out = h3.set_fans("normal", "phone")
+assert out["ok"] and out["fans"]["mode"] == "normal" and h3.events[0]["title"] == "Fans: Normal", (out, h3.events[0])
+st3 = h3.status()
+assert st3["fanctl"]["mode"] == "normal"
+card = hs.tv_fan_card(st3["vitals"], st3["fanctl"])
+assert card["modes"] == ["AUTO", "QUIET", "NORMAL", "COOL", "MAX"] and card["mode"] == "NORMAL" and card["lit"] and card["badge"] == "NORMAL", card
+assert hs.tv_fan_card(st3["vitals"], {"available": False})["badge"].endswith("SPINNING")
+fc.set_mode("auto")
+_srv.shutdown()
+print("fan control ok")
+
 print("\nALL FAN AND TEMPERATURE TESTS PASSED")

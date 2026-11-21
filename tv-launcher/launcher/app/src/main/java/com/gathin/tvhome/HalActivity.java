@@ -216,7 +216,16 @@ public class HalActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        // The animated screen has its own details pages: the arrows and Back go to it (OK still makes HAL talk).
+        // The animated screen has its own details pages: the arrows and Back go to it. OK goes to it too (on the PC
+        // page it changes the fan mode); when the page doesn't use it, OK makes HAL talk as before.
+        boolean okKey = keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
+                || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER || keyCode == KeyEvent.KEYCODE_BUTTON_A;
+        if (webOn && web != null && okKey) {
+            web.evaluateJavascript("window.halKey?halKey('ok'):false", v -> {
+                if (!"true".equals(v)) okTalk();
+            });
+            return true;
+        }
         if (webOn && web != null) {
             String k = keyCode == KeyEvent.KEYCODE_DPAD_DOWN ? "down" : keyCode == KeyEvent.KEYCODE_DPAD_UP ? "up"
                     : keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? "left" : keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ? "right"
@@ -247,8 +256,16 @@ public class HalActivity extends Activity {
             openDetails();
             return true;
         }
-        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
-                || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER || keyCode == KeyEvent.KEYCODE_BUTTON_A) {
+        if (okKey) {
+            okTalk();
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    /** OK: HAL talks (OK again after he has said a line moves on to his next one). */
+    private void okTalk() {
+        {
             if (speaking && tts != null) tts.stop();
             speaking = false;
             // OK again after he has said this line: on to his next one, so each press brings something new.
@@ -258,9 +275,7 @@ public class HalActivity extends Activity {
                 if (l != null) setLine(l.optString("say", ""), l.optString("text", ""));
             }
             say(currentSay.isEmpty() ? "__line__" : currentSay);
-            return true;
         }
-        return super.onKeyDown(keyCode, event);
     }
 
     // ---- the animated screen (from the PC) ----------------------------------------------------------
