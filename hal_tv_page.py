@@ -87,7 +87,9 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 #det .dhint b{color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:5px;padding:0 5px;margin:0 5px 0 16px}
 #main{position:absolute;inset:0;transition:opacity .35s}
 #main.off{opacity:0}
-#sweep{position:absolute;left:50%;top:50%;width:266px;height:266px;margin:-133px 0 0 -133px;pointer-events:none;will-change:transform;animation:spin 9s linear infinite;background:conic-gradient(from 0deg,rgba(255,176,122,0) 0deg,rgba(255,176,122,.08) 120deg,rgba(255,200,160,.35) 300deg,rgba(255,232,210,.95) 358deg,rgba(255,176,122,0) 360deg);border-radius:50%;-webkit-mask:radial-gradient(closest-side,transparent calc(100% - 8px),#000 calc(100% - 7px));mask:radial-gradient(closest-side,transparent calc(100% - 8px),#000 calc(100% - 7px))}@keyframes spin{to{transform:rotate(360deg)}}
+/* just one small radar sweep round HAL: the gauges, ticks and labels are hidden */
+#ticks,#r1,#r2,#r3,#l1,#l2,#l3{display:none}
+#sweep{position:absolute;left:50%;top:50%;width:214px;height:214px;margin:-107px 0 0 -107px;box-shadow:inset 0 0 0 1px rgba(255,200,180,.14);pointer-events:none;will-change:transform;animation:spin 9s linear infinite;background:conic-gradient(from 0deg,rgba(255,176,122,0) 0deg,rgba(255,176,122,.08) 120deg,rgba(255,200,160,.35) 300deg,rgba(255,232,210,.95) 358deg,rgba(255,176,122,0) 360deg);border-radius:50%;-webkit-mask:radial-gradient(closest-side,transparent calc(100% - 5px),#000 calc(100% - 4px));mask:radial-gradient(closest-side,transparent calc(100% - 5px),#000 calc(100% - 4px))}@keyframes spin{to{transform:rotate(360deg)}}
 </style></head><body><div id="stage">
 <canvas id="gl" class="full" width="1920" height="1080"></canvas>
 
