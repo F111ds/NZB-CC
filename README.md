@@ -135,11 +135,9 @@ experience on top of it, piece by piece, checking each change on the real TV.
   then, and glows brighter when selected. Press **Up** from the posters to select him; **OK** opens his monitor
   screens (his icon is no longer in the dock). When the TV is switched on, **HAL wakes up**: his eye lights in the
   dark and a red pulse spreads out before Home fades in.
-- **The look, in HAL's red style**: a still backdrop of deep red-black space with faint stars and his glow behind
-  the eye, so his words and the posters read cleanly. The posters are glossy and stand on a floor with a soft
+- **The look, in HAL's red style**: a plain black background, so HAL's eye, his words and the posters stand out. The posters are glossy and stand on a floor with a soft
   horizon line and faint reflections; the one you move to lifts and tilts toward you. The KODI tag is a solid red
-  pill, the dock a glossy capsule with a warm line under it, and the glow under the dock takes the colour of the
-  poster you're on. HAL, the posters and the dock are evenly spaced under the top line, which keeps its own look.
+  pill and the dock a glossy capsule with a warm line under it. HAL, the posters and the dock are evenly spaced under the top line, which keeps its own look.
   No embers or background animation. (While it's new, the TV reports its free memory, the home screen's memory and
   CPU, and how smoothly it draws to the PC once a minute: a summary every 10 minutes in the phone server's log, and
   `GET /api/tv/perf`.) Without anything in Recently watched, it's the Sora font on a time-of-day sky. There's a news
