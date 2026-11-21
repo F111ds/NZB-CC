@@ -199,7 +199,16 @@ final class KodiRow {
 
     /** The reflection's height for a poster this tall. */
     static int reflectionPx(int posterH) {
-        return reflections ? Math.round(posterH * 0.28f) : 0;
+        return reflections ? Math.min(reflectionCap, Math.round(posterH * 0.4f)) : 0;
+    }
+
+    /** The most room the reflections may take (the gap under the posters), in px. */
+    static int reflectionCap = Integer.MAX_VALUE;
+
+    void setReflectionCap(int px) {
+        if (px == reflectionCap) return;
+        reflectionCap = px;
+        adapter.notifyDataSetChanged();
     }
 
     /** Sizes the posters to the height the row has on screen. */
@@ -799,6 +808,14 @@ final class KodiRow {
         llp.setMargins(0, 0, dp(6), dp(10));
         card.addView(left, llp);
 
+        if (reflections) {   // NZB-CC HAL-style home: glossy posters, light catching the top corner
+            View gloss = new View(ctx);
+            GradientDrawable gd = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{0x38FFFFFF, 0x00FFFFFF, 0x00FFFFFF});
+            gd.setCornerRadius(dp(8));
+            gd.setStroke(Math.max(1, dp(0.75f)), 0x2EFFFFFF);
+            gloss.setBackground(gd);
+            card.addView(gloss, new FrameLayout.LayoutParams(-1, -1));
+        }
         View ring = new View(ctx);
         GradientDrawable rd = new GradientDrawable();
         rd.setCornerRadius(dp(8));
@@ -830,7 +847,7 @@ final class KodiRow {
             c.drawBitmap(poster, src, new android.graphics.Rect(0, 0, w, h), new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG));
             c.restore();
             android.graphics.Paint fade = new android.graphics.Paint();
-            fade.setShader(new android.graphics.LinearGradient(0, 0, 0, h, 0x4DFFFFFF, 0x00FFFFFF, android.graphics.Shader.TileMode.CLAMP));
+            fade.setShader(new android.graphics.LinearGradient(0, 0, 0, h, 0x70FFFFFF, 0x00FFFFFF, android.graphics.Shader.TileMode.CLAMP));
             fade.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN));
             c.drawRect(0, 0, w, h, fade);
             return out;

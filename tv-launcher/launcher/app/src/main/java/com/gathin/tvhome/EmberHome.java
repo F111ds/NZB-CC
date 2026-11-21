@@ -76,6 +76,66 @@ final class EmberHome {
     private String shownArt = "";
     private ValueAnimator drift;
     private boolean cinemaLayout = true;
+    /**
+     * Centred home: the art shows richly, shaded only behind the top line and on the floor, where the posters stand
+     * on a soft horizon line with a faint sheen below it (setFloor gives its height).
+     */
+    private final FloorDrawable floor = new FloorDrawable();
+
+    private final class FloorDrawable extends Drawable {
+        float floorY = -1;
+        private final android.graphics.Paint shade = new android.graphics.Paint(), sheen = new android.graphics.Paint(),
+                line = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private int madeH = -1;
+        private float madeFloor = -2;
+
+        @Override
+        public void draw(android.graphics.Canvas c) {
+            android.graphics.Rect b = getBounds();
+            int h = b.height(), w = b.width();
+            if (h <= 0) return;
+            if (madeH != h || madeFloor != floorY) {
+                madeH = h;
+                madeFloor = floorY;
+                shade.setShader(new android.graphics.LinearGradient(0, 0, 0, h,
+                        new int[]{0xC7040208, 0x40040208, 0x26040208, 0x8C040208, 0xF0030105},
+                        new float[]{0f, 0.22f, 0.45f, 0.68f, 1f}, android.graphics.Shader.TileMode.CLAMP));
+                if (floorY > 0) {
+                    sheen.setShader(new android.graphics.LinearGradient(0, floorY, 0, floorY + h * 0.3f, 0x1AFFAA8C, 0x00FFAA8C,
+                            android.graphics.Shader.TileMode.CLAMP));
+                    line.setShader(new android.graphics.LinearGradient(w * 0.1f, 0, w * 0.9f, 0,
+                            new int[]{0x00FFBEA0, 0x73FFBEA0, 0x00FFBEA0}, null, android.graphics.Shader.TileMode.CLAMP));
+                }
+            }
+            c.drawRect(b, shade);
+            if (floorY > 0) {
+                c.drawRect(0, floorY, w, h, sheen);
+                line.setStrokeWidth(dp(1));
+                c.drawLine(w * 0.1f, floorY, w * 0.9f, floorY, line);
+            }
+        }
+
+        @Override
+        public void setAlpha(int a) {
+        }
+
+        @Override
+        public void setColorFilter(android.graphics.ColorFilter cf) {
+        }
+
+        @Override
+        public int getOpacity() {
+            return android.graphics.PixelFormat.TRANSLUCENT;
+        }
+    }
+
+    /** The posters' foot (root y): the floor's horizon line. */
+    void setFloor(int y) {
+        if (floor.floorY == y) return;
+        floor.floorY = y;
+        floor.invalidateSelf();
+        scrim.invalidate();
+    }
     /** Mild motion (animations on): the embers and the glow breathing, with the art's drift. */
     private final Motes motes;
     private ValueAnimator breathe;
@@ -250,9 +310,7 @@ final class EmberHome {
         cinemaLayout = on;
         info.setVisibility(on ? View.VISIBLE : View.GONE);
         if (!on) applyGlow();   // the glow from the bottom middle, under the dock, as on HAL's screen
-        if (!on) scrim.setBackground(new LayerDrawable(new Drawable[]{new ColorDrawable(0x8C000000),
-                new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{0xF2000000, 0x00000000, 0x00000000}),
-                new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xCC000000, 0x00000000, 0x00000000})}));
+        if (!on) scrim.setBackground(floor);
     }
 
     boolean shown() {

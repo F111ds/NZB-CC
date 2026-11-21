@@ -48,7 +48,14 @@ final class HalEyeDrawable extends Drawable implements Animatable, Runnable {
         glow += ((focused ? 1f : 0f) - glow) * 0.18f;
         if (rimFor != Math.round(r)) {
             rimFor = Math.round(r);
-            rim.setShader(new LinearGradient(0, cy - r, 0, cy + r, new int[]{0xFFA7ADB5, 0xFF2B2E33, 0xFF6C7178}, null, Shader.TileMode.CLAMP));
+            // a polished chrome rim: bright and dark bands round it, like a lens bezel
+            android.graphics.SweepGradient chrome = new android.graphics.SweepGradient(cx, cy,
+                    new int[]{0xFFF4F6F8, 0xFF7C828A, 0xFF2A2D32, 0xFFD8DCE0, 0xFF5C6168, 0xFF1E2024, 0xFFE9ECEF, 0xFFF4F6F8},
+                    new float[]{0f, 0.15f, 0.3f, 0.48f, 0.62f, 0.78f, 0.92f, 1f});
+            android.graphics.Matrix m = new android.graphics.Matrix();
+            m.setRotate(200, cx, cy);
+            chrome.setLocalMatrix(m);
+            rim.setShader(chrome);
             ring.setColor(0xFF0B0B0D);
         }
         // the glow round the eye: brighter with focus
@@ -57,13 +64,13 @@ final class HalEyeDrawable extends Drawable implements Animatable, Runnable {
                 null, Shader.TileMode.CLAMP));
         c.drawCircle(cx, cy, hr, halo);
         c.drawCircle(cx, cy, r, rim);
-        c.drawCircle(cx, cy, r * 0.93f, ring);
+        c.drawCircle(cx, cy, r * 0.86f, ring);
         // He watches the selection move along the posters (looking up at the row), else glances around.
         float wx = watchX;
         float[] g = Float.isNaN(wx) ? HalGaze.at(t) : new float[]{wx * 0.9f, -0.75f};
         gx += (g[0] - gx) * 0.25f;
         gy += (g[1] - gy) * 0.25f;
-        float lr = r * 0.85f;
+        float lr = r * 0.74f;
         float lx = cx + gx * lr * 0.16f, ly = cy + gy * lr * 0.12f;
         float bright = 0.85f + 0.15f * glow;
         lens.setShader(new RadialGradient(lx, ly, lr * (1f + 0.08f * glow),

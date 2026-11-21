@@ -44,7 +44,7 @@ final class BigHal {
     BigHal(Context ctx, FrameLayout root, int insertAt, Host host) {
         this.ctx = ctx;
         density = ctx.getResources().getDisplayMetrics().density;
-        eyePx = dp(76);
+        eyePx = dp(98);
         ringPx = Math.round(eyePx * 1.5f);
         view = new FrameLayout(ctx);
         view.setClipChildren(false);
@@ -77,6 +77,7 @@ final class BigHal {
             }
         };
         FrameLayout.LayoutParams rl = new FrameLayout.LayoutParams(ringPx, ringPx, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        ring.setVisibility(View.GONE);   // the polished home: just the chrome eye
         view.addView(ring, rl);
 
         eye = new View(ctx);
@@ -89,26 +90,26 @@ final class BigHal {
         // the drawable's own glow needs a little room round the eye
         int eyeBox = Math.round(eyePx / 0.76f);
         FrameLayout.LayoutParams el = new FrameLayout.LayoutParams(eyeBox, eyeBox, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-        el.topMargin = (ringPx - eyeBox) / 2;
+        el.topMargin = 0;
         view.addView(eye, el);
 
         words = new LinearLayout(ctx);
         words.setOrientation(LinearLayout.VERTICAL);
-        TextView kicker = text(9, 0xFFFF8A66, R.string.font_medium);
+        TextView kicker = text(8, 0xFFFF8A66, R.string.font_medium);
         kicker.setText("HAL 9000");
         kicker.setLetterSpacing(0.3f);
         words.addView(kicker);
-        line = text(13, 0xE6FFE6DC, R.string.font_regular);
+        line = text(14, 0xD9FFEBE4, R.string.font_regular);
         line.setMaxLines(2);
         line.setEllipsize(TextUtils.TruncateAt.END);
-        line.setMaxWidth(dp(330));
+        line.setMaxWidth(dp(380));
         LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(-2, -2);
         ll.topMargin = dp(6);
         words.addView(line, ll);
-        hint = text(9, 0xBFFFDCCD, R.string.font_regular);
+        hint = text(9.5f, 0x99FFE1D4, R.string.font_regular);
         hint.setText("OK  ›  PC, network, downloads and more");
         hint.setLetterSpacing(0.06f);
-        hint.setVisibility(View.INVISIBLE);
+
         LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-2, -2);
         hl.topMargin = dp(6);
         words.addView(hint, hl);
@@ -117,7 +118,7 @@ final class BigHal {
         eye.setOnFocusChangeListener((v, has) -> {
             HalEyeDrawable.focused = has;
             eye.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).setDuration(200).start();
-            hint.setVisibility(has ? View.VISIBLE : View.INVISIBLE);
+            hint.setTextColor(has ? 0xE6FFE1D4 : 0x99FFE1D4);
         });
         eye.setOnClickListener(v -> {
             Intent i = new Intent(ctx, HalActivity.class);
@@ -144,8 +145,10 @@ final class BigHal {
     void layout(int rootW, int y) {
         view.setY(y);
         FrameLayout.LayoutParams wl = (FrameLayout.LayoutParams) words.getLayoutParams();
-        int left = rootW / 2 + ringPx / 2 + dp(18);
-        int top = ringPx / 2 - dp(22);
+        int box = Math.round(eyePx / 0.76f);
+        int left = rootW / 2 + eyePx / 2 + dp(24);
+        words.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        int top = box / 2 - words.getMeasuredHeight() / 2;
         if (wl.leftMargin != left || wl.topMargin != top) {
             wl.leftMargin = left;
             wl.topMargin = top;
@@ -154,7 +157,16 @@ final class BigHal {
     }
 
     int height() {
-        return ringPx;
+        return Math.round(eyePx / 0.76f);
+    }
+
+    /** The eye as it shows (its rim), without the room for its glow. */
+    int visibleHeight() {
+        return eyePx;
+    }
+
+    int glowMargin() {
+        return (height() - eyePx) / 2;
     }
 
     void setShown(boolean on) {
@@ -167,7 +179,18 @@ final class BigHal {
 
     /** HAL's latest line (greeting and quote from the PC); "" when the PC doesn't answer. */
     void setLine(String text) {
-        line.setText(text == null || text.isEmpty() ? "I can't reach the PC right now." : text);
+        if (text == null || text.isEmpty()) {
+            line.setText("I can't reach the PC right now.");
+            return;
+        }
+        // the greeting in bold white, then the rest
+        int cut = text.indexOf('.');
+        android.text.SpannableString s = new android.text.SpannableString(text);
+        if (cut > 0 && cut < text.length() - 1) {
+            s.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), 0, cut + 1, 0);
+            s.setSpan(new android.text.style.ForegroundColorSpan(Color.WHITE), 0, cut + 1, 0);
+        }
+        line.setText(s);
     }
 
     /** The ring turns slowly (one turn in 9 seconds) while Home is on screen with animations on. */

@@ -698,6 +698,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             AppAdapter.halEyeLive = true;
             if (!cinemaLayout) {
                 AppAdapter.halInDock = false;
+                DockDecoration.polish = true;
                 bigHal = new BigHal(this, root, root.indexOfChild(findViewById(R.id.glass)), this);
                 ember.halLine = bigHal::setLine;
                 bigHal.setLine("");
@@ -3366,11 +3367,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             }
         }
         if (bigHal != null) {
-            // HAL's big eye under the top line; the posters go below him.
             bigHal.setShown(kodi);
             if (kodi) {
-                bigHal.layout(root.getWidth(), top + (int) (4 * density));
-                top += (int) (4 * density) + bigHal.height();
+                layoutUnderHal(top, dockTop);
+                return;
             }
         }
         int tickerH = news ? (int) (30 * density) : 0;
@@ -3433,6 +3433,74 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             kodiBlock.setVisibility(View.VISIBLE);
             ViewGroup bar = findViewById(R.id.topButtons);
             for (int i = 0; i < bar.getChildCount(); i++) bar.getChildAt(i).setNextFocusDownId(bigHal != null ? bigHal.eye.getId() : R.id.kodiRow);
+        }
+    }
+
+    private boolean halHeader;
+
+    /**
+     * NZB-CC HAL-style home: HAL's eye, the posters (with their heading) and the dock evenly spaced from the top line
+     * down: the same gap above the eye, between the eye and "Recently watched", and between the posters and the
+     * dock (their reflections lie in that last gap, on the floor).
+     */
+    private void layoutUnderHal(int top, int dockTop) {
+        if (newsTicker != null) newsTicker.setVisibility(View.GONE);
+        int w = root.getWidth();
+        ViewGroup head = (ViewGroup) ((ViewGroup) kodiBlock).getChildAt(0);
+        if (!halHeader) {
+            halHeader = true;
+            // a solid, glossy red KODI pill and a bold heading
+            TextView chip = (TextView) head.getChildAt(0);
+            GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xFFE2261A, 0xFFA50F08});
+            g.setCornerRadius(12 * density);
+            g.setStroke(Math.max(1, (int) density), 0x59FF9678);
+            chip.setBackground(g);
+            chip.setTextSize(11);
+            chip.setTypeface(UiFont.get(this, R.string.font_medium), android.graphics.Typeface.BOLD);
+            chip.setPadding((int) (9 * density), (int) (3 * density), (int) (9 * density), (int) (3 * density));
+            chip.setElevation(4 * density);
+            TextView title = (TextView) head.getChildAt(1);
+            title.setTextSize(17);
+            title.setTypeface(UiFont.get(this, R.string.font_medium), android.graphics.Typeface.BOLD);
+            LinearLayout.LayoutParams tl = (LinearLayout.LayoutParams) title.getLayoutParams();
+            tl.setMarginStart((int) (10 * density));
+            title.setLayoutParams(tl);
+            kodiFocusTitle.setTextSize(11);
+            kodiFocusTitle.setTextColor(0xBFFFEBE4);
+            kodiFocusTitle.setTypeface(UiFont.get(this, R.string.font_regular));
+            kodiFocusMeta.setTextColor(0xBFFFEBE4);
+        }
+        int headH = head.getHeight() > 0 ? head.getHeight() : (int) (26 * density);
+        int dockVisTop = dockTop - (int) (2 * density);   // where the dock's glass starts
+        int halH = bigHal.visibleHeight();
+        int posterH = (int) (138 * density);
+        int minGap = (int) (14 * density);
+        int g = (dockVisTop - top - halH - headH - (int) (8 * density) - posterH) / 3;
+        if (g < minGap) {   // a short screen: smaller posters before the gaps get too tight
+            posterH = Math.max((int) (80 * density), posterH - (minGap - g) * 3);
+            g = Math.max(minGap, (dockVisTop - top - halH - headH - (int) (8 * density) - posterH) / 3);
+        }
+        kodiRow.setReflectionCap(Math.max(0, g - (int) (8 * density)));   // reflections stay clear of the dock
+        kodiRow.setPosterHeight(posterH);
+        bigHal.layout(w, top + g - bigHal.glowMargin());
+        int headTop = top + g + halH + g;
+        kodiBaseY = headTop - kodiBlock.getPaddingTop();
+        int cards = Math.min(5, Math.max(1, kodiRow.count()));
+        int cell = posterH * 2 / 3 + (int) (12 * density);
+        int inner = w - (int) (2 * 46 * density) - kodiBlock.getPaddingLeft() - kodiBlock.getPaddingRight();
+        int headStart = Math.max(0, (inner - cards * cell) / 2 + (int) (6 * density));
+        LinearLayout.LayoutParams hlp = (LinearLayout.LayoutParams) head.getLayoutParams();
+        if (hlp.getMarginStart() != headStart) {
+            hlp.setMarginStart(headStart);
+            head.setLayoutParams(hlp);
+        }
+        kodiBlock.setY(kodiBaseY);
+        kodiCount.setVisibility(View.GONE);
+        if (ember != null) ember.setFloor(headTop + headH + (int) (8 * density) + posterH);
+        if (kodiBlock.getVisibility() != View.VISIBLE) {
+            kodiBlock.setVisibility(View.VISIBLE);
+            ViewGroup bar = findViewById(R.id.topButtons);
+            for (int i = 0; i < bar.getChildCount(); i++) bar.getChildAt(i).setNextFocusDownId(bigHal.eye.getId());
         }
     }
 

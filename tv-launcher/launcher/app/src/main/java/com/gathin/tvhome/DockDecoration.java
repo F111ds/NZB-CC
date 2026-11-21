@@ -141,12 +141,31 @@ public class DockDecoration extends RecyclerView.ItemDecoration {
         rect.bottom += namesRoom;
         if (lightGlass && (rect.top != shaderTop || rect.bottom != shaderBottom)) {
             // The pills' glass (pill_bg: white, 18% fading to 8%), a little fainter over this much larger area.
-            band.setShader(new LinearGradient(0, rect.top, 0, rect.bottom, 0x99461610, 0x801C0808,   // NZB-CC: HAL's dark-red glass
+            band.setShader(new LinearGradient(0, rect.top, 0, rect.bottom, 0xBF3C1816, 0xD90E0608,   // NZB-CC: HAL's dark-red glass
                     Shader.TileMode.CLAMP));
             shaderTop = rect.top;
             shaderBottom = rect.bottom;
         }
         c.drawRoundRect(rect, radius, radius, band);
         c.drawRoundRect(rect, radius, radius, edge);
+        if (lightGlass && polish) {
+            // NZB-CC: a glossy capsule: light along its top edge and a warm glow line under it.
+            if (shine.getShader() == null || shineFor != rect.width()) {
+                shineFor = rect.width();
+                shine.setShader(new LinearGradient(rect.left, 0, rect.right, 0, new int[]{0x00FFFFFF, 0x40FFFFFF, 0x00FFFFFF},
+                        null, Shader.TileMode.CLAMP));
+                under.setShader(new LinearGradient(rect.left, 0, rect.right, 0, new int[]{0x00FF6A3A, 0xFFFF6A3A, 0x00FF6A3A},
+                        new float[]{0.12f, 0.5f, 0.88f}, Shader.TileMode.CLAMP));
+            }
+            shine.setStrokeWidth(density * 1.5f);
+            c.drawLine(rect.left + radius, rect.top + density * 1.5f, rect.right - radius, rect.top + density * 1.5f, shine);
+            under.setStrokeWidth(density * 2.5f);
+            c.drawLine(rect.left + radius * 0.6f, rect.bottom, rect.right - radius * 0.6f, rect.bottom, under);
+        }
     }
+
+    /** NZB-CC HAL-style home: the glossy capsule (a light top edge and a warm line under the band). */
+    static boolean polish;
+    private final Paint shine = new Paint(Paint.ANTI_ALIAS_FLAG), under = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private float shineFor = -1;
 }
