@@ -31,7 +31,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 .drv i{display:block;height:5px;border-radius:3px;background:rgba(255,255,255,.12);margin-top:3px;overflow:hidden}.drv i b{display:block;height:100%;width:0;border-radius:3px;background:linear-gradient(90deg,#ff9a3c,#ff4b2b)}
 .drv i b.w{background:linear-gradient(90deg,#ffc46b,#ffb020)}
 .mon{display:flex;align-items:center;gap:9px;font-size:12.5px;padding:4.5px 0}
-.mon .d{width:7px;height:7px;border-radius:50%;background:#7cf5b5;flex:none}.mon .d.down{background:#ff6a4d}
+.mon .d{width:7px;height:7px;border-radius:50%;background:#7cf5b5;flex:none;box-shadow:0 0 6px rgba(124,245,181,.6)}.mon .d.down{background:#ff6a4d;box-shadow:0 0 6px rgba(255,106,77,.6)}
 .mon span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mon svg{width:84px;height:16px;flex:none}.mon em{font:500 11.5px "JetBrains Mono",monospace;font-style:normal;width:44px;text-align:right;flex:none}
 .quote{position:absolute;left:332px;width:296px;top:310px;text-align:center;font-size:15px;font-weight:600;font-style:italic;line-height:1.3;color:#ffe9e0;min-height:42px;max-height:60px;overflow:hidden}
 .quote.long{font-size:13px}.quote.vlong{font-size:11.5px}
@@ -299,7 +299,7 @@ function render(t){
  {const lo=Math.min(...src),hi=Math.max(...src)+1;let np=[];for(let i=0;i<src.length;i++){const x=i*100/(src.length-1),y=40-((src[i]-lo)/(hi-lo))*14-2*nz((i+t*5)*.3,8)-8;np.push(`${x.toFixed(2)} ${y.toFixed(2)}`)}$('ntl').setAttribute('d','M'+np.join(' L'));$('ntf').setAttribute('d','M'+np.join(' L')+' V44 H0Z')}
  // Kuma: a live line and a heartbeat per monitor
  mons.forEach((m,k)=>{const el=$('m'+k);if(!el)return;let p='';for(let i=0;i<25;i++){const v=8+(m.status==='up'?4.5:1)*nz((i+t*3)*.35,k*2.1);p+=`${(i*3.5).toFixed(1)},${v.toFixed(2)} `}el.setAttribute('points',p);
-  const d=$('md'+k),ph=(t*1.1+k*.37)%1,b=ph<.08?1:ph<.16?.4:ph<.22?.8:0,c=m.status==='up'?'124,245,181':'255,106,77';d.style.boxShadow=`0 0 ${6+14*b}px rgba(${c},${.5+.5*b})`;d.style.transform=`scale(${1+.5*b})`});
+});
  // DNS bars grow in
  if(dnsBars.length){if($('dns').children.length!==dnsBars.length){const mx=Math.max(...dnsBars.map(x=>x[0]),1);$('dns').innerHTML=dnsBars.map(([v,b])=>`<i style="flex:1;height:${Math.max(3,v*100/mx)}%;border-radius:2px 2px 0 0;transform-origin:bottom;background:linear-gradient(#ffc46b ${100-(v?b*100/v:0)}%, #ff3a1e ${100-(v?b*100/v:0)}%)"></i>`).join('')}
   [...$('dns').children].forEach((el,i)=>el.style.transform=`scaleY(${ease((t-.8-i*.04)/.8)})`)}
