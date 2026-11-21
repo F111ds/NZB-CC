@@ -224,7 +224,7 @@ $('ticks').innerHTML=tk;const tickEls=[...$('ticks').children];
 $('wave').innerHTML='<i></i>'.repeat(34);const waveEls=[...$('wave').children];
 const cards=[...document.querySelectorAll('#main .card')];
 // WebGL smoke + god rays
-const gl=$('gl').getContext('webgl',{preserveDrawingBuffer:false,antialias:false});let glOK=false,ut,W=$('gl').width,H=$('gl').height;
+const gl=null;let glOK=false,ut,W=$('gl').width,H=$('gl').height;
 if(gl){try{
  const vs='attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}';
  const fs=`precision highp float;uniform vec2 r;uniform float t;
@@ -241,7 +241,8 @@ void main(){vec2 uv=gl_FragCoord.xy/r;vec2 p=uv*vec2(r.x/r.y,1.)*2.2;vec2 q=vec2
   const pl=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,2,gl.FLOAT,false,0,0);
   // the smoke is soft, so it is drawn at half size to spare the TV
   $('gl').width=960;$('gl').height=540;W=960;H=540;gl.viewport(0,0,W,H);gl.uniform2f(gl.getUniformLocation(pr,'r'),W,H);ut=gl.getUniformLocation(pr,'t');glOK=true}}catch(e){}}
-if(!glOK)$('gl').style.background='radial-gradient(ellipse 520px 380px at 50% 28%,rgba(255,60,20,.5),transparent 70%),#0a0405';
+$('gl').style.background='radial-gradient(ellipse 420px 300px at 50% 28%,rgba(255,60,20,.42),rgba(120,16,8,.18) 55%,transparent 75%),radial-gradient(ellipse 900px 500px at 50% 60%,#1a0706,#0a0405 70%)';
+$('gl').style.opacity=0;
 const DOT=document.createElement('canvas');DOT.width=DOT.height=32;{const d=DOT.getContext('2d'),g=d.createRadialGradient(16,16,0,16,16,16);g.addColorStop(0,'rgba(255,215,160,1)');g.addColorStop(1,'rgba(255,90,30,0)');d.fillStyle=g;d.fillRect(0,0,32,32)}
 const sp=$('sp').getContext('2d'),fx=$('fx').getContext('2d'),FW=1920,FH=1080,EX=960,EY=298;
 let seed=7;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
@@ -259,7 +260,7 @@ function gaze(t){
 function pathD(vals,w,h,lo,hi,step){const pts=vals.map((v,i)=>`${(i*w/Math.max(1,vals.length-1)).toFixed(1)} ${(h-(v-lo)/Math.max(1e-6,hi-lo)*h*.8-h*.1).toFixed(1)}`);return'M'+pts.join(' L')}
 function render(t){
  const boot=ease(t/2.6);
- if(glOK&&t<3.2){gl.uniform1f(ut,t+40.);gl.drawArrays(gl.TRIANGLE_STRIP,0,4)}
+ $('gl').style.opacity=Math.min(1,t/1.2);
  // sparks
  sp.setTransform(1,0,0,1,0,0);sp.clearRect(0,0,960,540);sp.setTransform(.5,0,0,.5,0,0);
  for(const s of sparks){const y=((s.y-t*s.v)%FH+FH)%FH,x=s.x+Math.sin(t*.8+s.ph)*s.dr,a=(.35+.35*Math.sin(t*3+s.ph))*Math.min(1,y/FH*2)*boot;
