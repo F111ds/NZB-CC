@@ -75,6 +75,10 @@ final class EmberHome {
     private KodiRow.Item item;
     private String shownArt = "";
     private ValueAnimator drift;
+    private boolean cinemaLayout = true;
+    /** Mild motion (animations on): the embers and the glow breathing, with the art's drift. */
+    private final Motes motes;
+    private ValueAnimator breathe;
 
     // HAL's pill in the top bar
     private final HomeExtras extras;
@@ -125,6 +129,9 @@ final class EmberHome {
         scrim.setBackground(new LayerDrawable(new Drawable[]{fromLeft, fromFoot, fromTop}));
         layer.addView(scrim, new FrameLayout.LayoutParams(0, 0, Gravity.TOP | Gravity.END));
         layer.addView(glow, new FrameLayout.LayoutParams(-1, -1));   // HAL's red glow over the art, from the bottom left
+        motes = new Motes(ctx);
+        motes.setVisibility(View.GONE);
+        layer.addView(motes, new FrameLayout.LayoutParams(-1, -1));   // embers drifting up behind the row
 
         info = new LinearLayout(ctx);
         info.setOrientation(LinearLayout.VERTICAL);
@@ -239,14 +246,31 @@ final class EmberHome {
 
     // ---- what's shown -------------------------------------------------------------------------
 
+    void setCinemaLayout(boolean on) {
+        cinemaLayout = on;
+        info.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (!on) {
+            // The glow from the bottom middle, under the dock, as on HAL's screen.
+            GradientDrawable g = new GradientDrawable();
+            g.setGradientType(GradientDrawable.RADIAL_GRADIENT);
+            g.setColors(new int[]{0x4DFF3C14, 0x00FF3C14});
+            g.setGradientRadius(dp(560));
+            g.setGradientCenter(0.5f, 1.08f);
+            glow.setBackground(g);
+        }
+        if (!on) scrim.setBackground(new LayerDrawable(new Drawable[]{new ColorDrawable(0x8C000000),
+                new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{0xF2000000, 0x00000000, 0x00000000}),
+                new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xCC000000, 0x00000000, 0x00000000})}));
+    }
+
     boolean shown() {
         return layer.getVisibility() == View.VISIBLE;
     }
 
     void setShown(boolean on) {
         layer.setVisibility(on ? View.VISIBLE : View.GONE);
-        if (!on && drift != null) drift.cancel();
-        if (on && drift != null && !drift.isStarted()) drift.start();
+        if (on) resumeMotion();
+        else pause();
     }
 
     /** The item the big picture is about (the poster with focus, or the one watched last). */
@@ -325,7 +349,7 @@ final class EmberHome {
 
     /** Places the art and the text: the text's foot sits at bottomY (just above the bottom row's label). */
     void layout(int rootW, int rootH, int topY, int bottomY, boolean motion) {
-        int artW = Math.round(rootW * 0.68f), artH = Math.round(rootH * 0.76f);
+        int artW = cinemaLayout ? Math.round(rootW * 0.68f) : rootW, artH = cinemaLayout ? Math.round(rootH * 0.76f) : rootH;
         for (View v : new View[]{artBox, scrim}) {
             FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) v.getLayoutParams();
             if (lp.width != artW || lp.height != artH) {
@@ -340,6 +364,20 @@ final class EmberHome {
         int y = Math.max(0, Math.min(topY, bottomY - info.getMeasuredHeight()));
         info.setY(y);
         // Mild motion: the art drifts slowly (a slow push in and back), only where animations are on.
+        if (motion && breathe == null && !cinemaLayout) {
+            // HAL's glow breathes (about every 6 seconds) and a few embers drift up behind the posters.
+            breathe = ValueAnimator.ofFloat(0.72f, 1f);
+            breathe.setDuration(3000L);
+            breathe.setRepeatMode(ValueAnimator.REVERSE);
+            breathe.setRepeatCount(ValueAnimator.INFINITE);
+            breathe.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+            breathe.addUpdateListener(a -> glow.setAlpha((float) a.getAnimatedValue()));
+            motes.setVisibility(View.VISIBLE);
+            if (shown()) {
+                breathe.start();
+                motes.run(true);
+            }
+        }
         if (motion && drift == null) {
             drift = ValueAnimator.ofFloat(0f, 1f);
             drift.setDuration(26_000L);
@@ -360,13 +398,18 @@ final class EmberHome {
 
     void pause() {
         if (drift != null) drift.pause();
+        if (breathe != null) breathe.pause();
+        motes.run(false);
     }
 
     void resumeMotion() {
-        if (drift != null && shown()) {
-            if (drift.isPaused()) drift.resume();
-            else if (!drift.isStarted()) drift.start();
+        if (!shown()) return;
+        for (ValueAnimator a : new ValueAnimator[]{drift, breathe}) {
+            if (a == null) continue;
+            if (a.isPaused()) a.resume();
+            else if (!a.isStarted()) a.start();
         }
+        if (breathe != null) motes.run(true);
     }
 
     boolean focusButtons() {
@@ -479,9 +522,74 @@ final class EmberHome {
         }
     }
 
+    /** A handful of soft embers rising slowly with a little sway, redrawn about 30 times a second. */
+    private final class Motes extends View {
+        private static final int COUNT = 16;
+        private final float[] x = new float[COUNT], speed = new float[COUNT], offset = new float[COUNT],
+                size = new float[COUNT], sway = new float[COUNT], phase = new float[COUNT];
+        private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+        private final android.graphics.RectF dst = new android.graphics.RectF();
+        private Bitmap dot;
+        private boolean running;
+        private final long start = android.os.SystemClock.uptimeMillis();
+
+        Motes(Context c) {
+            super(c);
+            setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+            java.util.Random r = new java.util.Random(9000);
+            for (int i = 0; i < COUNT; i++) {
+                x[i] = r.nextFloat();
+                speed[i] = 0.025f + r.nextFloat() * 0.03f;   // a trip up the screen takes 20 to 40 seconds
+                offset[i] = r.nextFloat();
+                size[i] = dp(5 + r.nextFloat() * 9);
+                sway[i] = dp(10 + r.nextFloat() * 20);
+                phase[i] = r.nextFloat() * 6.28f;
+            }
+        }
+
+        void run(boolean on) {
+            if (running == on) return;
+            running = on;
+            if (on) postInvalidateOnAnimation();
+        }
+
+        private Bitmap dot() {
+            if (dot == null) {
+                int n = 64;
+                dot = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888);
+                android.graphics.Canvas c = new android.graphics.Canvas(dot);
+                android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+                p.setShader(new android.graphics.RadialGradient(n / 2f, n / 2f, n / 2f,
+                        new int[]{0xFFFFDCAA, 0x99FF7832, 0x00FF3C14}, new float[]{0f, 0.35f, 1f},
+                        android.graphics.Shader.TileMode.CLAMP));
+                c.drawCircle(n / 2f, n / 2f, n / 2f, p);
+            }
+            return dot;
+        }
+
+        @Override
+        protected void onDraw(android.graphics.Canvas c) {
+            int w = getWidth(), h = getHeight();
+            if (w == 0 || h == 0) return;
+            float t = (android.os.SystemClock.uptimeMillis() - start) / 1000f;
+            Bitmap b = dot();
+            for (int i = 0; i < COUNT; i++) {
+                float p = (offset[i] + t * speed[i]) % 1f;
+                float cy = h + dp(20) - p * (h + dp(60));
+                float cx = x[i] * w + (float) Math.sin(t * 0.6f + phase[i]) * sway[i];
+                paint.setAlpha(Math.round(200 * (float) Math.sin(p * Math.PI)));
+                dst.set(cx - size[i], cy - size[i], cx + size[i], cy + size[i]);
+                c.drawBitmap(b, null, dst, paint);
+            }
+            if (running) postInvalidateDelayed(33);
+        }
+    }
+
     void shutdown() {
         io.shutdownNow();
         if (drift != null) drift.cancel();
+        if (breathe != null) breathe.cancel();
+        motes.run(false);
     }
 
     // ---- building blocks ----------------------------------------------------------------------

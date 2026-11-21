@@ -217,6 +217,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     /** NZB-CC Cinema home (config.xml ember_home): the Kodi item's big picture, posters and apps in one row. */
     private EmberHome ember;
     private boolean cinemaHeader;
+    private boolean cinemaLayout;
+
+    private boolean cinemaOn() {
+        return cinemaLayout && ember != null && ember.shown();
+    }
     private TextView kodiCount, kodiFocusTitle, kodiFocusMeta;
     private TextView raceKicker, raceHeadline, raceSessions;
     /** game_day: each team's next game from an add-on, rotating in the race panel; null when the key is off. */
@@ -639,8 +644,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (getResources().getBoolean(R.bool.ember_home) && AppAdapter.compactDock && dockRow && kodiRow.enabled()) {
             ember = new EmberHome(this, root, root.indexOfChild(findViewById(R.id.heroScrim)) + 1, kodiRow, extras,
                     handler, this);
-            KodiRow.cinema = true;
-            ember.addHalPill(findViewById(R.id.topButtons), R.style.TopButton);
+            cinemaLayout = getResources().getBoolean(R.bool.ember_cinema_layout);
+            ember.setCinemaLayout(cinemaLayout);
+            KodiRow.cinema = cinemaLayout;
+            // The top bar stays as it was (no HAL pill there).
         }
         // The rotation runs on the clock that never jumps: setting the TV's time must not stall or stretch a turn.
         rotationStart = SystemClock.elapsedRealtime();
@@ -774,7 +781,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
                 // NZB-CC: the compact row in the middle of the screen; once it is wider than the screen it
                 // scrolls sideways from the usual 10dp sides.
                 int cells = adapter.appCount() + (adapter.isLibraryAt(adapter.appCount()) ? 1 : 0);
-                boolean cinemaRow = ember != null && kodiRowShown();
+                boolean cinemaRow = cinemaLayout && ember != null && kodiRowShown();
                 float wantScale = extras.dockTileScale;
                 int cinemaLeft = 0, cinemaRight = (int) (10 * density);
                 if (cinemaRow && cells > 0) {
@@ -2067,7 +2074,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     // ---- top shelf -------------------------------------------------------------------------------
 
     private void showHero(int position, float dockTopInRoot) {
-        if (ember != null && ember.shown()) {   // Cinema home: no app name over the row; the icons speak for themselves
+        if (cinemaOn()) {   // Cinema home: no app name over the row; the icons speak for themselves
             hero.animate().cancel();
             hero.setAlpha(0f);
             return;
@@ -2609,7 +2616,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
                 }
                 return true;
             }
-            if (!forward && position == 0 && ember != null && ember.shown() && kodiRow.focus()) {
+            if (!forward && position == 0 && cinemaOn() && kodiRow.focus()) {
                 grid.playSoundEffect(SoundEffectConstants.NAVIGATION_LEFT);   // Cinema home: the posters left of the apps
                 return true;
             }
@@ -3197,7 +3204,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     /** Up from the dock: onto the Kodi row when it shows (true), else the top bar takes it (false). */
     private boolean upToKodiRow() {
-        if (ember != null && ember.shown()) return false;   // Cinema home: the row is beside the apps, Up goes to the top bar
+        if (cinemaOn()) return false;   // Cinema home: the row is beside the apps, Up goes to the top bar
         if (!kodiRowShown() || !kodiRow.focus()) return false;
         grid.playSoundEffect(SoundEffectConstants.NAVIGATION_UP);
         return true;
@@ -3216,11 +3223,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         boolean news = newsTicker != null && newsFeed != null && newsFeed.hasHeadlines() && dockRow;
         if (!kodi) kodiBlock.setVisibility(View.GONE);
         if (ember != null) {
-            if (kodi) {
+            if (kodi && cinemaLayout) {
                 layoutCinema();
                 return;
             }
-            ember.setShown(false);
+            if (kodi) {
+                if (!ember.shown()) {
+                    ember.setShown(true);
+                    ember.show(kodiRow.current());
+                }
+                ember.layout(root.getWidth(), root.getHeight(), 0, root.getHeight(), animations && !reducedMotion);
+            } else {
+                ember.setShown(false);
+            }
         }
         if (newsTicker != null && !news) newsTicker.setVisibility(View.GONE);
         if (!kodi && !news) return;
@@ -3250,7 +3265,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         int shown = 0;
         if (kodi) {
             int room = bottom - top - tickerH - shelfExtra - (blocks + 1) * minGap;
-            shown = Math.min(room, (int) (205 * density));
+            shown = Math.min(room, (int) (170 * density));   // NZB-CC: a little smaller than the 205dp before
             kodiRow.setPosterHeight(shown);
         }
         int kodiH = kodi ? shown + shelfExtra : 0;
@@ -3431,7 +3446,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     @Override
     public boolean onKodiRowRightEnd() {
-        if (ember == null || !ember.shown()) return false;
+        if (!cinemaOn()) return false;
         focusTile(0);
         grid.playSoundEffect(SoundEffectConstants.NAVIGATION_RIGHT);
         return true;
@@ -3449,7 +3464,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     @Override
     public void onKodiRowDown() {
-        if (ember != null && ember.shown()) return;   // Cinema home: nothing under the row
+        if (cinemaOn()) return;   // Cinema home: nothing under the row
         int pos = singleRow ? Math.max(0, lastFocused) : lastFocused >= 0 && lastFocused < COLUMNS ? lastFocused : 0;
         focusTile(Math.max(0, Math.min(pos, adapter.appCount() - 1)));
         grid.playSoundEffect(SoundEffectConstants.NAVIGATION_DOWN);
@@ -3457,7 +3472,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     @Override
     public void onKodiRowUp() {
-        if (ember != null && ember.focusButtons()) return;
+        if (cinemaOn() && ember.focusButtons()) return;
         firstTopButton().requestFocus();
     }
 
