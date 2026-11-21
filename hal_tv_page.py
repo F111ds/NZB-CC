@@ -33,7 +33,8 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 .mon{display:flex;align-items:center;gap:9px;font-size:12.5px;padding:4.5px 0}
 .mon .d{width:7px;height:7px;border-radius:50%;background:#7cf5b5;flex:none}.mon .d.down{background:#ff6a4d}
 .mon span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mon svg{width:84px;height:16px;flex:none}.mon em{font:500 11.5px "JetBrains Mono",monospace;font-style:normal;width:44px;text-align:right;flex:none}
-.quote{position:absolute;left:300px;width:360px;top:314px;text-align:center;font-size:15px;font-weight:600;font-style:italic;line-height:1.35;color:#ffe9e0;min-height:42px}
+.quote{position:absolute;left:332px;width:296px;top:310px;text-align:center;font-size:15px;font-weight:600;font-style:italic;line-height:1.3;color:#ffe9e0;min-height:42px;max-height:60px;overflow:hidden}
+.quote.long{font-size:13px}.quote.vlong{font-size:11.5px}
 .caret{display:inline-block;width:2px;height:1em;background:#ffb59a;vertical-align:-2px;margin-left:2px}
 .wave{position:absolute;left:390px;width:180px;top:360px;height:22px;display:flex;align-items:center;gap:3px;justify-content:center}
 .wave i{width:3px;height:3px;border-radius:2px;background:linear-gradient(#ffb347,#ff3a1e);box-shadow:0 0 6px rgba(255,90,40,.8)}
@@ -112,8 +113,6 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
  </g>
  <circle cx="150" cy="150" r="88" fill="url(#rim)"/><circle cx="150" cy="150" r="82" fill="#0b0b0d"/>
  <g clip-path="url(#lensclip)"><g id="iris"><circle cx="150" cy="150" r="80" fill="url(#lens)"/><circle id="core" cx="150" cy="150" r="40" fill="url(#coreg)" style="mix-blend-mode:screen"/></g></g>
- <g fill="none" style="mix-blend-mode:screen"><circle id="le1" cx="150" cy="150" r="62" stroke="rgba(255,200,170,.16)" stroke-width="1.2" stroke-dasharray="40 18 6 18"/><circle id="le2" cx="150" cy="150" r="50" stroke="rgba(255,160,120,.14)" stroke-width="1" stroke-dasharray="70 30"/>
- <circle id="le3" cx="150" cy="150" r="71" stroke="rgba(120,220,255,.12)" stroke-width="1.4" stroke-dasharray="3 9"/><circle cx="150" cy="150" r="85" stroke="rgba(255,60,40,.25)" stroke-width="1"/><circle cx="151.2" cy="149" r="85" stroke="rgba(80,200,255,.18)" stroke-width="1"/></g>
  <ellipse cx="128" cy="112" rx="34" ry="16" fill="rgba(255,255,255,.16)" transform="rotate(-28 128 112)"/><circle cx="182" cy="186" r="5" fill="rgba(255,255,255,.12)"/>
  <g font-family="JetBrains Mono,monospace" font-size="9.5" font-weight="700" fill="#ffe2d6"><text id="l1" x="142" y="26" text-anchor="end"></text><text id="l2" x="142" y="38" text-anchor="end" fill="#ffb59a"></text><text id="l3" x="142" y="50" text-anchor="end" fill="#9ff5d0"></text></g>
 </svg>
@@ -281,11 +280,10 @@ function render(t){
  $('cpu').textContent=B?Math.max(0,Math.round(cpu*e)):'—';$('ping').textContent=B&&B.ping!=null?Math.max(1,Math.round(B.ping*e)):'—';
  const br=.75+.25*Math.sin(t*1.6);$('core').setAttribute('r',34+8*br);$('core').setAttribute('opacity',.55+.4*br);
  $('sweep').setAttribute('transform',`rotate(${(t*40%360).toFixed(1)} 150 150)`);
- $('le1').setAttribute('transform',`rotate(${(t*14%360).toFixed(1)} 150 150)`);$('le2').setAttribute('transform',`rotate(${(-t*9%360).toFixed(1)} 150 150)`);$('le3').setAttribute('transform',`rotate(${(t*30%360).toFixed(1)} 150 150)`);
  // speech
  speakSelf(t);
  const txt=String(say.text||''),shown=t<3.6?0:(say.frac>=0?Math.round(txt.length*Math.min(1,say.frac<0?1:say.frac)):txt.length);
- $('quote').innerHTML=t<3.6||!txt?'':'“'+esc(txt.slice(0,shown))+(shown<txt.length?'<span class="caret"></span>':'”');
+ $('quote').className='quote'+(txt.length>110?' vlong':txt.length>70?' long':'');$('quote').innerHTML=t<3.6||!txt?'':'“'+esc(txt.slice(0,shown))+(shown<txt.length?'<span class="caret"></span>':'”');
  const speaking=say.speaking&&t>=3.6;
  waveEls.forEach((el,i)=>{const v=Math.abs(nz(t*7+i*.45,i));el.style.height=(3+(speaking?20:2)*v).toFixed(1)+'px'});
  if(speaking)$('core').setAttribute('opacity',.75+.25*Math.abs(nz(t*9,1)));
