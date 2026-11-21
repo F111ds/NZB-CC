@@ -1350,3 +1350,36 @@ function halSparks(t){const c=document.getElementById('hsparks');if(!c)return;co
   if(!still)requestAnimationFrame(frame)}
  requestAnimationFrame(frame);if(still)setTimeout(()=>frame(1e6),300)})();
 </script></body></html>"""
+
+
+# ---------------------------------------------------------------------------------------------
+# Icons as inline SVG. The .ic-* / .na icons are CSS masks, which iPhone Safari can leave blank (the TV buttons
+# showed as empty boxes): each one is turned into the same drawing as inline SVG while the page runs, so every
+# browser shows it. The drawings come from the CSS above, so there is one place to change an icon.
+# ---------------------------------------------------------------------------------------------
+
+def _inline_icons(page: str) -> str:
+    import json as _json
+    import re as _re
+    from urllib.parse import unquote as _unquote
+
+    icons = {}
+    for m in _re.finditer(r'\.(ic-[\w-]+)\{-webkit-mask-image:url\("data:image/svg\+xml,([^"]+)"\)', page):
+        icons[m.group(1)] = _unquote(m.group(2))
+    for m in _re.finditer(r'\.na\.(dn|up|pg)\{color:[^;]+;-webkit-mask-image:url\("data:image/svg\+xml,([^"]+)"\)', page):
+        icons["na-" + m.group(1)] = _unquote(m.group(2))
+    css = ("<style>.ic.svgd,.na.svgd{background:none!important;-webkit-mask:none!important;mask:none!important}"
+           ".ic.svgd>svg,.na.svgd>svg{display:block;width:100%;height:100%}</style>")
+    js = (";(function(){const I=" + _json.dumps(icons).replace("</", "<\\/") + ";"
+          "function fix(){document.querySelectorAll('i.ic:not(.svgd),i.na:not(.svgd)').forEach(el=>{"
+          "let k=[...el.classList].find(c=>c.indexOf('ic-')===0);"
+          "if(!k&&el.classList.contains('na'))k='na-'+['dn','up','pg'].find(c=>el.classList.contains(c));"
+          "const s=I[k];if(!s)return;"
+          "el.innerHTML=s.replace(/stroke=(['\"])#000\\1/g,'stroke=\"currentColor\"').replace(/fill=(['\"])#000\\1/g,'fill=\"currentColor\"');"
+          "el.classList.add('svgd')})}"
+          "fix();new MutationObserver(fix).observe(document.body,{childList:true,subtree:true})})();\n")
+    # inside the page's own script (one script block), at its end
+    return page.replace("</head>", css + "</head>", 1).replace("</script></body></html>", js + "</script></body></html>", 1)
+
+
+APP_PAGE = _inline_icons(APP_PAGE)
