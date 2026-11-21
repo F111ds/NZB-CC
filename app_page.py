@@ -1370,15 +1370,16 @@ def _inline_icons(page: str) -> str:
         icons["na-" + m.group(1)] = _unquote(m.group(2))
     css = ("<style>.ic.svgd,.na.svgd{background:none!important;-webkit-mask:none!important;mask:none!important}"
            ".ic.svgd>svg,.na.svgd>svg{display:block;width:100%;height:100%}</style>")
-    js = ("<script>(function(){const I=" + _json.dumps(icons).replace("</", "<\\/") + ";"
+    js = (";(function(){const I=" + _json.dumps(icons).replace("</", "<\\/") + ";"
           "function fix(){document.querySelectorAll('i.ic:not(.svgd),i.na:not(.svgd)').forEach(el=>{"
           "let k=[...el.classList].find(c=>c.indexOf('ic-')===0);"
           "if(!k&&el.classList.contains('na'))k='na-'+['dn','up','pg'].find(c=>el.classList.contains(c));"
           "const s=I[k];if(!s)return;"
           "el.innerHTML=s.replace(/stroke=(['\"])#000\\1/g,'stroke=\"currentColor\"').replace(/fill=(['\"])#000\\1/g,'fill=\"currentColor\"');"
           "el.classList.add('svgd')})}"
-          "fix();new MutationObserver(fix).observe(document.body,{childList:true,subtree:true})})();</script>")
-    return page.replace("</head>", css + "</head>", 1).replace("</body></html>", js + "</body></html>", 1)
+          "fix();new MutationObserver(fix).observe(document.body,{childList:true,subtree:true})})();\n")
+    # inside the page's own script (one script block), at its end
+    return page.replace("</head>", css + "</head>", 1).replace("</script></body></html>", js + "</script></body></html>", 1)
 
 
 APP_PAGE = _inline_icons(APP_PAGE)
