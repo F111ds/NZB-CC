@@ -652,13 +652,16 @@ final class EmberHome {
 
     /** HAL's latest line (greeting and quote), for the big eye on the HAL-style home; "" when the PC is off. */
     java.util.function.Consumer<String> halLine;
+    /** HAL's status for the line under his words: {level ("ok", "warning", "critical", or "" when the PC is off),
+     *  the worst problem's title, its detail, how many problems there are}. */
+    java.util.function.Consumer<String[]> halStatus;
 
     void refreshHal() {
         if ((halPill == null && halLine == null) || halBusy || System.currentTimeMillis() - halReadAt < HAL_EVERY_MS) return;
         halBusy = true;
         try {
             io.execute(() -> {
-                String level = null, said = "";
+                String level = null, said = "", topTitle = "", topDetail = "", topLevel = "";
                 int issues = 0;
                 try {
                     JSONObject j = new JSONObject(new String(get("/hal/api/status", 8000), StandardCharsets.UTF_8));
@@ -668,18 +671,28 @@ final class EmberHome {
                     JSONArray is = j.optJSONArray("issues");
                     for (int i = 0; is != null && i < is.length(); i++) {
                         String l = is.getJSONObject(i).optString("level", "");
-                        if (l.equals("warning") || l.equals("critical")) issues++;
+                        if (l.equals("warning") || l.equals("critical")) {
+                            issues++;
+                            // the issues come worst first: the first serious one is the one to show
+                            if (topTitle.isEmpty()) {
+                                topTitle = is.getJSONObject(i).optString("title", "");
+                                topDetail = is.getJSONObject(i).optString("detail", "");
+                                topLevel = l;
+                            }
+                        }
                     }
                 } catch (Exception ignored) {
                     level = null;   // the PC is off or asleep
                 }
                 final String lv = level, line = said;
+                final String[] st = {level == null ? "" : issues == 0 ? "ok" : topLevel, topTitle, topDetail, String.valueOf(issues)};
                 final int n = issues;
                 main.post(() -> {
                     halBusy = false;
                     halReadAt = System.currentTimeMillis();
                     setHal(lv, n);
                     if (halLine != null) halLine.accept(line);
+                    if (halStatus != null) halStatus.accept(st);
                 });
             });
         } catch (java.util.concurrent.RejectedExecutionException e) {

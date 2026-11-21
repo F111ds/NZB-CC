@@ -702,6 +702,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
                 ember.useHalBackdrop(true);   // HAL's own background: his words read cleanly over it
                 bigHal = new BigHal(this, root, root.indexOfChild(findViewById(R.id.glass)), this);
                 ember.halLine = bigHal::setLine;
+                ember.halStatus = bigHal::setStatus;
                 bigHal.setLine("");
                 // YouTube comes off the dock (it stays in the App library, and Add to Home brings it back).
                 List<String> apps = new ArrayList<>();

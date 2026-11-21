@@ -132,7 +132,8 @@ experience on top of it, piece by piece, checking each change on the real TV.
 - **HAL's big eye**: above the posters, under the top line, with a chrome rim and his latest line from the PC
   beside it ("Good morning, Dave. Everything is running smoothly."). It's drawn as on his screen and the phone, and
   it moves: it glances around, watches the selection move along the posters, blinks now and
-  then, and glows brighter when selected. Press **Up** from the posters to select him; **OK** opens his monitor
+  then, and glows brighter when selected. Under his words, a status line: a green dot and "All systems functioning normally",
+  or an amber or red dot with what needs looking at ("Drive Z: is 92% full · 9 days left at this rate"). Press **Up** from the posters to select him; **OK** opens his monitor
   screens (his icon is no longer in the dock). When the TV is switched on, **HAL wakes up**: his eye lights in the
   dark and a red pulse spreads out before Home fades in.
 - **The look, in HAL's red style**: a plain black background, so HAL's eye, his words and the posters stand out. The posters are glossy and stand on a floor with a soft
