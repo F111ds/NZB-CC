@@ -227,20 +227,20 @@ const cards=[...document.querySelectorAll('#main .card')];cards.forEach(c=>{cons
 const gl=$('gl').getContext('webgl',{preserveDrawingBuffer:false,antialias:false});let glOK=false,ut,W=$('gl').width,H=$('gl').height;
 if(gl){try{
  const vs='attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}';
- const fs=`precision mediump float;uniform vec2 r;uniform float t;
+ const fs=`precision highp float;uniform vec2 r;uniform float t;
 float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y);}
 float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<4;i++){v+=a*n(p);p=p*2.03+vec2(1.7,9.2);a*=.5;}return v;}
 void main(){vec2 uv=gl_FragCoord.xy/r;vec2 p=uv*vec2(r.x/r.y,1.)*2.2;vec2 q=vec2(fbm(p+vec2(0.,t*.04)),fbm(p+vec2(5.2,1.3)-t*.03));float w=fbm(p+1.9*q+vec2(t*.02,-t*.06));
  vec2 c=(uv-vec2(.5,.71))*vec2(r.x/r.y,1.);float d=length(c);float pulse=1.;vec3 col=vec3(.035,.008,.01);
  col+=vec3(.42,.05,.02)*pow(w,2.2)*1.6;col+=vec3(.95,.38,.05)*smoothstep(.62,.95,w)*.35*(1.-uv.y*.6);col+=vec3(1.,.22,.05)*exp(-d*d*9.)*.62*pulse;col+=vec3(1.,.55,.2)*exp(-d*d*60.)*.25*pulse;
- float bt=clamp((t-40.)/2.6,0.,1.);col*=1.-.55*smoothstep(.45,1.1,length((uv-.5)*vec2(1.2,1.5)));col*=.15+.85*bt;gl_FragColor=vec4(col,1.);}`;
+ float bt=clamp((t-40.)/2.6,0.,1.);col*=1.-.55*smoothstep(.45,1.1,length((uv-.5)*vec2(1.2,1.5)));col*=.15+.85*bt;col+=(h(gl_FragCoord.xy+fract(t*7.)*61.)-.5)*(3./255.);gl_FragColor=vec4(col,1.);}`;
  const sh=(ty,src)=>{const s=gl.createShader(ty);gl.shaderSource(s,src);gl.compileShader(s);return s};
  const pr=gl.createProgram();gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs));gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(pr);
  if(gl.getProgramParameter(pr,gl.LINK_STATUS)){gl.useProgram(pr);const bf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,bf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
   const pl=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,2,gl.FLOAT,false,0,0);
   // the smoke is soft, so it is drawn at half size to spare the TV
-  $('gl').width=480;$('gl').height=270;W=480;H=270;gl.viewport(0,0,W,H);gl.uniform2f(gl.getUniformLocation(pr,'r'),W,H);ut=gl.getUniformLocation(pr,'t');glOK=true}}catch(e){}}
+  $('gl').width=960;$('gl').height=540;W=960;H=540;gl.viewport(0,0,W,H);gl.uniform2f(gl.getUniformLocation(pr,'r'),W,H);ut=gl.getUniformLocation(pr,'t');glOK=true}}catch(e){}}
 if(!glOK)$('gl').style.background='radial-gradient(ellipse 520px 380px at 50% 28%,rgba(255,60,20,.5),transparent 70%),#0a0405';
 const sp=$('sp').getContext('2d'),fx=$('fx').getContext('2d'),FW=1920,FH=1080,EX=960,EY=298;
 let seed=7;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
