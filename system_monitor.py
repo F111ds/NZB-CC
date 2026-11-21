@@ -503,9 +503,15 @@ def _norm_name(name: str) -> str:
 # Sensors (LibreHardwareMonitor / OpenHardwareMonitor / ACPI) and CPU clock
 # ---------------------------------------------------------------------------------------------
 
-def parse_sensor_lines(lines: list[str]) -> dict:
-    """Lines "<type>|<hardware>|<name>|<value>" -> {"temps": [...], "fans": [...], "power": [...]}."""
+def parse_sensor_lines(lines: list[str], hw_names: list[str] | None = None) -> dict:
+    """Lines "<type>|<hardware>|<name>|<value>" -> {"temps": [...], "fans": [...], "power": [...]}.
+    hw_names: lines "<hardware id>|<its name>" (e.g. "/ssd/1|Samsung SSD 860 EVO 500GB"), kept as each sensor's "label"."""
     out = {"temps": [], "fans": [], "power": []}
+    names = {}
+    for h in as_list(hw_names):
+        hid, _, nm = str(h).partition("|")
+        if hid.strip() and nm.strip():
+            names[hid.strip()] = nm.strip()
     bucket = {"temperature": "temps", "fan": "fans", "power": "power"}
     for line in as_list(lines):
         parts = str(line).split("|")
@@ -517,8 +523,45 @@ def parse_sensor_lines(lines: list[str]) -> dict:
             continue
         if kind == "temps" and not (-20 < value < 150):
             continue
-        out[kind].append({"hw": parts[1].strip(), "name": parts[2].strip(), "value": value})
+        out[kind].append({"hw": parts[1].strip(), "label": names.get(parts[1].strip(), ""), "name": parts[2].strip(), "value": value})
     return out
+
+
+_DISK_HW = ("/hdd", "/ssd", "/nvme", "/storage")
+
+
+def disk_temps(temps: list[dict]) -> list[dict]:
+    """Each drive's own temperature from LibreHardwareMonitor (it reads the drive's SMART sensor, as CrystalDiskInfo
+    does): [{"label": model name, "value": °C}], one per drive ("Temperature" first, else its first reading)."""
+    by: dict[str, dict] = {}
+    for t in temps or []:
+        hw = str(t.get("hw") or "")
+        if not hw.lower().startswith(_DISK_HW) or not t.get("label"):
+            continue
+        v = safe_num(t.get("value"))
+        if v is None or not (0 < v < 100):
+            continue
+        cur = by.get(hw)
+        first = str(t.get("name") or "").strip().lower() in ("temperature", "composite temperature")
+        if cur is None or (first and not cur["first"]):
+            by[hw] = {"label": str(t["label"]), "value": v, "first": first}
+    return [{"label": d["label"], "value": d["value"]} for d in by.values()]
+
+
+def _model_key(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+
+
+def match_disk_temp(name: str, dtemps: list[dict]) -> float | None:
+    """The LibreHardwareMonitor temperature for the drive Windows calls `name`; None when there's no single match
+    (two drives of the same model can't be told apart this way)."""
+    k = _model_key(name)
+    if not k:
+        return None
+    hits = [d for d in dtemps if _model_key(d["label"]) == k]
+    if not hits:
+        hits = [d for d in dtemps if len(k) >= 6 and (k in _model_key(d["label"]) or _model_key(d["label"]) in k)]
+    return hits[0]["value"] if len(hits) == 1 else None
 
 
 _CPU_TEMP_NAMES = ("cpu package", "core (tctl/tdie)", "cpu (tctl/tdie)", "tctl/tdie", "core max", "core average", "package")
@@ -944,11 +987,11 @@ while ($true) {
     $s = $null
     if ($lhm -or ($i % 30 -eq 0)) {
       foreach ($ns in 'root/LibreHardwareMonitor', 'root/OpenHardwareMonitor') {
-        try { $s = @(Get-CimInstance -Namespace $ns -ClassName Sensor -ErrorAction Stop | Where-Object { $_.SensorType -in 'Temperature', 'Fan', 'Power' } | ForEach-Object { "$($_.SensorType)|$($_.Parent)|$($_.Name)|$($_.Value)" }); $o.sensrc = $ns.Split('/')[1]; break } catch {}
+        try { $s = @(Get-CimInstance -Namespace $ns -ClassName Sensor -ErrorAction Stop | Where-Object { $_.SensorType -in 'Temperature', 'Fan', 'Power' } | ForEach-Object { "$($_.SensorType)|$($_.Parent)|$($_.Name)|$($_.Value)" }); $h = @(Get-CimInstance -Namespace $ns -ClassName Hardware -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Identifier)|$($_.Name)" }); $o.sensrc = $ns.Split('/')[1]; break } catch {}
       }
       $lhm = [bool]$s
     }
-    if ($s) { $o.sens = $s }
+    if ($s) { $o.sens = $s; $o.hwn = $h }
   }
   $o | ConvertTo-Json -Compress -Depth 3
   [Console]::Out.Flush()
@@ -1430,7 +1473,7 @@ class SystemMonitor:
                 base, _, pct = str(perf).partition("|")
                 self._cpuperf = (safe_num(base) or 0.0, safe_num(pct) or 0.0)
             if "sens" in data:
-                self._wmi_sensors = parse_sensor_lines(as_list(data.get("sens")))
+                self._wmi_sensors = parse_sensor_lines(as_list(data.get("sens")), as_list(data.get("hwn")))
                 self._wmi_src = data.get("sensrc") or ""
             elif data.get("t", 0) % 3 == 0:
                 self._wmi_sensors = None
