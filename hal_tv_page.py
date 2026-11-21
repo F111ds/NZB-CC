@@ -115,7 +115,6 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
  </g>
  <circle cx="150" cy="150" r="88" fill="url(#rim)"/><circle cx="150" cy="150" r="82" fill="#0b0b0d"/>
  <g clip-path="url(#lensclip)"><g id="iris"><circle cx="150" cy="150" r="80" fill="url(#lens)"/><circle id="core" cx="150" cy="150" r="40" fill="url(#coreg)" style="mix-blend-mode:screen"/></g></g>
- <ellipse cx="128" cy="112" rx="34" ry="16" fill="rgba(255,255,255,.16)" transform="rotate(-28 128 112)"/><circle cx="182" cy="186" r="5" fill="rgba(255,255,255,.12)"/>
  <g font-family="JetBrains Mono,monospace" font-size="9.5" font-weight="700" fill="#ffe2d6"><text id="l1" x="142" y="26" text-anchor="end"></text><text id="l2" x="142" y="38" text-anchor="end" fill="#ffb59a"></text><text id="l3" x="142" y="50" text-anchor="end" fill="#9ff5d0"></text></g>
 </svg><div id="sweep"></div></div>
 <div class="card glass l" id="cpc" style="left:26px;top:22px;width:288px;height:186px">

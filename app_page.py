@@ -250,8 +250,7 @@ nav.tabs button.on{color:#ffb59a;text-shadow:0 0 12px rgba(255,90,40,.9)}nav.tab
 .hero.center .eyewrap .eye.critical{box-shadow:0 0 0 1px rgba(0,0,0,.6),0 0 0 4px rgba(255,42,31,.7),0 0 80px 18px rgba(255,30,20,.45)}
 .hero.center .eyewrap .eye::before{inset:7.5%;box-shadow:inset 0 0 14px 4px rgba(0,0,0,.9);
  background:radial-gradient(ellipse 50% 50% at calc(50% + var(--gx,0px)) calc(50% + var(--gy,0px)),#fffbe0 0,#ffd27a 6%,#ff5a1f 16%,#d4140a 34%,#5a0402 60%,#120000 88%,#000 100%)}
-.hero.center .eyewrap .eye::after{content:"";position:absolute;inset:7.5%;border-radius:50%;pointer-events:none;
- transform:rotate(-28deg);background:radial-gradient(ellipse 22% 10.5% at 48.9% 21.1%,rgba(255,255,255,.17) 0 88%,transparent 100%),radial-gradient(ellipse 3.3% 3.3% at 57.4% 80.8%,rgba(255,255,255,.13) 0 80%,transparent 100%)}
+
 /* HAL looks around: his light moves inside the lens */
 
 /* the sweep turns on the graphics chip, smooth whatever the page is doing */
