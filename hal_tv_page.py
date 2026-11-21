@@ -13,11 +13,9 @@ TV_PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewp
 html,body{width:960px;height:540px;overflow:hidden;background:#0a0405;color:#fff;font-family:"Plus Jakarta Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 #stage{position:absolute;left:0;top:0;width:960px;height:540px;transform-origin:0 0}
 canvas.full{position:absolute;inset:0;width:960px;height:540px}
-.grain{position:absolute;inset:0;opacity:.18;mix-blend-mode:overlay;pointer-events:none}
 .vig{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 45%,transparent 55%,rgba(0,0,0,.55));pointer-events:none}
 .glass{position:absolute;border-radius:20px;padding:15px 17px;overflow:hidden;
- background:linear-gradient(160deg,rgba(255,255,255,.12),rgba(255,255,255,.03) 60%);border:1px solid rgba(255,255,255,.14);
- -webkit-backdrop-filter:blur(22px) saturate(150%);backdrop-filter:blur(22px) saturate(150%);
+ background:linear-gradient(160deg,rgba(70,22,16,.78),rgba(28,8,8,.72) 60%);border:1px solid rgba(255,255,255,.14);
  box-shadow:0 18px 40px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.18)}
 .glass.l{box-shadow:0 18px 40px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.18),inset -2px 0 0 rgba(255,110,60,.55),12px 0 40px -18px rgba(255,80,30,.7)}
 .glass.r{box-shadow:0 18px 40px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.18),inset 2px 0 0 rgba(255,110,60,.55),-12px 0 40px -18px rgba(255,80,30,.7)}
@@ -89,8 +87,8 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 #main{position:absolute;inset:0;transition:opacity .35s}
 #main.off{opacity:0}
 </style></head><body><div id="stage">
-<canvas id="gl" class="full" width="1920" height="1080"></canvas><canvas id="sp" class="full" width="1920" height="1080"></canvas><canvas id="fx" class="full" width="1920" height="1080"></canvas>
-<svg class="grain" width="960" height="540"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .9 0"/></filter><rect width="100%" height="100%" filter="url(#n)"/></svg>
+<canvas id="gl" class="full" width="1920" height="1080"></canvas><canvas id="sp" class="full" width="960" height="540"></canvas><canvas id="fx" class="full" width="960" height="540"></canvas>
+
 <div id="main">
 <svg id="eye" style="position:absolute;left:345px;top:14px;transform-origin:150px 150px" width="270" height="270" viewBox="0 0 300 300">
  <defs>
@@ -246,8 +244,8 @@ void main(){vec2 uv=gl_FragCoord.xy/r;vec2 p=uv*vec2(r.x/r.y,1.)*2.2;vec2 q=vec2
 if(!glOK)$('gl').style.background='radial-gradient(ellipse 520px 380px at 50% 28%,rgba(255,60,20,.5),transparent 70%),#0a0405';
 const sp=$('sp').getContext('2d'),fx=$('fx').getContext('2d'),FW=1920,FH=1080,EX=960,EY=298;
 let seed=7;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
-const sparks=Array.from({length:46},()=>({x:rnd()*FW,y:rnd()*FH,v:18+rnd()*40,r:1+rnd()*2.6,ph:rnd()*6.28,dr:(rnd()-.5)*20}));
-const motes=Array.from({length:90},()=>({s:Math.floor(rnd()*4),o:rnd(),v:.12+rnd()*.18,w:(rnd()-.5)*120,r:1+rnd()*1.8}));
+const sparks=Array.from({length:24},()=>({x:rnd()*FW,y:rnd()*FH,v:18+rnd()*40,r:1+rnd()*2.6,ph:rnd()*6.28,dr:(rnd()-.5)*20}));
+const motes=Array.from({length:40},()=>({s:Math.floor(rnd()*4),o:rnd(),v:.12+rnd()*.18,w:(rnd()-.5)*120,r:1+rnd()*1.8}));
 const srcPts=[[314*2,115*2],[314*2,312*2],[646*2,115*2],[646*2,312*2]];
 function gaze(t){
  if(t<3.6)return[0,0];
@@ -262,7 +260,7 @@ function render(t){
  const boot=ease(t/2.6);
  if(glOK){gl.uniform1f(ut,t+40.);gl.drawArrays(gl.TRIANGLE_STRIP,0,4)}
  // sparks
- sp.clearRect(0,0,FW,FH);
+ sp.setTransform(1,0,0,1,0,0);sp.clearRect(0,0,960,540);sp.setTransform(.5,0,0,.5,0,0);
  for(const s of sparks){const y=((s.y-t*s.v)%FH+FH)%FH,x=s.x+Math.sin(t*.8+s.ph)*s.dr,a=(.35+.35*Math.sin(t*3+s.ph))*Math.min(1,y/FH*2)*boot;
   const g=sp.createRadialGradient(x,y,0,x,y,s.r*4);g.addColorStop(0,`rgba(255,200,120,${a})`);g.addColorStop(1,'rgba(255,90,30,0)');sp.fillStyle=g;sp.beginPath();sp.arc(x,y,s.r*4,0,7);sp.fill()}
  // boot: the veil lifts, the lens assembles, ticks light in turn, panels unfold from the eye
@@ -272,7 +270,7 @@ function render(t){
  tickEls.forEach((l,i)=>l.style.opacity=t>.5+i*.018?1:0);
  const bs='HAL 9000 · ONLINE',bn=Math.floor(Math.max(0,t-.9)*14);$('boot').textContent=bs.slice(0,bn);$('boot').style.opacity=t<3.2?1:Math.max(0,1-(t-3.2)/.5);
  cards.forEach((c,i)=>{const e=ease((t-2-i*.12)/.9),left=parseFloat(c.style.left)<480||c.id==='alert'||c.id==='strip';
-  c.style.clipPath=i<4?`inset(0 ${left?(1-e)*100:0}% 0 ${left?0:(1-e)*100}% round 20px)`:`inset(0 ${(1-e)*50}% 0 ${(1-e)*50}% round 16px)`;c.style.opacity=Math.min(1,e*1.4);
+  if(t<4.5){c.style.clipPath=i<4?`inset(0 ${left?(1-e)*100:0}% 0 ${left?0:(1-e)*100}% round 20px)`:`inset(0 ${(1-e)*50}% 0 ${(1-e)*50}% round 16px)`;c.style.opacity=Math.min(1,e*1.4)}else if(c.style.clipPath){c.style.clipPath='';c.style.opacity=1}
   const d=i<4?5:3;c.style.transform=`translate(${px*d}px,${py*d}px)`});
  document.querySelectorAll('.hint,#clock').forEach(e=>e.style.opacity=ease((t-2.6)/.8));
  // rings and numbers: the real values, filled on opening and breathing a little
@@ -311,16 +309,15 @@ function render(t){
  // clock
  const d=new Date();$('clock').textContent=d.toLocaleDateString([], {weekday:'short',day:'numeric',month:'short'}).toUpperCase()+' · '+d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
  // canvas effects: data streams into HAL, his voice round the lens, the scanning beam
- fx.clearRect(0,0,FW,FH);
+ fx.setTransform(1,0,0,1,0,0);fx.clearRect(0,0,960,540);fx.setTransform(.5,0,0,.5,0,0);
  if(t>2.4&&!detOn){const a=Math.min(1,(t-2.4)/1.2);for(const m of motes){const[sx,sy]=srcPts[m.s],p=(m.o+t*m.v)%1,cx=(sx+EX)/2+m.w,cy=Math.min(sy,EY)-80+m.w*.3;
   const x=(1-p)*(1-p)*sx+2*(1-p)*p*cx+p*p*EX,y=(1-p)*(1-p)*sy+2*(1-p)*p*cy+p*p*EY,al=a*Math.sin(p*Math.PI)*.85*(p<.92?1:0);
   const gg=fx.createRadialGradient(x,y,0,x,y,m.r*5);gg.addColorStop(0,`rgba(255,215,160,${al})`);gg.addColorStop(1,'rgba(255,90,30,0)');fx.fillStyle=gg;fx.beginPath();fx.arc(x,y,m.r*5,0,7);fx.fill()}}
- if(!detOn){const amp=speaking?1:.15*boot;for(let i=0;i<120;i++){const ang=i/120*Math.PI*2,v=Math.abs(nz(t*8+i*.31,i%7))*amp,r0=272,r1=r0+6+36*v;
-  fx.strokeStyle=`rgba(255,${140+80*v|0},${70+60*v|0},${(.25+.6*v).toFixed(2)})`;fx.lineWidth=3;fx.beginPath();fx.moveTo(EX+r0*Math.sin(ang),EY-r0*Math.cos(ang));fx.lineTo(EX+r1*Math.sin(ang),EY-r1*Math.cos(ang));fx.stroke()}}
+
  const bp=((t-5)%9+9)%9,beam=t>5&&bp<2.4&&!detOn,ba=beam?(bp/2.4)*Math.PI*2-Math.PI/2:-9;
  if(beam){const gg=fx.createRadialGradient(EX,EY,40,EX,EY,1300);gg.addColorStop(0,'rgba(255,170,110,.32)');gg.addColorStop(1,'rgba(255,90,40,0)');fx.save();fx.globalCompositeOperation='lighter';fx.fillStyle=gg;fx.beginPath();fx.moveTo(EX,EY);fx.arc(EX,EY,1300,ba-.22,ba);fx.closePath();fx.fill();fx.restore()}
  cards.slice(0,4).forEach((c,i)=>{const ca=Math.atan2(srcPts[i][1]-EY,srcPts[i][0]-EX),dd=Math.abs(((ba-ca)%(2*Math.PI)+3*Math.PI)%(2*Math.PI)-Math.PI),lit=beam?Math.max(0,1-dd/.5):0;
-  c.style.borderColor=`rgba(255,${190+40*lit|0},${160+60*lit|0},${(.14+.6*lit).toFixed(2)})`;c.style.filter=lit>.01?`brightness(${(1+.18*lit).toFixed(2)})`:''});
+  c.style.borderColor=`rgba(255,${190+40*lit|0},${160+60*lit|0},${(.14+.6*lit).toFixed(2)})`});
 }
 // ---------- details pages ----------
 let detOn=false,detAt=0;
@@ -363,7 +360,7 @@ window.halKey=function(k){if(k==='down'){if(!detOn)openDet();return true}
  return false};
 addEventListener('keydown',e=>{const m={ArrowDown:'down',ArrowUp:'up',ArrowLeft:'left',ArrowRight:'right',Escape:'back',Backspace:'back'}[e.key];if(m&&halKey(m))e.preventDefault()});
 // ---------- go ----------
-function loop(){render(now());requestAnimationFrame(loop)}
+let lastF=0;function loop(ts){if(ts-lastF>=32){lastF=ts;render(now())}requestAnimationFrame(loop)}
 window.render=render;
 poll();pollSlow();requestAnimationFrame(loop);
 setTimeout(()=>{try{if(APP)HAL.ready()}catch(e){}},300);
