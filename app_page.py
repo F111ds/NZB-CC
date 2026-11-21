@@ -254,7 +254,8 @@ nav.tabs button.on{color:#ffb59a;text-shadow:0 0 12px rgba(255,90,40,.9)}nav.tab
 /* HAL looks around: his light moves inside the lens */
 
 /* the sweep turns on the graphics chip, smooth whatever the page is doing */
-#hsweep{position:absolute;left:50%;top:50%;width:219px;height:219px;margin:-109.5px 0 0 -109.5px;pointer-events:none;will-change:transform;animation:hspin 9s linear infinite;background:conic-gradient(from 0deg,rgba(255,176,122,0) 0deg,rgba(255,176,122,.08) 120deg,rgba(255,200,160,.35) 300deg,rgba(255,232,210,.95) 358deg,rgba(255,176,122,0) 360deg);border-radius:50%;-webkit-mask:radial-gradient(closest-side,transparent calc(100% - 7px),#000 calc(100% - 6px));mask:radial-gradient(closest-side,transparent calc(100% - 7px),#000 calc(100% - 6px))}@keyframes hspin{to{transform:rotate(360deg)}}
+/* just one small radar sweep round HAL's eye (no gauges, ticks or sparks) */
+#hsweep{position:absolute;left:50%;top:50%;width:176px;height:176px;margin:-88px 0 0 -88px;box-shadow:inset 0 0 0 1px rgba(255,200,180,.14);pointer-events:none;will-change:transform;animation:hspin 9s linear infinite;background:conic-gradient(from 0deg,rgba(255,176,122,0) 0deg,rgba(255,176,122,.08) 120deg,rgba(255,200,160,.35) 300deg,rgba(255,232,210,.95) 358deg,rgba(255,176,122,0) 360deg);border-radius:50%;-webkit-mask:radial-gradient(closest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));mask:radial-gradient(closest-side,transparent calc(100% - 4px),#000 calc(100% - 3px))}@keyframes hspin{to{transform:rotate(360deg)}}
 #hsparks{position:absolute;left:-40px;top:-40px;width:316px;height:316px;pointer-events:none}
 /* opening: the dial lights round, the gauges fill, the cards rise in */
 .intro #hrings line{animation:tickin .3s both}@keyframes tickin{from{opacity:0}}
@@ -539,7 +540,7 @@ function piCard(hw){if(!hw||(hw.temp==null&&hw.cpu_pct==null&&!hw.model))return'
     '<div class="wgrid" style="margin-top:10px"><div><span class="k">UP FOR</span><b>'+upFor(hw.uptime)+'</b></div><div><span class="k">LOAD</span><b>'+(hw.load&&hw.load.length?hw.load[0].toFixed(2):'—')+'</b></div><div><span class="k">UPDATES</span><b style="color:var(--'+(hw.update?'sky':'green')+')">'+(hw.update?'yes':'none')+'</b></div></div>'+
     (hw.update?'<div class="sub" style="color:var(--soft);font-size:13px;margin-top:10px">To update, on the Pi: sudo pihole -up</div>':'')+'</div>'}
 function renderHome(){const el=$('t-home');
-  if(!$('heye'))el.innerHTML='<div id="hhead"></div><div class="hero'+(DESK?'':' center')+'">'+(DESK?'<button class="eye big" id="heye" aria-label="Hear HAL"></button>':'<div class="eyewrap"><canvas id="hsparks" width="632" height="632"></canvas><svg id="hrings" viewBox="0 0 236 236"></svg><div id="hsweep"></div><button class="eye" id="heye" aria-label="Hear HAL"></button></div>')+'<div><div class="g" id="hgreet"></div><div class="q" id="hquote"></div>'+'</div></div><div id="hbody"></div>';
+  if(!$('heye'))el.innerHTML='<div id="hhead"></div><div class="hero'+(DESK?'':' center')+'">'+(DESK?'<button class="eye big" id="heye" aria-label="Hear HAL"></button>':'<div class="eyewrap"><div id="hsweep"></div><button class="eye" id="heye" aria-label="Hear HAL"></button></div>')+'<div><div class="g" id="hgreet"></div><div class="q" id="hquote"></div>'+'</div></div><div id="hbody"></div>';
   if(!DESK&&!el.dataset.intro){el.dataset.intro=1;el.classList.add('intro');setTimeout(()=>el.classList.remove('intro'),3200)}
   $('hhead').innerHTML=topbar('',true);$('hbody').innerHTML=homeBody();$('hgreet').textContent=greeting();
   const eye=$('heye');eye.className='eye'+(DESK?' big':'')+' '+(S?S.hal.level:'')+(eye.classList.contains('talking')?' talking':'');
