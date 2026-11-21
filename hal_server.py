@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.23.0"
+VERSION = "1.23.1"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -5219,6 +5219,10 @@ class HalRoutes:
                 self._h_json(200, hal.cleanup_info(refresh=bool(q.get("refresh"))))
             elif path == "/api/brief":
                 if (q.get("from") or [""])[0] == "tv":
+                    px = (q.get("px") or [""])[0]
+                    if re.fullmatch(r"\d{2,5}x\d{2,5}", px) and px != getattr(hal, "tv_px", ""):
+                        hal.tv_px = px
+                        log.info("TV screen: HAL draws at %s pixels", px)
                     with hal.lock:
                         hal.tv_seen = 0.0 if q.get("closed") else time.time()
                     if q.get("closed"):
