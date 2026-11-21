@@ -105,7 +105,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
   <clipPath id="lensclip"><circle cx="150" cy="150" r="76"/></clipPath>
   <filter id="glf"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
  </defs>
- <circle cx="150" cy="150" r="150" fill="url(#bloom)"/>
+ <circle id="bloomc" cx="150" cy="150" r="150" fill="url(#bloom)" style="opacity:.8"/>
  <g id="ticks"></g>
  
  <g fill="none" stroke-linecap="round" filter="url(#glf)">
@@ -261,6 +261,11 @@ function gaze(t){
  const k=Math.floor(t/2.3),f=t/2.3-k,r=i=>{const x=Math.sin(i*12.9898)*43758.5453;return x-Math.floor(x)},to=[(r(k)-.5)*.7,(r(k+.5)-.5)*.5],fr=[(r(k-1)-.5)*.7,(r(k-.5)-.5)*.5],e=sm(f/.25);
  return[fr[0]+(to[0]-fr[0])*e,fr[1]+(to[1]-fr[1])*e]}
 function pathD(vals,w,h,lo,hi,step){const pts=vals.map((v,i)=>`${(i*w/Math.max(1,vals.length-1)).toFixed(1)} ${(h-(v-lo)/Math.max(1e-6,hi-lo)*h*.8-h*.1).toFixed(1)}`);return'M'+pts.join(' L')}
+// While HAL talks his eye brightens on the sounds and dims at the pauses, as on the phone (same rule).
+let tgB=1,tgCur=1,tgNext=0;
+function talkGlow(speaking,txt,shown){const n=performance.now();
+ if(speaking){if(n>=tgNext){const ch=txt[Math.max(0,shown-1)]||' ';tgB=/[aeiouy]/i.test(ch)?1.5+Math.random()*.45:/[\s,.;:!?]/.test(ch)?.72:1.12+Math.random()*.25;tgNext=n+55+Math.random()*85}}else tgB=1;
+ tgCur+=(tgB-tgCur)*.32;$('iris').style.filter=Math.abs(tgCur-1)<.01?'':'brightness('+tgCur.toFixed(3)+')';$('bloomc').style.opacity=(.8*Math.min(1.25,tgCur)).toFixed(3)}
 function render(t){
  const boot=ease(t/2.6);
  $('gl').style.opacity=Math.min(1,t/1.2);
@@ -290,6 +295,7 @@ function render(t){
  const txt=String(say.text||''),shown=t<1.5?0:(say.frac>=0?Math.round(txt.length*Math.min(1,say.frac<0?1:say.frac)):txt.length);
  $('quote').className='quote'+(txt.length>110?' vlong':txt.length>70?' long':'');$('quote').innerHTML=t<1.5||!txt?'':'“'+esc(txt.slice(0,shown))+(shown<txt.length?'<span class="caret"></span>':'”');
  const speaking=say.speaking&&t>=1.5;
+ talkGlow(speaking,txt,shown);
  waveEls.forEach((el,i)=>{const v=Math.abs(nz(t*7+i*.45,i));el.style.height=(2+(speaking?9:1)*v).toFixed(1)+'px'});
  
  const g=gaze(t);$('iris').setAttribute('transform',`translate(${(g[0]*17).toFixed(2)} ${(g[1]*17).toFixed(2)})`);
