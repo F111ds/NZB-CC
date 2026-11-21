@@ -218,6 +218,46 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private EmberHome ember;
     private boolean cinemaHeader;
     private boolean cinemaLayout;
+    /** NZB-CC idle showcase (ember_showcase_minutes): Recently watched's art full screen after a few idle minutes. */
+    private Showcase showcase;
+    /** NZB-CC: the TV's memory, CPU and smoothness, sent to the PC every minute while the HAL-style home is new. */
+    private PerfReport perf;
+    private long showcaseMs;
+    private int showcaseSwallowUp = -1;
+    private final Runnable showShowcase = this::maybeShowShowcase;
+    /** HAL's wake-up plays on the next resume: at start and after the screen went off. */
+    private boolean wakeNext = true, screenOffRegistered;
+    private final BroadcastReceiver screenOff = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            wakeNext = true;
+        }
+    };
+
+    /** HAL's wake-up from his dock tile (or the bottom middle when his tile can't be found). */
+    private void playWake() {
+        if (ember == null || isDestroyed() || root.getWidth() == 0) return;
+        float x = root.getWidth() / 2f, y = root.getHeight() - 80 * density, size = 90 * density;
+        for (int i = 0; adapter != null && i < adapter.appCount(); i++) {
+            String key = adapter.keyAt(i);
+            if (key == null || !key.endsWith(".HalActivity")) continue;
+            RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(i);
+            View card = vh == null ? null : vh.itemView.findViewById(R.id.card);
+            if (card != null && card.getWidth() > 0) {
+                Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
+                root.offsetDescendantRectToMyCoords(card, r);
+                x = r.exactCenterX();
+                y = r.exactCenterY();
+                size = Math.min(r.width(), r.height());
+            }
+            break;
+        }
+        ember.playWake(root, x, y, size);
+    }
+
+    private void maybeShowShowcase() {
+        if (resumed && showcase != null && kodiRowShown() && openPopup == null && !reordering) showcase.show(kodiRow.items());
+    }
 
     private boolean cinemaOn() {
         return cinemaLayout && ember != null && ember.shown();
@@ -647,6 +687,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             cinemaLayout = getResources().getBoolean(R.bool.ember_cinema_layout);
             ember.setCinemaLayout(cinemaLayout);
             KodiRow.cinema = cinemaLayout;
+            KodiRow.reflections = !cinemaLayout;
+            AppAdapter.halEyeLive = true;
+            KodiRow.tilt = !cinemaLayout && animations && !reducedMotion;
+            // HAL wakes up when the TV is switched on (the screen went off since Home was last on screen).
+            IntentFilter off = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) registerReceiver(screenOff, off, Context.RECEIVER_NOT_EXPORTED);
+            else registerReceiver(screenOff, off);
+            screenOffRegistered = true;
+            perf = new PerfReport(this, extras);
+            perf.start();
+            showcaseMs = getResources().getInteger(R.integer.ember_showcase_minutes) * MINUTE_MS;
+            if (showcaseMs > 0) showcase = new Showcase(this, root, handler, () -> weatherPill != null
+                    && weatherPill.getVisibility() == View.VISIBLE ? weatherPill.getText().toString() : "", animations && !reducedMotion);
             // The top bar stays as it was (no HAL pill there).
         }
         // The rotation runs on the clock that never jumps: setting the TV's time must not stall or stretch a turn.
@@ -1189,6 +1242,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (showcase != null && showcase.showing()) {   // Home pressed on the showcase: back to Home
+            showcase.hide();
+            restartIdleClock();
+        }
         if (openLauncherSettingsIfAsked(intent)) return;
         if (openLibraryIfAsked(intent)) return;
         if (openInputsIfAsked(intent)) return;
@@ -1230,6 +1287,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (ember != null) {
             ember.resumeMotion();
             ember.refreshHal();
+            restartIdleClock();
+            if (perf != null) perf.homeShown(getWindow());
+            if (wakeNext) {
+                wakeNext = false;
+                if (animations && !reducedMotion) root.postDelayed(this::playWake, 120);
+            }
         }
         // A festival that started or ended while Home was in the background: rebuild with or without it.
         if (festive != festival.active(LocalDate.now())) {
@@ -1442,6 +1505,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private void restartIdleClock() {
         root.removeCallbacks(showIdleClock);
         if (resumed && idleClockMs > 0) root.postDelayed(showIdleClock, idleClockMs);
+        root.removeCallbacks(showShowcase);
+        if (resumed && showcase != null) root.postDelayed(showShowcase, showcaseMs);
     }
 
     @Override
@@ -1450,11 +1515,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         resumed = false;
         if (newsTicker != null) newsTicker.stop();
         if (ember != null) ember.pause();
+        if (perf != null) perf.homeShown(null);
         // No UP reaches a paused Home, so a vendor-key hold it saw go down would still open its app later.
         // Only Home's own share is dropped: a key service that saw the same DOWN keeps its hold.
         RemoteKeys.release(this);
         cancelHoldOk();
         root.removeCallbacks(showIdleClock);
+        root.removeCallbacks(showShowcase);
+        if (showcase != null) showcase.hide();
         endReorder();   // Home or another app while reordering keeps the order so far
         wallpaperPlayer.stop();
         stopAmbientAnimation();
@@ -1524,6 +1592,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     private final ViewTreeObserver.OnGlobalFocusChangeListener glassFocusListener = (oldF, newF) -> {
         boolean onTile = newF != null && newF.getId() == R.id.card;
         if (!onTile) hideGlass();
+        if (!onTile) HalEyeDrawable.focused = false;
     };
 
     @Override
@@ -1535,6 +1604,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         cancelHoldOk();
         if (gameDay != null) gameDay.shutdown();
         if (ember != null) ember.shutdown();
+        if (screenOffRegistered) unregisterReceiver(screenOff);
+        if (perf != null) perf.stop();
         if (weatherNow != null) weatherNow.shutdown();
         if (exchangeRate != null) exchangeRate.shutdown();
         if (downloadNotes != null) downloadNotes.shutdown();
@@ -1587,6 +1658,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
      */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        // NZB-CC idle showcase: any button only brings Home back (its UP is swallowed too).
+        if (showcase != null && showcase.showing()) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                showcase.hide();
+                showcaseSwallowUp = event.getKeyCode();
+                restartIdleClock();
+            }
+            return true;
+        }
+        if (showcaseSwallowUp == event.getKeyCode() && event.getAction() != KeyEvent.ACTION_DOWN) {
+            if (event.getAction() == KeyEvent.ACTION_UP) showcaseSwallowUp = -1;
+            return true;
+        }
+        showcaseSwallowUp = -1;
         if (homeIgnoreChannelKeys && RemoteKeys.isChannelKey(event.getKeyCode())) return true;
         // Vendor keys (TCL Netflix button, 4062) never reach the key services, only the focused window, so their
         // "hold:" entries run here too or nowhere. Only while resumed: onPause releases Home's holds, and a DOWN
@@ -1967,6 +2052,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
     public void onTileFocused(int position, View card) {
         lastFocused = position;
         lastFocusedKey = adapter.keyAt(position);
+        HalEyeDrawable.focused = lastFocusedKey != null && lastFocusedKey.endsWith(".HalActivity");   // his eye glows
         // Focus restored before the first layout (cold start): the tile has no size yet, and the glass
         // would be sized to 2*pad. Run again once the tile is laid out.
         if (card.getWidth() == 0) {
@@ -3110,6 +3196,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         readyNote.setTranslationX(16 * density);
         readyNote.setVisibility(View.VISIBLE);
         readyNote.animate().alpha(1f).translationX(0f).setDuration(reducedMotion ? Motion.REDUCED_MS : 350).withEndAction(null).start();
+        if (ember != null) readyNote.post(() -> ember.burst(readyNote.getX() + readyNote.getWidth() / 2f,
+                readyNote.getY() + readyNote.getHeight() / 2f));   // a little burst of sparks
         handler.postDelayed(() -> readyNote.animate().alpha(0f).setDuration(reducedMotion ? Motion.REDUCED_MS : 450)
                 .withEndAction(() -> {
                     readyNote.setVisibility(View.GONE);
@@ -3290,7 +3378,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             // top edge), measured from what shows: the shelf's 9dp top padding and its 10dp under the posters
             // (2dp padding + 8dp card margin) are left out. Never so low that the app's name above the dock
             // (showHero: 40dp above the dock) touches the posters.
-            int visibleH = shown + shelfExtra - (int) (19 * density);
+            int visibleH = shown + shelfExtra - (int) (19 * density) + KodiRow.reflectionPx(shown);
             int visibleTop = top + Math.max(minGap, (dockTop - top - visibleH) / 2);
             int heroTop = dockTop - (int) (40 * density) - heroH;
             int over = visibleTop + visibleH - (heroTop - (int) (6 * density));
@@ -3389,6 +3477,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         hideGlass();
         hideHero();
         if (ember != null && ember.shown()) ember.show(item);
+        int at = kodiRow.items().indexOf(item), n = Math.min(5, kodiRow.count());
+        if (ember != null && at >= 0) {
+            ember.parallax(at, n);   // the art slides against the selection
+            HalEyeDrawable.watchX = n > 1 ? (at - (n - 1) / 2f) / ((n - 1) / 2f) : 0f;   // HAL watches it
+        }
         kodiFocusTitle.setText(item.title);
         kodiFocusMeta.setText(item.meta());
     }
@@ -3440,6 +3533,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
 
     @Override
     public void onKodiRowLeft() {
+        HalEyeDrawable.watchX = Float.NaN;
         kodiFocusTitle.setText("");
         kodiFocusMeta.setText("");
     }

@@ -133,7 +133,15 @@ experience on top of it, piece by piece, checking each change on the real TV.
   the screen, dimmed so the posters stand out, and fades to the next one as you move along the row. HAL's red glow
   rises from under the dock and gently breathes, a few embers drift slowly up the screen, and the art slowly
   drifts in and out. The posters' bars, the KODI tag and the dock's glass are HAL red; the top line keeps its own
-  look. (The motion pauses whenever an app is open, and is off when the TV's animations are off.) Without anything
+  look. The glow and the embers take the colour of the poster you're on (a little warmer in the evening, cooler in
+  the morning), each poster has a faint reflection under it as if the row stood on a glossy floor, the poster you
+  move to lifts and tilts toward you, and the art slides gently the other way as you move along the row.
+  **HAL's eye in the dock** is drawn as on his screen and the phone: it glances around, watches the selection move
+  along the posters, blinks now and then and glows brighter when you select him. When the TV is switched on, **HAL
+  wakes up**: his eye lights in the dark and a red pulse spreads out before Home fades in. A "Ready to watch" card
+  arrives with a burst of sparks. (The motion pauses whenever an app is open, and is off when the TV's animations
+  are off. While it's new, the TV reports its free memory, the home screen's memory and CPU, and how smoothly it
+  draws to the PC once a minute: a summary every 10 minutes in the phone server's log, and `GET /api/tv/perf`.) Without anything
   in Recently watched, it's the Sora font on a time-of-day sky (night blues, a warm sunset glow). There's a news
   ticker too (with Mexico News Daily), off by default because it was too busy.
 

@@ -136,3 +136,17 @@ row = m.tv_watched_row(fresh=True)
 assert row["updated"] > _t.time() - 5, row["updated"]
 assert [it["id"] for it in row["items"]][:1] == ["e42"]
 print("test_tv_watched part 3 OK")
+
+# The TV's resource readings (POST /api/tv/perf) are kept and summed up for the last hour
+m.TV_PERF_FILE = tmp / "tv_perf.json"
+m._tv_perf.clear()
+t0 = 1_000_000.0
+m.tv_perf_add({"avail_mb": 900, "total_mb": 2048, "app_mb": 180, "cpu": 6.5, "frames": 1000, "slow_frames": 20, "screen": "home"}, now=t0)
+m.tv_perf_add({"avail_mb": 700, "total_mb": 2048, "app_mb": 210, "cpu": 12, "frames": 1000, "slow_frames": 0, "freezes": 1,
+               "screen": "evil", "version": "x" * 99}, now=t0 + 60)
+s = m.tv_perf_summary(3600, now=t0 + 60)
+assert s["avail_mb_min"] == 700 and s["app_mb_max"] == 210 and s["cpu_max"] == 12 and s["cpu_avg"] == 9.2
+assert s["frames"] == 2000 and s["smooth_pct"] == 99.0 and s["freezes"] == 1
+assert m._tv_perf[-1]["screen"] == "away" and len(m._tv_perf[-1]["version"]) == 40
+assert m.tv_perf_summary(30, now=t0 + 200)["readings"] == 0
+print("test_tv_watched perf OK")
