@@ -143,7 +143,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
  <div class="mono" style="font-size:9.5px;opacity:.6;margin-top:10px;letter-spacing:.08em" id="dnsk">DNS · LAST 24 H</div>
  <div id="dns" style="display:flex;align-items:flex-end;gap:2px;height:52px;margin-top:6px"></div>
 </div>
-<div class="quote" id="quote"></div><div class="wave" id="wave"></div>
+<div class="quote" id="quote"></div>
 <div class="card glass alert" id="alert"><div class="ic">!</div><div><b id="at"></b><span id="ad"></span></div></div>
 <div class="card glass strip" id="strip"><div class="art"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg></div>
  <div class="t"><b id="dlt"></b><span id="dli"></span></div><div class="p"><div class="bar"><i id="pb"></i></div><span><b id="pct"></b><em id="dle" style="font-style:normal"></em></span></div></div>
@@ -223,7 +223,7 @@ setInterval(()=>{if(APP&&!say.speaking&&now()>60&&Math.random()<.5)try{HAL.say('
 const T0=performance.now(),now=()=>(performance.now()-T0)/1000;
 let tk='';for(let i=0;i<72;i++){const a=i*5*Math.PI/180,r1=139,r2=i%6?143:147;tk+=`<line x1="${(150+r1*Math.sin(a)).toFixed(1)}" y1="${(150-r1*Math.cos(a)).toFixed(1)}" x2="${(150+r2*Math.sin(a)).toFixed(1)}" y2="${(150-r2*Math.cos(a)).toFixed(1)}" stroke="rgba(255,210,190,${i%6?.25:.55})" stroke-width="1.2"/>`}
 $('ticks').innerHTML=tk;const tickEls=[...$('ticks').children];
-$('wave').innerHTML='<i></i>'.repeat(34);const waveEls=[...$('wave').children];
+
 const cards=[...document.querySelectorAll('#main .card')];
 // WebGL smoke + god rays
 const gl=null;let glOK=false,ut,W=$('gl').width,H=$('gl').height;
@@ -289,7 +289,6 @@ function render(t){
  const txt=String(say.text||''),shown=t<1.5?0:(say.frac>=0?Math.round(txt.length*Math.min(1,say.frac<0?1:say.frac)):txt.length);
  $('quote').className='quote'+(txt.length>110?' vlong':txt.length>70?' long':'');$('quote').innerHTML=t<1.5||!txt?'':'“'+esc(txt.slice(0,shown))+(shown<txt.length?'<span class="caret"></span>':'”');
  const speaking=say.speaking&&t>=3.6;
- waveEls.forEach((el,i)=>{const v=Math.abs(nz(t*7+i*.45,i));el.style.height=(3+(speaking?20:2)*v).toFixed(1)+'px'});
  
  const g=gaze(t);$('iris').setAttribute('transform',`translate(${(g[0]*17).toFixed(2)} ${(g[1]*17).toFixed(2)})`);
  document.querySelectorAll('.dv').forEach((b,i)=>b.style.width=(+b.dataset.w*ease((t-.6-i*.12)/1.2))+'%');
