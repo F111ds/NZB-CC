@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.25.1"
+VERSION = "1.25.2"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2654,16 +2654,16 @@ def tv_brief(st: dict) -> dict:
     if not alerts:
         hour = datetime.now().hour
         pool = QUOTES_NIGHT if hour >= 22 or hour < 6 else QUOTES_OK
-        for q in random.sample(pool, min(4, len(pool))):
+        for q in random.sample(pool, len(pool)):   # the whole pool, shuffled: OK on the TV walks through it
             q = q.format(name=name)
             if q != st["hal"]["quote"]:
                 lines.append({"text": q, "say": spoken(q)})
     if ph.get("ok") and ph.get("blocked"):
         q = f"Pi-hole has blocked {int(ph['blocked']):,} ads today, {name}."
-        lines.append({"text": q, "say": spoken(q)})
+        lines.insert(min(2, len(lines)), {"text": q, "say": spoken(q)})
     for a in alerts[1:]:
         lines.append({"text": a["title"] + ".", "say": spoken(a["title"] + ".")})
-    return {"greeting": st["hal"]["greeting"], "quote": quote, "say": spoken(say), "alerts": alerts, "voice": dict(TV_VOICE), "lines": lines[:8],
+    return {"greeting": st["hal"]["greeting"], "quote": quote, "say": spoken(say), "alerts": alerts, "voice": dict(TV_VOICE), "lines": lines[:16],
             "screen": tv_screen(st),
             "cpu_temp": v["cpu"].get("temp"), "mem_used": v["mem"].get("used"), "mem_total": v["mem"].get("total"),
             "ping": n.get("ping_ms"), "net_down": n.get("down"), "internet_down": down,
