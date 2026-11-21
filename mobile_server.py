@@ -83,7 +83,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.29.0"
+VERSION = "3.29.1"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -6158,7 +6158,7 @@ class MobileHandler(*((_hal_mod.HalRoutes,) if _hal_mod else ()), BaseHTTPReques
         if path in ("/icon.png", "/favicon.ico", "/apple-touch-icon.png"):
             self._send(200, ICON_PNG, "image/png", {"Cache-Control": "public, max-age=86400"})
             return
-        if path in ("/kodi", "/kodi/"):
+        if path in ("/kodi", "/kodi/", "/app/kodi", "/app/kodi/"):   # /app/kodi: reachable wherever /app is (e.g. behind a forwarding name)
             self._send(200, KODI_PAGE.replace("__VERSION__", VERSION).encode("utf-8"), "text/html; charset=utf-8")
             return
         if path == "/kodi.webmanifest":
