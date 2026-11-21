@@ -83,7 +83,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "3.29.1"
+VERSION = "3.30.0"
 # When packaged as an .exe, __file__ points into a temporary folder that is deleted on exit,
 # so settings and caches go next to the .exe instead.
 if getattr(sys, "frozen", False):
@@ -2421,6 +2421,80 @@ def _jf_cached(key: str, fn, ttl: float = JF_CACHE_SECONDS, force: bool = False)
 def jf_clear_cache() -> None:
     with _jf_lock:
         _jf_cache.clear()
+
+
+# ---------------------------------------------------------------------------------------------
+# Jellyfin rescan when its folders change (files deleted or added outside Sonarr/Radarr)
+# ---------------------------------------------------------------------------------------------
+
+JF_WATCH_EVERY_S = 600          # look at Jellyfin's folders every 10 minutes
+JF_WATCH_MIN_GAP_S = 600        # and ask for at most one rescan per 10 minutes
+JF_VIDEO_EXT = (".mkv", ".mp4", ".m4v", ".avi", ".ts", ".m2ts", ".wmv", ".mov", ".mpg", ".mpeg", ".webm", ".iso")
+
+
+def jf_library_folders(conf: dict | None = None) -> list[str]:
+    """Jellyfin's library folders that this PC can see (Jellyfin runs here)."""
+    out = []
+    for vf in jf_request("/Library/VirtualFolders", conf=conf, timeout=10) or []:
+        for loc in (vf.get("Locations") or []) if isinstance(vf, dict) else []:
+            if isinstance(loc, str) and os.path.isdir(loc) and loc not in out:
+                out.append(loc)
+    return out
+
+
+def video_files(folders: list[str], limit: int = 500_000) -> set:
+    """Every video file under the folders (paths), at most `limit` of them."""
+    seen = set()
+    for top in folders:
+        for root, dirs, files in os.walk(top):
+            dirs[:] = [d for d in dirs if not d.startswith((".", "$")) and d.lower() not in ("extrafanart", "trickplay")]
+            for f in files:
+                if f.lower().endswith(JF_VIDEO_EXT):
+                    seen.add(os.path.join(root, f))
+                    if len(seen) >= limit:
+                        return seen
+    return seen
+
+
+class JellyfinWatch:
+    """Every 10 minutes: the video files in Jellyfin's folders; when some are gone (deleted on the PC) or new ones
+    appeared, Jellyfin is asked to rescan, so it drops what's gone and Kodi's Jellyfin add-on follows."""
+
+    def __init__(self):
+        self.last: set | None = None
+        self.last_scan = 0.0
+        self.stop = threading.Event()
+
+    def check(self) -> dict | None:
+        if not jellyfin_configured():
+            self.last = None
+            return None
+        files = video_files(jf_library_folders())
+        if self.last is None:
+            self.last = files
+            return None
+        gone, new = self.last - files, files - self.last
+        self.last = files
+        if not (gone or new) or time.time() - self.last_scan < JF_WATCH_MIN_GAP_S:
+            return None
+        jf_request("/Library/Refresh", post=True, timeout=10)
+        jf_clear_cache()
+        self.last_scan = time.time()
+        res = {"gone": len(gone), "new": len(new), "example": os.path.basename(sorted(gone or new)[0])}
+        log.info("jellyfin auto-rescan: %d gone, %d new (e.g. %s)", res["gone"], res["new"], res["example"])
+        return res
+
+    def run(self) -> None:
+        while not self.stop.wait(JF_WATCH_EVERY_S if self.last is not None else 60):
+            try:
+                self.check()
+            except (UpstreamError, ConfigError, OSError) as exc:
+                log.info("jellyfin watch: %s", redact(exc))
+            except Exception:  # noqa: BLE001
+                log.exception("jellyfin watch")
+
+    def start(self) -> None:
+        threading.Thread(target=self.run, name="jellyfin-watch", daemon=True).start()
 
 
 def jf_user_id() -> str:
@@ -7138,6 +7212,7 @@ def main(argv=None) -> None:
     hal_note = start_embedded_hal(args)
     worker = BackgroundWorker()
     worker.start()
+    JellyfinWatch().start()   # Jellyfin rescans when files are deleted or added on the PC
     server.daemon_threads = True
     token = _token_bytes.decode("utf-8")
     local_ip = get_local_ip()

@@ -262,6 +262,9 @@ about your evening.
   turns up.
 - **Watch**: the TV (play, pause, volume, mute), HAL on the TV, continue watching, and your Kodi library. Movies and
   shows also play **on the phone** at home, through Jellyfin.
+  When video files are deleted (or added) on the PC outside Sonarr/Radarr, the phone server notices within about
+  10 minutes and asks Jellyfin to rescan, so the show drops out of Jellyfin and Kodi's Jellyfin add-on follows.
+  **Watch → Update library** does the same on demand (Jellyfin, then Kodi on the TV).
 - **System**: every system at a glance, with HAL's own pages for vitals, services, drives, network, security,
   power and the log. There's also HAL's record, chess against HAL, a wall display for a spare tablet, and a song.
 
