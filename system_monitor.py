@@ -27,6 +27,7 @@ import json
 import os
 import platform
 import re
+import struct
 import shutil
 import subprocess
 import sys
@@ -527,6 +528,144 @@ def parse_sensor_lines(lines: list[str], hw_names: list[str] | None = None) -> d
     return out
 
 
+# ---------------------------------------------------------------------------------------------
+# HWiNFO: its shared memory ("Shared Memory Support" in HWiNFO's settings), else its Gadget values in the registry
+# ---------------------------------------------------------------------------------------------
+
+HWINFO_SHM = "Global\\HWiNFO_SENS_SM2"
+_HWI_KIND = {1: "temps", 3: "fans", 5: "power"}
+_HWI_BOARD = re.compile(r"nuvoton|nct\d|\bite\b|it8\d|asus ec|embedded controller|fintek|winbond|super ?i/?o|gigabyte|asrock|msi ", re.I)
+
+
+def _cstr(b: bytes) -> str:
+    return b.split(b"\0", 1)[0].decode("utf-8", "replace").strip()
+
+
+def hwinfo_hw(sensor: str, idx: int) -> tuple[str, str]:
+    """(hardware id in LibreHardwareMonitor's style, label) for one of HWiNFO's sensor groups, so the same code
+    recognises drives, the graphics card, the CPU and the motherboard chip."""
+    low = sensor.lower()
+    m = re.match(r"s\.m\.a\.r\.t\.:\s*(.+?)(\s*\([^)]*\))?$", sensor, re.I)
+    if m or low.startswith(("drive:", "nvme")):
+        label = m.group(1) if m else re.sub(r"^(drive|nvme)[^:]*:\s*", "", sensor, flags=re.I)
+        return f"/ssd/hwinfo/{idx}", re.sub(r"\s*\([^)]*\)$", "", label).strip()
+    if low.startswith("gpu"):
+        return f"/gpu/hwinfo/{idx}", sensor
+    if low.startswith("cpu"):
+        return f"/cpu/hwinfo/{idx}", sensor
+    if _HWI_BOARD.search(sensor):
+        return f"/lpc/hwinfo/{idx}", sensor
+    return f"/hw/hwinfo/{idx}", sensor
+
+
+def parse_hwinfo_shm(buf: bytes) -> dict | None:
+    """HWiNFO's shared memory (SDK layout, packed): a 44-byte header, then sensor and reading elements."""
+    if len(buf) < 44:
+        return None
+    sig, _ver, _rev, _poll, s_off, s_size, s_n, r_off, r_size, r_n = struct.unpack_from("<IIIqIIIIII", buf, 0)
+    if sig != 0x53695748 or s_size < 264 or r_size < 316:   # "HWiS"; "DEAD" when HWiNFO turned it off
+        return None
+    sensors = []
+    for i in range(min(s_n, 512)):
+        o = s_off + i * s_size
+        if o + 264 > len(buf):
+            break
+        sensors.append(_cstr(buf[o + 136:o + 264]) or _cstr(buf[o + 8:o + 136]))
+    out = {"temps": [], "fans": [], "power": []}
+    for i in range(min(r_n, 4096)):
+        o = r_off + i * r_size
+        if o + 316 > len(buf):
+            break
+        kind_id, si = struct.unpack_from("<II", buf, o)
+        kind = _HWI_KIND.get(kind_id)
+        if not kind:
+            continue
+        value = struct.unpack_from("<d", buf, o + 284)[0]
+        if kind == "temps" and not (-20 < value < 150):
+            continue
+        hw, label = hwinfo_hw(sensors[si] if si < len(sensors) else "", si)
+        out[kind].append({"hw": hw, "label": label, "name": _cstr(buf[o + 140:o + 268]) or _cstr(buf[o + 12:o + 140]), "value": round(value, 1)})
+    return out
+
+
+def read_hwinfo_shm() -> dict | None:
+    if not IS_WINDOWS:
+        return None
+    import mmap
+    try:
+        m = mmap.mmap(-1, 44, HWINFO_SHM, access=mmap.ACCESS_READ)
+        head = m.read(44)
+        m.close()
+        sig, _v, _r, _p, s_off, s_size, s_n, r_off, r_size, r_n = struct.unpack_from("<IIIqIIIIII", head, 0)
+        if sig != 0x53695748:
+            return None
+        total = max(s_off + s_size * s_n, r_off + r_size * r_n)
+        if not 44 <= total <= 64 * 1024 * 1024:
+            return None
+        m = mmap.mmap(-1, total, HWINFO_SHM, access=mmap.ACCESS_READ)
+        buf = m[:]
+        m.close()
+        return parse_hwinfo_shm(buf)
+    except Exception:
+        return None
+
+
+def parse_hwinfo_gadget(vals: dict) -> dict | None:
+    """HWiNFO's Gadget values (HKCU\\Software\\HWiNFO64\\VSB: Sensor0, Label0, Value0, ValueRaw0, ...), for the readings
+    ticked "Report value in Gadget"."""
+    out = {"temps": [], "fans": [], "power": []}
+    for n in range(1000):
+        sensor = vals.get(f"Sensor{n}")
+        if sensor is None:
+            break
+        shown = str(vals.get(f"Value{n}") or "")
+        v = safe_num(vals.get(f"ValueRaw{n}"))
+        if v is None:
+            v = safe_num(re.sub(r"[^\d.,-]", "", shown).replace(",", "."))
+        kind = "temps" if "°" in shown else "fans" if "rpm" in shown.lower() else "power" if shown.endswith(" W") else None
+        if not kind or v is None:
+            continue
+        hw, label = hwinfo_hw(str(sensor), n)
+        out[kind].append({"hw": hw, "label": label, "name": str(vals.get(f"Label{n}") or ""), "value": v})
+    return out if (out["temps"] or out["fans"]) else None
+
+
+def read_hwinfo_gadget() -> dict | None:
+    if not IS_WINDOWS:
+        return None
+    try:
+        import winreg
+        k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\HWiNFO64\VSB")
+        vals, i = {}, 0
+        while True:
+            try:
+                name, val, _ = winreg.EnumValue(k, i)
+            except OSError:
+                break
+            vals[name] = val
+            i += 1
+        return parse_hwinfo_gadget(vals)
+    except Exception:
+        return None
+
+
+_HWI_EXTRA = re.compile(r"hot ?spot|junction|memory temp|\bvrm\b|\bmos(fet)?\b|chipset|\bpch\b", re.I)
+
+
+def merge_hwinfo(base: dict, hwi: dict | None) -> dict:
+    """LibreHardwareMonitor's readings, with HWiNFO's filling the gaps: its drive temperatures and the critical ones
+    (graphics card hot spot / memory, VRM, chipset), and its fans when LibreHardwareMonitor has none."""
+    if not hwi:
+        return base
+    out = {"temps": list(base.get("temps") or []), "fans": list(base.get("fans") or []), "power": list(base.get("power") or [])}
+    for t in hwi.get("temps") or []:
+        if t["hw"].startswith("/ssd/hwinfo/") or _HWI_EXTRA.search(t.get("name") or ""):
+            out["temps"].append(t)
+    if not out["fans"]:
+        out["fans"] = list(hwi.get("fans") or [])
+    return out
+
+
 _DISK_HW = ("/hdd", "/ssd", "/nvme", "/storage")
 
 
@@ -545,7 +684,15 @@ def disk_temps(temps: list[dict]) -> list[dict]:
         first = str(t.get("name") or "").strip().lower() in ("temperature", "composite temperature")
         if cur is None or (first and not cur["first"]):
             by[hw] = {"label": str(t["label"]), "value": v, "first": first}
-    return [{"label": d["label"], "value": d["value"]} for d in by.values()]
+    # the same drive from LibreHardwareMonitor and HWiNFO: keep LibreHardwareMonitor's
+    seen, out = set(), []
+    for hw, d in sorted(by.items(), key=lambda kv: "/hwinfo/" in kv[0]):
+        key = (re.sub(r"[^a-z0-9]", "", d["label"].lower()), "/hwinfo/" in hw)
+        twin = (key[0], False) in seen and key[1]
+        seen.add(key)
+        if not twin:
+            out.append({"label": d["label"], "value": d["value"]})
+    return out
 
 
 def _model_key(s: str) -> str:
@@ -1188,6 +1335,9 @@ class SystemMonitor:
         self._wmi_src = ""
         self._http_sensors: dict | None = None
         self._http_time = 0.0
+        self._hwinfo: dict | None = None
+        self._hwinfo_time = 0.0
+        self._hwinfo_src = ""
         self._prev_disk = None
         self._prev_net = None
         self._prev_ctx = None
@@ -1210,6 +1360,7 @@ class SystemMonitor:
             self._dxgi = read_dxgi_adapters()
             self._start_sensor_stream()
             self._spawn(self._lhm_http_loop, "lhm-http")
+            self._spawn(self._hwinfo_loop, "hwinfo")
             self._start_nvidia_stream()
         else:
             self.sources["GPU counters"] = "Windows only"
@@ -1485,19 +1636,37 @@ class SystemMonitor:
         with self._lock:
             wmi = self._wmi_sensors
             http_fresh = self._http_sensors is not None and time.monotonic() - self._http_time < 15
+            hwi = self._hwinfo if self._hwinfo and time.monotonic() - self._hwinfo_time < 30 else None
+            plus = f" + {self._hwinfo_src}" if hwi else ""
             if wmi and (wmi["temps"] or wmi["fans"]):
-                self._state["sensors"], self._state["sensor_source"] = wmi, self._wmi_src
-                self.sources["Temperatures"] = f"active ({self._wmi_src}, WMI)"
+                self._state["sensors"], self._state["sensor_source"] = merge_hwinfo(wmi, hwi), self._wmi_src + plus
+                self.sources["Temperatures"] = f"active ({self._wmi_src}, WMI{plus})"
             elif http_fresh and (self._http_sensors["temps"] or self._http_sensors["fans"]):
-                self._state["sensors"] = self._http_sensors
-                self._state["sensor_source"] = "LibreHardwareMonitor"
-                self.sources["Temperatures"] = f"active (LibreHardwareMonitor web server, port {self.settings.get('lhm_port', 8085)})"
+                self._state["sensors"] = merge_hwinfo(self._http_sensors, hwi)
+                self._state["sensor_source"] = "LibreHardwareMonitor" + plus
+                self.sources["Temperatures"] = f"active (LibreHardwareMonitor web server, port {self.settings.get('lhm_port', 8085)}{plus})"
+            elif hwi and (hwi["temps"] or hwi["fans"]):
+                self._state["sensors"], self._state["sensor_source"] = hwi, self._hwinfo_src
+                self.sources["Temperatures"] = f"active ({self._hwinfo_src})"
             else:
                 self._state["sensors"] = {"temps": [], "fans": [], "power": []}
                 self._state["sensor_source"] = ""
                 self.sources["Temperatures"] = (
                     "not found. In LibreHardwareMonitor turn on Options > Remote Web Server > Run "
                     f"(port {self.settings.get('lhm_port', 8085)}), or run this app as administrator")
+
+    def _hwinfo_loop(self) -> None:
+        """Reads HWiNFO when it runs: its shared memory, else the values it reports to its Gadget."""
+        while not self._stop.is_set():
+            res, src = read_hwinfo_shm(), "HWiNFO"
+            if not res:
+                res, src = read_hwinfo_gadget(), "HWiNFO Gadget"
+            with self._lock:
+                self._hwinfo, self._hwinfo_src = res, (src if res else "")
+                if res:
+                    self._hwinfo_time = time.monotonic()
+            self._apply_sensors()
+            self._stop.wait(3.0 if res else 15.0)
 
     def _lhm_http_loop(self) -> None:
         """Polls LibreHardwareMonitor's web server: works when WMI is blocked or switched off."""

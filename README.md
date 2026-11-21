@@ -514,6 +514,10 @@ Data sources: psutil; Windows GPU performance counters (any GPU vendor); `nvidia
 PowerShell/CIM for hardware, disk health and security status. Windows doesn't expose CPU temperatures or fan speeds by itself:
 run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) in the background and turn on its
 **Options > Remote Web Server > Run** (port 8085; the app also reads its WMI feed when that's available).
+**HWiNFO** works too: turn on its **Settings > Shared Memory Support** (or tick "Report value in Gadget" for the
+readings you want). HAL uses it alongside LibreHardwareMonitor for drive temperatures, the graphics card hot spot and
+memory, VRM and chipset, and for fans if LibreHardwareMonitor shows none; on its own if LibreHardwareMonitor isn't running.
+Drive temperatures come from each drive's own sensor (as CrystalDiskInfo shows them), not Windows' storage counter.
 **setup.ps1 › CPU temperatures for HAL** (`setup_lhm.ps1`) does this for you: it first looks for a copy you already
 have and uses it (downloading one only if there's none), turns on the web server, and starts it with Windows as administrator.
 Run as administrator to see drive temperatures and wear.
