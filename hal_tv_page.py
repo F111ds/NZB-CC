@@ -249,8 +249,8 @@ $('gl').style.opacity=0;
 const DOT=document.createElement('canvas');DOT.width=DOT.height=128;{const d=DOT.getContext('2d'),g=d.createRadialGradient(64,64,0,64,64,64);g.addColorStop(0,'rgba(255,215,160,1)');g.addColorStop(1,'rgba(255,90,30,0)');d.fillStyle=g;d.fillRect(0,0,128,128)}
 const sp=$('sp').getContext('2d'),fx=$('fx').getContext('2d'),FW=1920,FH=1080,EX=960,EY=298;
 let seed=7;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
-const sparks=Array.from({length:6},()=>({x:rnd()*FW,y:rnd()*FH,v:18+rnd()*40,r:1+rnd()*2.6,ph:rnd()*6.28,dr:(rnd()-.5)*20}));
-const motes=Array.from({length:18},()=>({s:Math.floor(rnd()*4),o:rnd(),v:.12+rnd()*.18,w:(rnd()-.5)*120,r:1+rnd()*1.8}));
+const sparks=Array.from({length:2},()=>({x:rnd()*FW,y:rnd()*FH,v:18+rnd()*40,r:1+rnd()*2.6,ph:rnd()*6.28,dr:(rnd()-.5)*20}));
+const motes=Array.from({length:5},()=>({s:Math.floor(rnd()*4),o:rnd(),v:.12+rnd()*.18,w:(rnd()-.5)*120,r:1+rnd()*1.8}));
 const srcPts=[[314*2,115*2],[314*2,312*2],[646*2,115*2],[646*2,312*2]];
 function gaze(t){
  if(t<1.5)return[0,0];
