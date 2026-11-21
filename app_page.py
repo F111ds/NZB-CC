@@ -1002,7 +1002,7 @@ function rWatch(){if(libView)return rLibrary();let x='<div class="narrow">'+topb
      '<button class="row" data-lib="movies"><span class="t"><b>Movies</b><span>'+(K&&K.counts&&K.counts.movies?K.counts.movies.toLocaleString()+' movies · search them':'Search your movies')+'</span></span><span class="m">›</span></button>'+
      '<button class="row" data-lib="shows"><span class="t"><b>Shows</b><span>'+(K&&K.counts&&K.counts.shows?K.counts.shows+' shows · seasons and episodes':'Seasons and episodes')+'</span></span><span class="m">›</span></button>'+
      '<button class="row" data-lib="missing"><span class="t"><b>Missing episodes</b><span>Gaps in your seasons, with Find</span></span><span class="m">›</span></button>'+
-     '<a class="row" href="/kodi" style="color:inherit;text-decoration:none"><span class="t"><b>Classic Kodi page</b><span>Full remote, type on TV, Jellyfin details</span></span><span class="m">›</span></a></div>';
+     '<a class="row" href="/app/kodi" style="color:inherit;text-decoration:none"><span class="t"><b>Classic Kodi page</b><span>Full remote, type on TV, Jellyfin details</span></span><span class="m">›</span></a></div>';
   return x+'</div>'}
 // System's top: one line for what needs you (the details are on Home) and one for the readings.
 function sysSummary(){if(!S)return'';const is=issues(),n=is.length,v=S.vitals,g=(v.gpus||[])[0],lv=is.some(i=>i.level==='critical')?'critical':n?'warning':'';
