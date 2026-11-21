@@ -247,6 +247,31 @@ nav.tabs button.on{color:#ffb59a;text-shadow:0 0 12px rgba(255,90,40,.9)}nav.tab
 .hwave{display:flex;gap:3px;justify-content:center;align-items:center;height:22px;margin-top:8px}
 .hwave i{width:3px;height:3px;border-radius:2px;background:linear-gradient(#ffb347,#ff3a1e);box-shadow:0 0 6px rgba(255,90,40,.8)}
 @media (prefers-reduced-motion:reduce){#ember{opacity:.9}}
+
+/* line icons (one family) instead of emoji */
+.ic{display:inline-block;width:1.15em;height:1.15em;vertical-align:-.2em;background:currentColor;-webkit-mask:var(--m) center/contain no-repeat;mask:var(--m) center/contain no-repeat;flex:none}
+.ic-play{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M8 5.5v13l10.5-6.5z%22/%3E%3C/svg%3E")}
+.ic-pause{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M9 5v14M15 5v14%22/%3E%3C/svg%3E")}
+.ic-stop{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Crect x=%226.5%22 y=%226.5%22 width=%2211%22 height=%2211%22 rx=%221.5%22/%3E%3C/svg%3E")}
+.ic-rew{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M11 6.5 4.5 12l6.5 5.5zM19.5 6.5 13 12l6.5 5.5z%22/%3E%3C/svg%3E")}
+.ic-ff{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M13 6.5 19.5 12 13 17.5zM4.5 6.5 11 12l-6.5 5.5z%22/%3E%3C/svg%3E")}
+.ic-next{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M6 6.5 13.5 12 6 17.5zM18 6v12%22/%3E%3C/svg%3E")}
+.ic-mute{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M11 5 6.5 9H3.5v6h3L11 19z%22/%3E%3Cpath d=%22m16 9.5 5 5M21 9.5l-5 5%22/%3E%3C/svg%3E")}
+.ic-speaker{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M11 5 6.5 9H3.5v6h3L11 19z%22/%3E%3Cpath d=%22M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13%22/%3E%3C/svg%3E")}
+.ic-lock{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Crect x=%225%22 y=%2211%22 width=%2214%22 height=%229.5%22 rx=%222%22/%3E%3Cpath d=%22M8 11V8a4 4 0 0 1 8 0v3%22/%3E%3C/svg%3E")}
+.ic-moon{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z%22/%3E%3C/svg%3E")}
+.ic-tv{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Crect x=%223%22 y=%225%22 width=%2218%22 height=%2212%22 rx=%222%22/%3E%3Cpath d=%22M8.5 21h7M12 17v4%22/%3E%3C/svg%3E")}
+.ic-power{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M12 3v8%22/%3E%3Cpath d=%22M6.3 6.8a8 8 0 1 0 11.4 0%22/%3E%3C/svg%3E")}
+.ic-shield{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z%22/%3E%3Cpath d=%22m9 12 2 2 4-4%22/%3E%3C/svg%3E")}
+.ic-shieldp{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z%22/%3E%3Cpath d=%22M10 9.5v5M14 9.5v5%22/%3E%3C/svg%3E")}
+.ic-gear{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Ccircle cx=%2212%22 cy=%2212%22 r=%223%22/%3E%3Cpath d=%22M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1%22/%3E%3C/svg%3E")}
+.ic-bolt{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M13 2.5 5 13.5h6l-1 8 8-11h-6z%22/%3E%3C/svg%3E")}
+.ic-chip{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Crect x=%226%22 y=%226%22 width=%2212%22 height=%2212%22 rx=%222%22/%3E%3Cpath d=%22M9 2.5v3.5M15 2.5v3.5M9 18v3.5M15 18v3.5M2.5 9H6M2.5 15H6M18 9h3.5M18 15h3.5%22/%3E%3C/svg%3E")}
+.ic-sub{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M4 5h16v11H9l-4 3.5V16H4z%22/%3E%3Cpath d=%22M8 10.5h3M13 10.5h3%22/%3E%3C/svg%3E")}
+.ic-audio{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M9 18V6l10-2v12%22/%3E%3Ccircle cx=%226.5%22 cy=%2218%22 r=%222.5%22/%3E%3Ccircle cx=%2216.5%22 cy=%2216%22 r=%222.5%22/%3E%3C/svg%3E")}
+.ic-back10{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M4 12a8 8 0 1 0 2.4-5.7%22/%3E%3Cpath d=%22M4 4v4.5h4.5%22/%3E%3C/svg%3E")}
+.ic-fwd30{--m:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M20 12a8 8 0 1 1-2.4-5.7%22/%3E%3Cpath d=%22M20 4v4.5h-4.5%22/%3E%3C/svg%3E")}
+.qb span .ic{width:22px;height:22px}.qb span{display:grid;place-items:center;height:24px}.remote .ic{width:20px;height:20px}.tvvol .ic{width:17px;height:17px;margin-right:4px}
 </style><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet"></head><body><canvas id="ember" aria-hidden="true"></canvas>
 
 <aside class="side" id="side">
@@ -384,19 +409,19 @@ function attention(max){const list=issues().slice(0,max).map(i=>'<div class="ale
 function downloadsCard(){if(!H)return'';if(H.sab_ok===false)return'<div class="card"><h3><span class="k">DOWNLOADS</span><span class="pill w">OFFLINE</span></h3><div class="sub">SABnzbd isn\'t answering: '+esc(H.sab_error||'')+'</div></div>';
   const c=H.current;if(!c)return'<div class="card"><h3><span class="k">DOWNLOADS</span><span class="pill o">IDLE</span></h3><div class="sub">Nothing downloading. What would you like, '+esc(NAME())+'?</div></div>';
   const s=secsOf(c.eta);return'<div class="card"><h3><span class="k">DOWNLOADING'+(H.total>1?' · 1 OF '+H.total:'')+'</span><span style="display:flex;gap:6px;align-items:center"><span class="pill'+(H.paused?' w':'')+'">'+esc(H.paused?'PAUSED':H.speed)+'</span>'+
-    '<button class="btn" data-q="'+(H.paused?'resume':'pause')+'">'+(H.paused?'▶':'❚❚')+'</button></span></h3><div class="tt">'+esc(c.name)+'</div>'+
+    '<button class="btn" data-q="'+(H.paused?'resume':'pause')+'">'+(H.paused?'<i class="ic ic-play"></i>':'<i class="ic ic-pause"></i>')+'</button></span></h3><div class="tt">'+esc(c.name)+'</div>'+
     '<div class="sub">'+f0(c.pct,'%')+' · '+esc(c.sizeleft||'')+' left'+(s!=null&&!H.paused?' · ready ~'+clock(Date.now()+s*1000):'')+'</div><div class="bar"><i style="width:'+(c.pct||0)+'%"></i></div></div>'}
 function tvCard(full){const k=H&&H.kodi;const p=k&&k.playing;
   if(!p&&k&&k.front){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span><span class="mono" style="color:#e8a598">● ON</span></h3>'+(k.front_title?'<div class="tt" style="font-size:17px">'+esc(k.front_title)+'</div><div class="sub">'+esc([k.front_sub,'on '+k.front,k.front_paused?'paused':''].filter(Boolean).join(' · '))+'</div>':'<div class="tt">'+esc(k.front)+' is on, '+esc(NAME())+'.</div><div class="sub">Kodi\'s there when you want it.</div>')+tvVol()+'</div>'}
   if(!p){if(!full)return'';return'<div class="card tvcard"><h3><span class="k">THE TV</span></h3><div class="tt">Nothing\'s playing, '+esc(NAME())+'.</div><div class="sub">'+(k&&k.configured===false?'Kodi isn\'t set up yet.':k&&k.online===false?'Kodi isn\'t answering (the TV may be off).':'Kodi is ready when you are.')+'</div>'+
     (H&&H.tv_ready?'<button class="btn r wide" style="margin-top:12px" data-tvon>Turn the TV on and open Kodi</button>':'')+tvVol()+'</div>'}
   const us=p.source==='usenet',chip=H&&H.stream_ready||us?srcChip(p.source):'';
-  return'<div class="card tvcard"><h3>'+(chip?'<span style="display:flex;align-items:center"><span class="k">NOW ON THE TV</span>'+chip+'</span>':'<span class="k">NOW ON THE TV</span>')+(full?'':'<button class="btn" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'▶ Play':'❚❚ Pause')+'</button>')+'</h3>'+
+  return'<div class="card tvcard"><h3>'+(chip?'<span style="display:flex;align-items:center"><span class="k">NOW ON THE TV</span>'+chip+'</span>':'<span class="k">NOW ON THE TV</span>')+(full?'':'<button class="btn" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'<i class="ic ic-play"></i> Play':'<i class="ic ic-pause"></i> Pause')+'</button>')+'</h3>'+
     '<div class="tt" style="font-size:'+(full?17:14)+'px">'+esc(p.title)+'</div><div class="sub">'+esc((p.sub?p.sub+' · ':'')+mmss(p.time)+' / '+mmss(p.total)+(chip&&full?(us?' · streaming from Usenet':' · from your movie folders'):''))+'</div><div class="bar"><i style="width:'+(p.pct||0)+'%;background:'+(us?'var(--sky)':'#ffb4a8')+'"></i></div>'+
-    (full?'<div class="remote"><button data-kc="seek_back" data-pid="'+p.playerid+'">⏪</button><button class="on" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'▶':'❚❚')+'</button><button data-kc="seek_fwd" data-pid="'+p.playerid+'">⏩</button><button data-kc="stop" data-pid="'+p.playerid+'">■</button><button data-kc="next" data-pid="'+p.playerid+'">⏭</button></div>'+
+    (full?'<div class="remote"><button data-kc="seek_back" data-pid="'+p.playerid+'"><i class="ic ic-rew"></i></button><button class="on" data-kc="playpause" data-pid="'+p.playerid+'">'+(p.paused?'<i class="ic ic-play"></i>':'<i class="ic ic-pause"></i>')+'</button><button data-kc="seek_fwd" data-pid="'+p.playerid+'"><i class="ic ic-ff"></i></button><button data-kc="stop" data-pid="'+p.playerid+'"><i class="ic ic-stop"></i></button><button data-kc="next" data-pid="'+p.playerid+'"><i class="ic ic-next"></i></button></div>'+
       tvVol():'')+'</div>'}
 // The TV's own volume (any app, not just Kodi). Quick taps add up and go as one.
-function tvVol(){return'<div class="tvvol"><span class="k">VOLUME</span><button data-tvkey="vol_down" aria-label="Quieter">−</button><button data-tvkey="mute" aria-label="Mute">🔇 Mute</button><button data-tvkey="vol_up" aria-label="Louder">+</button></div>'}
+function tvVol(){return'<div class="tvvol"><span class="k">VOLUME</span><button data-tvkey="vol_down" aria-label="Quieter">−</button><button data-tvkey="mute" aria-label="Mute"><i class="ic ic-mute"></i>Mute</button><button data-tvkey="vol_up" aria-label="Louder">+</button></div>'}
 let tvKeyQ={key:'',n:0,t:0};
 function tvKey(key,btn){if(btn){btn.classList.add('hit');setTimeout(()=>btn.classList.remove('hit'),180)}
   if(key==='mute'){sendTvKey('mute',1);return}
@@ -404,11 +429,11 @@ function tvKey(key,btn){if(btn){btn.classList.add('hit');setTimeout(()=>btn.clas
   tvKeyQ.key=key;tvKeyQ.n++;clearTimeout(tvKeyQ.t);tvKeyQ.t=setTimeout(()=>{const k=tvKeyQ.key,n=tvKeyQ.n;tvKeyQ={key:'',n:0,t:0};sendTvKey(k,n)},450)}
 async function sendTvKey(key,n){try{const r=await api('/hal/api/tv/key',{key,steps:n});if(!r.ok)toast(r.message,true)}catch(e){toast(e.message,true)}}
 function arrivedList(n){const a=(H&&H.arrived)||[];if(!a.length)return'';
-  return'<div class="sec"><span>JUST ARRIVED</span></div><div class="list">'+a.slice(0,n).map(x=>'<div class="row"><span class="s'+(x.watched?' off':'')+'"></span><span class="t"><b>'+esc(x.title+(x.year?' ('+x.year+')':''))+'</b><span>'+esc([x.quality,ago(x.added),x.watched?'watched':x.in_kodi?'in the library':''].filter(Boolean).join(' · '))+'</span></span><button class="btn r" data-play="'+esc(x.id)+'">▶ '+(DESK?'Play on TV':'TV')+'</button></div>').join('')+'</div>'}
+  return'<div class="sec"><span>JUST ARRIVED</span></div><div class="list">'+a.slice(0,n).map(x=>'<div class="row"><span class="s'+(x.watched?' off':'')+'"></span><span class="t"><b>'+esc(x.title+(x.year?' ('+x.year+')':''))+'</b><span>'+esc([x.quality,ago(x.added),x.watched?'watched':x.in_kodi?'in the library':''].filter(Boolean).join(' · '))+'</span></span><button class="btn r" data-play="'+esc(x.id)+'"><i class="ic ic-play"></i> '+(DESK?'Play on TV':'TV')+'</button></div>').join('')+'</div>'}
 function upcomingList(n,title){const u=(UP||(H&&H.upcoming)||[]).filter(x=>!x.has_file).slice(0,n);if(!u.length)return'';
   return'<div class="sec"><span>'+(title||'COMING UP')+'</span></div><div class="list">'+u.map(x=>'<div class="row"><span class="s"></span><span class="t"><b>'+esc(x.kind==='episode'?x.title+' S'+String(x.season).padStart(2,'0')+'E'+String(x.episode).padStart(2,'0'):x.title+(x.year?' ('+x.year+')':''))+'</b><span>'+esc(whenText(x.when)+(x.release?' · '+x.release:''))+'</span></span><span class="pill">'+(x.app==='sonarr'?'SONARR':'RADARR')+'</span></div>').join('')+'</div>'}
 function totals(){if(!H)return'';const z=H.disk_free_gb;return'<div class="card strip"><div><div class="k">DONE</div><div class="v">'+f0(H.done_today)+'</div></div><div><div class="k">FAILED</div><div class="v"'+(H.failed_today?' style="color:var(--red2)"':'')+'>'+f0(H.failed_today)+'</div></div><div><div class="k">IN QUEUE</div><div class="v">'+f0(H.total)+'</div></div><div><div class="k">FREE</div><div class="v">'+(z!=null&&z>=0?(z>=1024?(z/1024).toFixed(1)+'<small> TB</small>':Math.round(z)+'<small> GB</small>'):'—')+'</div></div></div>'}
-function jfList(){const j=(H&&H.jellyfin)||[];if(!j.length)return'';return'<div class="sec"><span>JELLYFIN</span></div><div class="list">'+j.map(x=>'<div class="row"><span class="s'+(x.paused?' warning':'')+'"></span><span class="t"><b>'+esc(x.device+' · '+x.title)+'</b><span>'+esc([x.method,x.quality,f0(x.pct,'%')].filter(Boolean).join(' · '))+'</span></span><button class="btn" data-jf="'+(x.paused?'unpause':'pause')+'" data-sid="'+esc(x.session)+'">'+(x.paused?'▶':'❚❚')+'</button><button class="btn" data-jf="stop" data-sid="'+esc(x.session)+'">■</button></div>').join('')+'</div>'}
+function jfList(){const j=(H&&H.jellyfin)||[];if(!j.length)return'';return'<div class="sec"><span>JELLYFIN</span></div><div class="list">'+j.map(x=>'<div class="row"><span class="s'+(x.paused?' warning':'')+'"></span><span class="t"><b>'+esc(x.device+' · '+x.title)+'</b><span>'+esc([x.method,x.quality,f0(x.pct,'%')].filter(Boolean).join(' · '))+'</span></span><button class="btn" data-jf="'+(x.paused?'unpause':'pause')+'" data-sid="'+esc(x.session)+'">'+(x.paused?'<i class="ic ic-play"></i>':'<i class="ic ic-pause"></i>')+'</button><button class="btn" data-jf="stop" data-sid="'+esc(x.session)+'"><i class="ic ic-stop"></i></button></div>').join('')+'</div>'}
 // A small graph of the last hour (HAL's history): a thin line with a soft fill.
 function spark(vals,color,h){vals=(vals||[]).filter(x=>x!=null);if(vals.length<2)return'';const mx=Math.max(...vals,1)*1.15,w=100;h=h||22;
   const pts=vals.map((v,i)=>(i*w/(vals.length-1)).toFixed(1)+','+(h-v*h/mx).toFixed(1)).join(' ');
@@ -436,13 +461,13 @@ function homeBody(){if(DESK)return'<div class="cols"><div>'+attention(3)+downloa
   return attention(3)+upsCard()+netCard()+piholeCard()+kumaCard()+vitals()+drivesCard()+restartCard()+tvCard(false)+jfList()+'<div class="sec"><span>EVERYTHING ELSE</span></div>'+systemsList(['network','storage','hardware','pihole','kuma'])+'<div class="sec"><span>QUICK BUTTONS</span></div>'+quickRow()}
 // TV off takes two taps (the first turns it amber for 4 seconds), so a stray one can't end a movie.
 let tvOffArmed=0;
-function tvOffBtn(){return Date.now()-tvOffArmed<4000?'<button class="qb warn" data-tvoff><span>⏻</span>Tap again</button>':'<button class="qb" data-tvoff><span>⏻</span>TV off</button>'}
+function tvOffBtn(){return Date.now()-tvOffArmed<4000?'<button class="qb warn" data-tvoff><span><i class="ic ic-power"></i></span>Tap again</button>':'<button class="qb" data-tvoff><span><i class="ic ic-power"></i></span>TV off</button>'}
 function quickRow(){const p=S&&S.pihole,ph=p&&p.found&&p.ok,paused=ph&&p.blocking===false;
   const b=(attr,ic,label,cls)=>'<button class="qb'+(cls?' '+cls:'')+'" '+attr+'><span>'+ic+'</span>'+label+'</button>';
-  return'<div class="qrow">'+b('data-qa="lock"','🔒','Lock PC')+b('data-qa="sleep"','🌙','Sleep')+b('data-tvon','📺','TV on')+tvOffBtn()+
-    (ph?(paused?b('data-phresume','🛡️','Ads on','warn'):b('data-phpause="5"','⏸️','Pause ads')):b('data-hal="log"','⚙️','More'))+'</div>'}
+  return'<div class="qrow">'+b('data-qa="lock"','<i class="ic ic-lock"></i>','Lock PC')+b('data-qa="sleep"','<i class="ic ic-moon"></i>','Sleep')+b('data-tvon','<i class="ic ic-tv"></i>','TV on')+tvOffBtn()+
+    (ph?(paused?b('data-phresume','<i class="ic ic-shield"></i>','Ads on','warn'):b('data-phpause="5"','<i class="ic ic-shieldp"></i>','Pause ads')):b('data-hal="log"','<i class="ic ic-gear"></i>','More'))+'</div>'}
 function upsCard(){const u=S&&S.power&&S.power.ups;if(!u||!u.on_battery)return'';
-  return'<div class="card" style="border:1px solid var(--red2)"><h3><span class="k" style="color:var(--red2)">⚡ POWER CUT · ON THE UPS</span><span class="mono">'+(u.since?ago(u.since):'')+'</span></h3>'+
+  return'<div class="card" style="border:1px solid var(--red2)"><h3><span class="k" style="color:var(--red2)"><i class="ic ic-bolt"></i> POWER CUT · ON THE UPS</span><span class="mono">'+(u.since?ago(u.since):'')+'</span></h3>'+
     '<div class="wgrid" style="margin-top:10px"><div><span class="k">BATTERY</span><b>'+f0(u.charge,'%')+'</b></div><div><span class="k">TIME LEFT</span><b>'+(u.runtime_s?mins(u.runtime_s):'—')+'</b></div><div><span class="k">LOAD</span><b>'+f0(u.load,'%')+'</b></div></div>'+
     '<div class="bar"><i style="width:'+(u.charge||0)+'%;background:'+((u.charge||0)<30?'var(--red2)':'var(--amber)')+'"></i></div>'+
     '<div class="sub" style="margin-top:8px;color:var(--soft);font-size:13px">'+(S.power.auto_shutdown?'I\'ll shut the PC down safely at '+S.power.shutdown_pct+'% or '+S.power.shutdown_min+' min left.':'Automatic shutdown is off.')+'</div></div>'}
@@ -486,7 +511,7 @@ function piholeCard(){const p=S&&S.pihole;if(!p||!p.found)return'';
 const upFor=s=>!s?'—':s>=86400?Math.floor(s/86400)+' d '+Math.floor(s%86400/3600)+' h':Math.floor(s/3600)+' h '+Math.floor(s%3600/60)+' min';
 const piTempCol=t=>t==null?'var(--soft)':t>=75?'var(--red2)':t>=65?'var(--amber)':'var(--green)';
 function piLine(hw){if(!hw||(hw.temp==null&&hw.cpu_pct==null))return'';
-  return'<div class="piline"><span>🍓</span><span class="grow">'+esc(hw.model?hw.model.replace(/ Model /,' ').replace(/ Rev [\d.]+$/,''):'Raspberry Pi')+'</span>'+
+  return'<div class="piline"><span><i class="ic ic-chip"></i></span><span class="grow">'+esc(hw.model?hw.model.replace(/ Model /,' ').replace(/ Rev [\d.]+$/,''):'Raspberry Pi')+'</span>'+
     (hw.temp!=null?'<b style="color:'+piTempCol(hw.temp)+'">'+Math.round(hw.temp)+'°C</b>':'')+(hw.cpu_pct!=null?'<b>CPU '+Math.round(hw.cpu_pct)+'%</b>':'')+(hw.mem_pct!=null?'<b>RAM '+Math.round(hw.mem_pct)+'%</b>':'')+'</div>'}
 function piCard(hw){if(!hw||(hw.temp==null&&hw.cpu_pct==null&&!hw.model))return'<div class="sec"><span>RASPBERRY PI</span></div><div class="list"><div class="empty">Pi-hole 6 tells me about the Pi itself; this one doesn\'t.</div></div>';
   return'<div class="sec"><span>RASPBERRY PI</span>'+(hw.update?'<span style="color:var(--sky)">UPDATE AVAILABLE</span>':'')+'</div><div class="card">'+
@@ -517,7 +542,7 @@ function shownResults(){let r=(results||[]).slice();
   return by?r.sort(by):r}
 // The queue, at the top of Get: what's downloading now, with the rest underneath.
 const brk=s=>esc(s).replace(/([._])/g,'$1<wbr>');
-function qBtns(s){const p=String(s.status).toLowerCase()==='paused';return'<button class="btn" data-qi="'+(p?'resume':'pause')+'" data-id="'+esc(s.id)+'" aria-label="'+(p?'Resume':'Pause')+'">'+(p?'▶':'❚❚')+'</button><button class="btn" data-qi="delete" data-id="'+esc(s.id)+'" data-name="'+esc(s.name)+'" aria-label="Remove">✕</button>'}
+function qBtns(s){const p=String(s.status).toLowerCase()==='paused';return'<button class="btn" data-qi="'+(p?'resume':'pause')+'" data-id="'+esc(s.id)+'" aria-label="'+(p?'Resume':'Pause')+'">'+(p?'<i class="ic ic-play"></i>':'<i class="ic ic-pause"></i>')+'</button><button class="btn" data-qi="delete" data-id="'+esc(s.id)+'" data-name="'+esc(s.name)+'" aria-label="Remove">✕</button>'}
 function queueTop(){if(H&&H.sab_ok===false)return'<div class="card"><h3><span class="k">QUEUE</span><span class="mono" style="color:var(--amber)">● NOT ANSWERING</span></h3><div class="tt" style="margin-top:8px">SABnzbd isn\'t answering, '+esc(NAME())+'.</div></div>';
   if(!Q)return'<div class="card"><h3><span class="k">QUEUE</span></h3><div class="sub" style="margin-top:8px">I\'m checking SABnzbd…</div></div>';
   const slots=Q.slots||[],paused=Q.state==='Paused',cur=slots.find(s=>String(s.status).toLowerCase()==='downloading')||slots[0];
@@ -526,7 +551,7 @@ function queueTop(){if(H&&H.sab_ok===false)return'<div class="card"><h3><span cl
     '<div class="sub" style="margin-top:6px;font:12px var(--mono);color:var(--soft)">'+esc([done?done+' finished today':'',free].filter(Boolean).join(' · '))+'</div></div>';
   const s=secsOf(cur.eta),at=s!=null&&s>0&&s<86400*3?'done '+clock(Date.now()+s*1000):'',left=s!=null&&s>0?(s>=3600?Math.floor(s/3600)+' h '+Math.round(s%3600/60)+' min':Math.max(1,Math.round(s/60))+' min')+' left':'';
   const rest=slots.filter(x=>x!==cur);
-  return'<div class="card"><h3><span class="k">'+(paused?'PAUSED':'DOWNLOADING')+' · '+slots.length+' IN QUEUE</span><button class="btn" data-q="'+(paused?'resume':'pause')+'">'+(paused?'▶ Resume all':'❚❚ Pause all')+'</button></h3>'+
+  return'<div class="card"><h3><span class="k">'+(paused?'PAUSED':'DOWNLOADING')+' · '+slots.length+' IN QUEUE</span><button class="btn" data-q="'+(paused?'resume':'pause')+'">'+(paused?'<i class="ic ic-play"></i> Resume all':'<i class="ic ic-pause"></i> Pause all')+'</button></h3>'+
     '<div class="qcur"><div class="tt">'+brk(cur.name)+'</div>'+qBtns(cur)+'</div><div class="bar"><i style="width:'+(cur.percentage||0)+'%"></i></div>'+
     '<div class="sub" style="display:flex;justify-content:space-between;gap:10px;margin-top:8px;font:12px var(--mono);color:var(--soft)"><span>'+esc([f0(cur.percentage,'%'),paused?'':Q.speed].filter(Boolean).join(' · '))+'</span><span>'+esc(paused?'paused':at)+'</span></div>'+
     '<div class="sub" style="margin-top:4px;font:12px var(--mono);color:var(--muted)">'+esc([cur.sizeleft?cur.sizeleft+' to go':'',paused?'':left,cur.cat].filter(Boolean).join(' · '))+'</div>'+
@@ -542,7 +567,7 @@ function rGet(){let x='<div class="narrow">'+topbar('Get')+queueTop()+'<form cla
   if(results&&!searching){const list=shownResults(),sz=sortBy==='size_desc'?'Size ↓':sortBy==='size_asc'?'Size ↑':'Size';
     x+='<div class="chiprow"><span>SORT</span>'+SORTS.map(o=>{const on=o[0]==='size'?sortBy.startsWith('size'):sortBy===o[0];return'<button data-sort="'+o[0]+'" class="'+(on?'on':'')+'">'+(o[0]==='size'?sz:o[1])+'</button>'}).join('')+'</div>';
     results.shown=list;
-    x+='<div class="sec"><span>'+list.length+' RESULT'+(list.length===1?'':'S')+(getCat?' · '+(getCat==='2000'?'MOVIES':'TV'):'')+'</span><button data-clear>CLEAR</button></div><div class="list">'+(list.length?list.slice(0,80).map(r=>'<div class="row"><span class="t"><b class="rname">'+brk(r.title)+'</b>'+resBadges(r)+(r.indexer?'<span>'+esc(r.indexer)+'</span>':'')+'</span>'+(r.added?'<span class="pill">ADDED</span>':H&&H.stream_ready?'<span class="stbtns"><button class="btn r" data-stream="'+esc(r.id)+'">▶ Stream</button><button class="btn g" data-add="'+esc(r.id)+'">+ Add</button></span>':'<button class="btn g" data-add="'+esc(r.id)+'">+ Add</button>')+'</div>').join(''):'<div class="empty">Nothing found, '+esc(NAME())+'. Try fewer words.</div>')+'</div>'}
+    x+='<div class="sec"><span>'+list.length+' RESULT'+(list.length===1?'':'S')+(getCat?' · '+(getCat==='2000'?'MOVIES':'TV'):'')+'</span><button data-clear>CLEAR</button></div><div class="list">'+(list.length?list.slice(0,80).map(r=>'<div class="row"><span class="t"><b class="rname">'+brk(r.title)+'</b>'+resBadges(r)+(r.indexer?'<span>'+esc(r.indexer)+'</span>':'')+'</span>'+(r.added?'<span class="pill">ADDED</span>':H&&H.stream_ready?'<span class="stbtns"><button class="btn r" data-stream="'+esc(r.id)+'"><i class="ic ic-play"></i> Stream</button><button class="btn g" data-add="'+esc(r.id)+'">+ Add</button></span>':'<button class="btn g" data-add="'+esc(r.id)+'">+ Add</button>')+'</div>').join(''):'<div class="empty">Nothing found, '+esc(NAME())+'. Try fewer words.</div>')+'</div>'}
   if(results&&!searching&&lastQuery)x+='<button class="btn wide" data-savesearch style="margin:-2px 0 12px">☆ Save this search: tell me when something new turns up</button>';
   x+='<div class="seg">'+[['upcoming','Coming up'],['history','History'],['saved','Saved']].map(s=>'<button data-seg="'+s[0]+'" class="'+(getSeg===s[0]?'on':'')+'">'+s[1]+'</button>').join('')+'</div>';
   if(getSeg==='history')x+=historyList();
@@ -587,9 +612,9 @@ function rLibrary(){let x='<div class="narrow">'+topbar('')+'<div class="top" st
   else if(libView==='missing'){if(!MISSING)return x+'<div class="list"><div class="empty">I\'m checking every season for gaps…</div></div></div>';
     x+=MISSING.length?'<div class="list">'+MISSING.map(g=>'<div class="row"><span class="s warning"></span><span class="t"><b>'+esc(g.show+' · Season '+g.season)+'</b><span>Missing episode'+(g.missing.length>1?'s ':' ')+esc(g.missing.join(', '))+'</span></span><button class="btn g" data-sopen="'+esc(g.show+' S'+String(g.season).padStart(2,'0')+'E'+String(g.missing[0]).padStart(2,'0'))+'" data-scat="5000">Find</button></div>').join('')+'</div>':'<div class="list"><div class="empty">No gaps in any season, '+esc(NAME())+'.</div></div>'}
   else if(libView==='show'){if(!SHOW)return x+'<div class="list"><div class="empty">I\'m asking Kodi…</div></div></div>';
-    x+='<h1 style="margin-top:6px">'+esc(SHOW.title||'')+'</h1>'+(SHOW.next?'<div class="card"><h3><span class="k">NEXT EPISODE</span><button class="btn r" data-ep="'+SHOW.next.id+'">▶ TV</button></h3><div class="tt">S'+SHOW.next.season+' E'+SHOW.next.episode+' · '+esc(SHOW.next.title)+'</div></div>':'');
+    x+='<h1 style="margin-top:6px">'+esc(SHOW.title||'')+'</h1>'+(SHOW.next?'<div class="card"><h3><span class="k">NEXT EPISODE</span><button class="btn r" data-ep="'+SHOW.next.id+'"><i class="ic ic-play"></i> TV</button></h3><div class="tt">S'+SHOW.next.season+' E'+SHOW.next.episode+' · '+esc(SHOW.next.title)+'</div></div>':'');
     (SHOW.seasons||[]).slice().reverse().forEach(se=>{x+='<div class="sec"><span>'+(se.season?'SEASON '+se.season:'SPECIALS')+'</span><span>'+se.episodes.filter(e=>e.watched).length+' / '+se.episodes.length+'</span></div><div class="list">'+
-      se.episodes.map(e=>'<div class="row"><span class="s'+(e.watched?' off':'')+'"></span><button class="t" data-item="episode:'+e.id+'"><b>'+esc('E'+e.episode+' · '+e.title)+'</b><span>'+esc(e.watched?'watched':e.resume?'started':'tap for phone or TV')+'</span></button><button class="btn r" data-ep="'+e.id+'">▶ TV</button></div>').join('')+
+      se.episodes.map(e=>'<div class="row"><span class="s'+(e.watched?' off':'')+'"></span><button class="t" data-item="episode:'+e.id+'"><b>'+esc('E'+e.episode+' · '+e.title)+'</b><span>'+esc(e.watched?'watched':e.resume?'started':'tap for phone or TV')+'</span></button><button class="btn r" data-ep="'+e.id+'"><i class="ic ic-play"></i> TV</button></div>').join('')+
       (se.missing&&se.missing.length?'<div class="row"><span class="s warning"></span><span class="t"><b>Missing: '+esc(se.missing.map(n=>'E'+n).join(', '))+'</b></span><button class="btn g" data-sopen="'+esc((SHOW.title||'')+' S'+String(se.season).padStart(2,'0')+'E'+String(se.missing[0]).padStart(2,'0'))+'" data-scat="5000">Find</button></div>':'')+'</div>'})}
   return x+'</div>'}
 // ---- Watch on the phone (home Wi-Fi only; Jellyfin streams it through the PC) ----
@@ -610,9 +635,9 @@ function rItem(){const it=ITEM;if(!it)return'<div class="list"><div class="empty
     '<div class="k" style="margin-top:12px">IN JELLYFIN</div><div class="'+(it.matched?'okc':'warnc')+'">● '+(it.matched?'Matched':it.jellyfin?'Not found':'Not connected')+'</div></div></div>';
   const resume=it.start>=30,can=it.matched&&it.home;
   if(resume&&it.runtime)x+='<div class="card"><h3><span class="k">'+(it.on_phone?'WATCHED ON PHONE':'WATCHED SO FAR')+'</span><span class="mono">'+mmss(it.start)+' / '+mmss(it.runtime)+'</span></h3><div class="pbar"><i style="width:'+Math.min(100,it.start/it.runtime*100).toFixed(1)+'%"></i></div></div>';
-  x+='<button class="btn r wide big" data-wplay="'+(resume?it.start:0)+'"'+(can?'':' disabled')+'>▶&nbsp; '+(!it.home?(resume?'Resume':'Watch')+' on phone · at home only':resume?'Resume on phone · '+mmss(it.start):'Watch on phone')+'</button>';
+  x+='<button class="btn r wide big" data-wplay="'+(resume?it.start:0)+'"'+(can?'':' disabled')+'><i class="ic ic-play"></i>&nbsp; '+(!it.home?(resume?'Resume':'Watch')+' on phone · at home only':resume?'Resume on phone · '+mmss(it.start):'Watch on phone')+'</button>';
   if(!it.home)x+='<div class="away">You\'re not on home Wi-Fi, so this would use mobile data.</div>';
-  x+='<div class="crow">'+(resume?'<button class="btn wide half" data-wplay="0"'+(can?'':' disabled')+'>Start over</button>':'')+'<button class="btn wide half" data-'+(ep?'ep':'movie')+'="'+it.id+'">📺&nbsp; Play on TV</button></div>';
+  x+='<div class="crow">'+(resume?'<button class="btn wide half" data-wplay="0"'+(can?'':' disabled')+'>Start over</button>':'')+'<button class="btn wide half" data-'+(ep?'ep':'movie')+'="'+it.id+'"><i class="ic ic-tv"></i>&nbsp; Play on TV</button></div>';
   x+='<div class="dline"><div class="eye sm"></div><div>“'+esc(itemLine(it))+'”</div></div>';
   if(it.plot)x+='<p class="plot">'+esc(it.plot)+'</p>';return x}
 
@@ -623,21 +648,21 @@ function wOpen(start){if(!ITEM)return;if(!CAN_HLS){toast('This browser can\'t pl
 function playerHtml(){const it=PL.it,ep=it.kind==='episode';
   return'<div class="phead"><button class="pbtn" data-wclose aria-label="Close">⌄</button><span class="k">NOW PLAYING ON PHONE</span><button class="pbtn" data-wopts aria-label="Playback options">⋯</button></div>'+
   '<div class="pvid"><video id="pv" playsinline controls preload="auto" x-webkit-airplay="allow"></video></div><div class="pbody">'+
-  '<div class="pctl"><button data-wseek="-10">↺ 10</button><button data-wpp id="wpp">❚❚</button><button data-wseek="30">30 ↻</button></div>'+
+  '<div class="pctl"><button data-wseek="-10"><i class="ic ic-back10"></i> 10</button><button data-wpp id="wpp"><i class="ic ic-pause"></i></button><button data-wseek="30">30 <i class="ic ic-fwd30"></i></button></div>'+
   '<div class="ititle" style="font-size:21px">'+esc(ep?it.show:it.title)+'</div><div class="imeta">'+esc(ep?'S'+it.season+' E'+it.episode+' · '+it.title:[it.year,it.runtime?mins(it.runtime):''].filter(Boolean).join(' · '))+'</div>'+
   '<div class="ichips" id="wchips"></div>'+
   '<div class="card" style="margin-top:14px"><h3><span class="k">STREAM</span><span id="wstate" class="mono">…</span></h3><div class="wgrid"><div><span class="k">QUALITY</span><b id="wq">—</b></div><div><span class="k">PC</span><b id="wpc">—</b></div><div><span class="k">LEFT</span><b id="wleft">—</b></div></div></div>'+
-  '<div class="crow"><button class="btn wide half" data-wtv>📺&nbsp; Move to TV</button>'+(it.web?'<a class="btn wide half" style="text-align:center;text-decoration:none" href="'+esc(it.web)+'" target="_blank" rel="noopener">Open in Jellyfin</a>':'')+'</div>'+
+  '<div class="crow"><button class="btn wide half" data-wtv><i class="ic ic-tv"></i>&nbsp; Move to TV</button>'+(it.web?'<a class="btn wide half" style="text-align:center;text-decoration:none" href="'+esc(it.web)+'" target="_blank" rel="noopener">Open in Jellyfin</a>':'')+'</div>'+
   '<div class="dline"><div class="eye sm"></div><div>“Enjoy the '+(ep?'show':'film')+', '+esc(NAME())+'. I\'ll remember where you stop.”</div></div></div>'}
 const QN={best:'Best',1080:'1080p',720:'720p'};
 function wInfo(){const v=$('pv');if(!PL||!v)return;const it=PL.it,h=v.videoHeight;
   const sub=PL.sub==null?'Subs off':((it.subs.find(s=>s.index===PL.sub)||{}).label||'Subtitles'),au=PL.audio==null?((it.audio.find(a=>a.default)||it.audio[0]||{}).label||''):((it.audio.find(a=>a.index===PL.audio)||{}).label||'');
-  if($('wchips'))$('wchips').innerHTML=['⚙ '+QN[PL.quality],'💬 '+sub,au?'🔈 '+au:''].filter(Boolean).map(c=>'<button data-wopts>'+esc(c)+'</button>').join('');
+  if($('wchips'))$('wchips').innerHTML=[['gear',QN[PL.quality]],['sub',sub],au?['audio',au]:null].filter(Boolean).map(c=>'<button data-wopts><i class="ic ic-'+c[0]+'"></i> '+esc(c[1])+'</button>').join('');
   const st=$('wstate');if(st){st.textContent=PL.state;st.style.color=PL.state==='● SMOOTH'?'var(--green)':PL.state.startsWith('●')?'var(--amber)':'var(--soft)'}
   if($('wq'))$('wq').textContent=h?(h>=1600?'4K':h>=900?'1080p':h>=650?'720p':h+'p'):'—';
   if($('wpc'))$('wpc').textContent=PL.direct?'direct':'converting';
   if($('wleft'))$('wleft').textContent=v.duration&&isFinite(v.duration)?mmss(v.duration-v.currentTime):'—';
-  if($('wpp'))$('wpp').textContent=v.paused?'▶':'❚❚'}
+  if($('wpp'))$('wpp').innerHTML=v.paused?'<i class="ic ic-play"></i>':'<i class="ic ic-pause"></i>'}
 function wWire(){const v=$('pv');const set=s=>{if(PL){PL.state=s;wInfo()}};
   v.addEventListener('waiting',()=>set('● LOADING'));v.addEventListener('playing',()=>set('● SMOOTH'));v.addEventListener('stalled',()=>set('● SLOW'));
   v.addEventListener('pause',()=>{wInfo();wSave(true)});v.addEventListener('play',wInfo);v.addEventListener('loadedmetadata',wInfo);
@@ -763,7 +788,7 @@ function openChess(){const c=$('chess');CH.st=chessStart();CH.sel=-1;CH.last=nul
 function closeChess(){$('chess').classList.add('hidden');$('chess').innerHTML='';document.body.classList.remove('noscroll')}
 function drawChess(){const st=CH.st,ms=legal(st),over=!ms.length,chk=inCheck(st);
   const targets=new Set(CH.sel>=0?ms.filter(m=>m.f===CH.sel).map(m=>m.t):[]);
-  let x='<div class="phead"><button class="pbtn" data-chclose aria-label="Close">⌄</button><span class="k">CHESS WITH HAL</span><button class="pbtn" data-chnew aria-label="New game">↺</button></div>';
+  let x='<div class="phead"><button class="pbtn" data-chclose aria-label="Close">⌄</button><span class="k">CHESS WITH HAL</span><button class="pbtn" data-chnew aria-label="New game"><i class="ic ic-back10"></i></button></div>';
   x+='<div class="chline"><div class="eye sm '+(over&&st.turn==='w'&&chk?'critical':'')+'"></div><div>“'+esc(CH.line)+'”</div></div>';
   x+='<div class="board">';
   for(let sq=0;sq<64;sq++){const p=st.b[sq],dark=((sq>>3)+(sq&7))%2===1;
@@ -818,15 +843,15 @@ let TVP=null;
 const tvOpen=()=>!!(S&&S.tvhal&&S.tvhal.open);
 function halTvCard(){const on=tvOpen();
   return'<div class="card"><h3><span class="k">HAL ON THE TV</span><span class="mono" style="color:var(--'+(on?'green':'soft')+')">● '+(on?'ON THE TV NOW':'NOT SHOWING')+'</span></h3>'+
-    '<button class="btn r wide big" data-tvshow style="margin-top:12px">📺&nbsp; Show HAL on the TV</button>'+
-    '<button class="btn wide" data-tvtalk style="margin-top:8px;padding:13px">🔊&nbsp; Talk on the TV…</button>'+
+    '<button class="btn r wide big" data-tvshow style="margin-top:12px"><i class="ic ic-tv"></i>&nbsp; Show HAL on the TV</button>'+
+    '<button class="btn wide" data-tvtalk style="margin-top:8px;padding:13px"><i class="ic ic-speaker"></i>&nbsp; Talk on the TV…</button>'+
     '<div class="sub" style="color:var(--soft);font-size:13px;margin-top:10px">Pops up over whatever is on. Back closes it, OK makes him talk.</div></div>'}
 async function tvSend(say,btn){if(btn)btn.disabled=true;toast(say?'Sending it to the TV…':'Opening HAL on the TV…');
   try{const r=await api('/hal/api/tv/show',{say:say||''});toast(r.message,!r.ok);setTimeout(refresh,1500)}catch(e){toast(e.message,true)}finally{if(btn)btn.disabled=false}}
 async function openTalk(){try{TVP=await api('/hal/api/tv/phrases')}catch(e){TVP={phrases:[],open:tvOpen()}}renderTalk()}
 function renderTalk(){const on=TVP.open||tvOpen(),chips=(a,saved)=>'<div class="tvchips">'+a.map(p=>'<button data-tvsay="'+esc(p)+'"'+(saved?' data-tvsaved="'+esc(p)+'"':'')+'>'+(saved?'★ ':'')+esc(saved?p:shortP(p))+'</button>').join('')+'</div>';
   let x='<h2 style="margin:0 0 4px">Talk on the TV</h2><p class="hint" style="text-align:left;margin:0 0 14px">● '+(on?'<span style="color:var(--green)">HAL is on the TV screen now.</span> He speaks within a few seconds.':'<span style="color:var(--amber)">HAL isn\'t on the TV right now.</span> Sending something opens his screen and he says it.')+'</p>'+
-    '<button class="btn r wide big" data-tvshow>🔊&nbsp; Say his line</button>'+
+    '<button class="btn r wide big" data-tvshow><i class="ic ic-speaker"></i>&nbsp; Say his line</button>'+
     '<div class="sec" style="margin-top:20px"><span>OR TELL HIM WHAT TO SAY</span></div>'+
     '<textarea id="tvmsg" maxlength="300" placeholder="Movie night in ten minutes, Dave." style="width:100%;height:84px;font:16px -apple-system,Inter,sans-serif;padding:12px;border-radius:12px;background:var(--card);color:var(--white);border:1px solid var(--line);box-sizing:border-box"></textarea>'+
     '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn wide" data-tvsend style="flex:2;padding:13px;background:#3a0d0a;color:#ffd9d2">Send to the TV</button><button class="btn wide" data-tvsave style="flex:1;padding:13px">☆ Save</button></div>';
@@ -841,13 +866,13 @@ function renderTalk(){const on=TVP.open||tvOpen(),chips=(a,saved)=>'<div class="
 
 const mins=s=>s>=3600?Math.floor(s/3600)+' h '+String(Math.round(s%3600/60)).padStart(2,'0'):Math.round(s/60)+' min';
 function movieRow(m,finish){const meta=[m.year,m.runtime?mins(m.runtime):'',m.imdb?'IMDb '+Number(m.imdb).toFixed(1):'',finish&&m.runtime?mins(Math.max(0,m.runtime-m.resume))+' left':'',!finish&&m.watched?'watched':''].filter(Boolean).join(' · ');
-  return'<div class="row"><span class="s'+(m.watched?' off':'')+'"></span><button class="t" data-item="movie:'+m.id+'"><b>'+esc(m.title)+(K&&K.streams&&K.streams.configured?srcChip('pc'):'')+'</b><span>'+esc(meta)+'</span></button><button class="btn r" data-movie="'+m.id+'">▶ TV</button></div>'}
+  return'<div class="row"><span class="s'+(m.watched?' off':'')+'"></span><button class="t" data-item="movie:'+m.id+'"><b>'+esc(m.title)+(K&&K.streams&&K.streams.configured?srcChip('pc'):'')+'</b><span>'+esc(meta)+'</span></button><button class="btn r" data-movie="'+m.id+'"><i class="ic ic-play"></i> TV</button></div>'}
 function rWatch(){if(libView)return rLibrary();let x='<div class="narrow">'+topbar('Watch')+tvCard(true)+halTvCard();
   if(K===null)x+='<div class="list"><div class="empty">I\'m asking Kodi…</div></div>';
   else if(K.online===false&&K.configured!==false)x+='<div class="list"><div class="empty">Kodi isn\'t answering, '+esc(NAME())+'. '+(H&&H.tv_ready?'Turn the TV on above.':'Turn the TV on and open Kodi.')+'</div></div>';
-  const c=K&&K.continue||[];if(c.length)x+='<div class="sec"><span>CONTINUE WATCHING</span></div><div class="list">'+c.map(it=>'<div class="row"><span class="s"></span><span class="t"><b>'+esc(it.show.title+' · S'+it.episode.season+' E'+it.episode.episode)+'</b><span>'+esc(it.episode.title+' · '+it.show.watched+' of '+it.show.episodes+' watched')+'</span></span><button class="btn r" data-ep="'+it.episode.id+'">▶ TV</button></div>').join('')+'</div>';
+  const c=K&&K.continue||[];if(c.length)x+='<div class="sec"><span>CONTINUE WATCHING</span></div><div class="list">'+c.map(it=>'<div class="row"><span class="s"></span><span class="t"><b>'+esc(it.show.title+' · S'+it.episode.season+' E'+it.episode.episode)+'</b><span>'+esc(it.episode.title+' · '+it.show.watched+' of '+it.show.episodes+' watched')+'</span></span><button class="btn r" data-ep="'+it.episode.id+'"><i class="ic ic-play"></i> TV</button></div>').join('')+'</div>';
   const st=K&&K.streams&&K.streams.items||[];
-  if(st.length)x+='<div class="sec"><span>STREAMED LATELY</span></div><div class="list">'+st.slice(0,6).map(it=>'<div class="row"><span class="s'+(it.played?' off':'')+'"></span><span class="t"><b>'+esc(it.title)+srcChip('usenet')+'</b><span>'+esc([it.year,it.res,it.played?'watched '+ago(it.played):'streamed '+ago(it.t)].filter(Boolean).join(' · '))+'</span></span><button class="btn r" data-sttv="'+esc(it.id)+'">▶ TV</button></div>').join('')+'</div>'+
+  if(st.length)x+='<div class="sec"><span>STREAMED LATELY</span></div><div class="list">'+st.slice(0,6).map(it=>'<div class="row"><span class="s'+(it.played?' off':'')+'"></span><span class="t"><b>'+esc(it.title)+srcChip('usenet')+'</b><span>'+esc([it.year,it.res,it.played?'watched '+ago(it.played):'streamed '+ago(it.t)].filter(Boolean).join(' · '))+'</span></span><button class="btn r" data-sttv="'+esc(it.id)+'"><i class="ic ic-play"></i> TV</button></div>').join('')+'</div>'+
     '<p class="hint" style="text-align:left;margin-top:-4px">Streamed movies aren\'t on your PC. They play while AltMount is running.</p>';
   const rec=K&&K.recent||[],part=rec.filter(m=>m.resume>60&&!m.watched);
   if(part.length)x+='<div class="sec"><span>FINISH WATCHING</span></div><div class="list">'+part.slice(0,4).map(m=>movieRow(m,true)).join('')+'</div>';
@@ -953,12 +978,12 @@ function renderStream(open){const j=STJ;if(!j)return;const n=esc(NAME());let x='
       '<p class="hint" style="text-align:left">Nothing downloads, '+n+'. This usually takes under a minute.</p><button class="btn wide" data-stcancel>Cancel</button>'}
   else if(j.state==='ready'){x+='<h2 style="margin:0 0 4px">Ready to watch</h2><p class="hint" style="text-align:left;margin:0 0 14px">'+esc([name,j.res].filter(Boolean).join(' · '))+'</p>'+
       '<div class="card"><h3><span class="k" style="color:var(--sky)">'+ICO_CLOUD+'STREAMING FROM USENET</span><span class="mono" style="color:var(--green)">● READY</span></h3><div class="sub" style="margin-top:8px;color:var(--soft);font-size:13px">Takes no disk space · plays as long as AltMount is running on the PC</div></div>'+
-      '<button class="btn r wide big" data-sttv="'+esc(j.stream_id)+'" style="margin-top:4px">📺 Play on TV</button><button class="btn wide" data-stphone="'+esc(j.stream_id)+'" style="margin-top:10px">Watch on phone</button>'+
+      '<button class="btn r wide big" data-sttv="'+esc(j.stream_id)+'" style="margin-top:4px"><i class="ic ic-tv"></i> Play on TV</button><button class="btn wide" data-stphone="'+esc(j.stream_id)+'" style="margin-top:10px">Watch on phone</button>'+
       (j.rid?'<div class="sec"><span>WANT TO KEEP IT?</span></div><button class="btn g wide" data-stkeep="'+esc(j.rid)+'">+ Download a copy too</button><p class="hint" style="text-align:left">Sends it to SABnzbd as usual, so it stays in your library even when the stream is gone.</p>':'')+
       '<button class="btn wide" data-stclose style="margin-top:6px">Close</button>'}
   else if(j.state==='failed'){const setup=j.kind==='setup'||j.kind==='offline',next=setup?null:nextStreamable(j.rid);
     x+='<h2 style="margin:0 0 4px">'+(setup?'Streaming needs a hand':'Can\'t stream this one')+'</h2><p class="hint" style="text-align:left;margin:0 0 12px">'+esc(j.release||'')+'</p><div class="warnbox">'+esc(j.message||'Something went wrong.')+'</div>';
-    if(next)x+='<div class="sec"><span>TRY ANOTHER RELEASE</span></div><div class="list"><div class="row"><span class="t"><b class="rname">'+brk(next.title)+'</b>'+resBadges(next)+'</span><button class="btn r" style="flex:none" data-stream="'+esc(next.id)+'">▶ Stream</button></div></div>';
+    if(next)x+='<div class="sec"><span>TRY ANOTHER RELEASE</span></div><div class="list"><div class="row"><span class="t"><b class="rname">'+brk(next.title)+'</b>'+resBadges(next)+'</span><button class="btn r" style="flex:none" data-stream="'+esc(next.id)+'"><i class="ic ic-play"></i> Stream</button></div></div>';
     if(j.rid&&!setup)x+='<div class="sec"><span>'+(next?'OR':'DOWNLOAD IT INSTEAD')+'</span></div><button class="btn g wide big" data-stkeep="'+esc(j.rid)+'">+ Download it instead</button>';
     if(setup)x+='<button class="btn wide" data-conn style="margin-top:6px">Open Connections</button>';
     x+='<button class="btn wide" data-stclose style="margin-top:8px">Close</button>'}
@@ -1082,7 +1107,7 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if(d.q){act(()=>api('/api/queue/'+d.q,{}),d.q==='pause'?'Downloads paused.':'Downloads resumed.');return}
   if(d.qi){if(d.qi==='delete'&&!confirm('Remove '+(d.name||'this download')+' from the queue?'))return;act(()=>api('/api/queue/item',{id:d.id,action:d.qi}),d.qi==='delete'?'Removed.':null);return}
   if(d.stream){openStream(d.stream);return}
-  if(d.sttv){c.disabled=true;c.textContent='Starting…';streamTv(d.sttv).finally(()=>{c.disabled=false;c.textContent=c.closest('.row')?'▶ TV':'📺 Play on TV'});return}
+  if(d.sttv){c.disabled=true;c.textContent='Starting…';streamTv(d.sttv).finally(()=>{c.disabled=false;c.innerHTML=c.closest('.row')?'<i class="ic ic-play"></i> TV':'<i class="ic ic-tv"></i> Play on TV'});return}
   if(d.stphone){streamPhone(d.stphone);return}
   if(d.stkeep){c.disabled=true;c.textContent='Adding…';api('/api/add',{id:d.stkeep,category:'',priority:''}).then(r=>{const it=(results||[]).find(x=>x.id===d.stkeep);if(it)it.added=true;c.textContent='Added ✓';toast('Added'+(r.category?' to '+r.category:'')+'. I\'ll let you know when it\'s ready, '+NAME()+'.');render();loadQueue()}).catch(err=>{c.disabled=false;c.textContent='+ Download';toast(err.message,true)});return}
   if('stcancel' in d){if(STJ&&STJ.id)api('/api/stream/cancel',{job:STJ.id}).catch(()=>{});STJ=null;clearTimeout(STT);$('sheet').classList.add('hidden');return}
