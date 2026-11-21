@@ -227,7 +227,8 @@ body.noscroll{overflow:hidden}
  --mono:"JetBrains Mono",ui-monospace,"SF Mono","Cascadia Mono",Consolas,monospace}
 html{background:#0a0405}body{background:transparent!important}
 body{font-family:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
-#ember{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;display:block}
+#ember{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none;display:block;
+ background:radial-gradient(circle at 50% 24%,rgba(120,26,8,.75),rgba(60,10,4,.35) 22%,transparent 48%),radial-gradient(ellipse 110% 75% at 50% 38%,#1c0605,#070203 72%)}
 .card,.list,.cbox{background:linear-gradient(160deg,rgba(255,255,255,.11),rgba(255,255,255,.035) 60%);border:1px solid rgba(255,255,255,.12);border-radius:20px;
  backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);box-shadow:0 12px 30px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.14)}
 .qb,.ib,.seg,.vt div,.pbtn,.tvchips button,.chiprow button,.pctl button,.search input{background:rgba(255,236,228,.08);border:1px solid rgba(255,255,255,.12);
@@ -1276,8 +1277,10 @@ const HSP=Array.from({length:10},(_,i)=>({a:i/10*6.283+Math.sin(i*7)*.4,o:(i*.37
 function halSparks(t){const c=document.getElementById('hsparks');if(!c)return;const x=c.getContext('2d'),C=316,W=632;x.clearRect(0,0,W,W);
  for(const m of HSP){const p=(m.o+t*m.v)%1,rad=(150-120*p)*2,al=Math.sin(p*Math.PI)*.8,px=C+rad*Math.cos(m.a+p*.6),py=C+rad*Math.sin(m.a+p*.6);
   const g=x.createRadialGradient(px,py,0,px,py,m.r*5);g.addColorStop(0,'rgba(255,215,160,'+al.toFixed(2)+')');g.addColorStop(1,'rgba(255,90,30,0)');x.fillStyle=g;x.beginPath();x.arc(px,py,m.r*5,0,7);x.fill()}}
-(function(){const cv=document.getElementById('ember');if(!cv)return;const gl=cv.getContext('webgl',{antialias:false,alpha:false});
- if(!gl){cv.style.background='radial-gradient(ellipse at 50% 22%,rgba(255,60,20,.5),transparent 60%),#0a0405';return}
+// The ember background (WebGL). iPhones drop WebGL canvases when the app is suspended or short of memory, and a
+// dropped canvas stays blank: so it is rebuilt (on a fresh canvas if need be) whenever the page comes back, and the
+// canvas carries a still version of the glow underneath for the moments it has nothing drawn.
+(function(){if(!document.getElementById('ember'))return;
  const vs='attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}';
  const fs='precision mediump float;uniform vec2 r;uniform float t;uniform float cy;'+
   'float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}'+
@@ -1287,18 +1290,28 @@ function halSparks(t){const c=document.getElementById('hsparks');if(!c)return;co
   'float w=fbm(p+1.9*q+vec2(t*.02,-t*.06));vec2 c=(uv-vec2(.5,cy))*vec2(r.x/r.y,1.);float d=length(c);float pu=.88+.12*sin(t*1.6);'+
   'vec3 col=vec3(.03,.008,.01)+vec3(.30,.04,.02)*pow(w,2.6)*1.25+vec3(.9,.36,.05)*smoothstep(.7,.98,w)*.18*(1.-uv.y*.6)+vec3(1.,.22,.05)*exp(-d*d*18.)*.42*pu;'+
   'col*=1.-.65*smoothstep(.35,1.1,length((uv-vec2(.5,.62))*vec2(1.3,1.)));gl_FragColor=vec4(col,1.);}';
- const sh=(ty,src)=>{const x=gl.createShader(ty);gl.shaderSource(x,src);gl.compileShader(x);return x};
- const pr=gl.createProgram();gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs));gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(pr);
- if(!gl.getProgramParameter(pr,gl.LINK_STATUS)){cv.style.background='#0a0405';return}
- gl.useProgram(pr);const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
- const pl=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,2,gl.FLOAT,false,0,0);
- const ur=gl.getUniformLocation(pr,'r'),ut=gl.getUniformLocation(pr,'t'),uc=gl.getUniformLocation(pr,'cy');
- const size=()=>{const k=.35;cv.width=Math.max(64,Math.round(innerWidth*k));cv.height=Math.max(64,Math.round(innerHeight*k));gl.viewport(0,0,cv.width,cv.height);gl.uniform2f(ur,cv.width,cv.height)};
- size();addEventListener('resize',size);
  const still=matchMedia('(prefers-reduced-motion: reduce)').matches;let last=0;const t0=performance.now();
+ let cv=null,gl=null,ur,ut,uc,lost=false;
+ const size=()=>{if(!gl)return;const k=.35;cv.width=Math.max(64,Math.round(innerWidth*k));cv.height=Math.max(64,Math.round(innerHeight*k));gl.viewport(0,0,cv.width,cv.height);gl.uniform2f(ur,cv.width,cv.height);last=0};
+ function build(fresh){let c=document.getElementById('ember');
+  if(fresh){const n=c.cloneNode(false);c.replaceWith(n);c=n}
+  cv=c;gl=null;lost=false;const g=c.getContext('webgl',{antialias:false,alpha:false});if(!g)return false;
+  const sh=(ty,src)=>{const x=g.createShader(ty);g.shaderSource(x,src);g.compileShader(x);return x};
+  const pr=g.createProgram();g.attachShader(pr,sh(g.VERTEX_SHADER,vs));g.attachShader(pr,sh(g.FRAGMENT_SHADER,fs));g.linkProgram(pr);
+  if(!g.getProgramParameter(pr,g.LINK_STATUS))return false;
+  g.useProgram(pr);const b=g.createBuffer();g.bindBuffer(g.ARRAY_BUFFER,b);g.bufferData(g.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),g.STATIC_DRAW);
+  const pl=g.getAttribLocation(pr,'p');g.enableVertexAttribArray(pl);g.vertexAttribPointer(pl,2,g.FLOAT,false,0,0);
+  ur=g.getUniformLocation(pr,'r');ut=g.getUniformLocation(pr,'t');uc=g.getUniformLocation(pr,'cy');gl=g;
+  c.addEventListener('webglcontextlost',e=>{e.preventDefault();lost=true});
+  c.addEventListener('webglcontextrestored',()=>{if(c===cv)build(false)});
+  size();return true}
+ // back from the background: if the drawing was dropped, start it again (a fresh canvas if it doesn't come back by itself)
+ function check(){if(document.hidden)return;if(!gl||lost||gl.isContextLost()){setTimeout(()=>{if(!gl||lost||gl.isContextLost())build(true);last=0;if(still)frame(1e6)},400)}}
+ document.addEventListener('visibilitychange',check);addEventListener('pageshow',check);addEventListener('focus',check);addEventListener('resize',size);
+ build(false);
  function frame(now){if(!document.hidden&&now-last>40){last=now;const t=(now-t0)/1000+30;
    const home=document.getElementById('heye'),hv=home&&home.offsetParent?home.getBoundingClientRect():null;
-   gl.uniform1f(uc,hv?1-((hv.top+hv.height/2)/innerHeight):.78);gl.uniform1f(ut,still?30:t);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+   if(gl&&!lost){gl.uniform1f(uc,hv?1-((hv.top+hv.height/2)/innerHeight):.78);gl.uniform1f(ut,still?30:t);gl.drawArrays(gl.TRIANGLE_STRIP,0,4)}
    if(home&&hv&&!still){const g=halGaze(t);home.style.setProperty('--gx',(g[0]*9).toFixed(2)+'px');home.style.setProperty('--gy',(g[1]*7).toFixed(2)+'px');halSparks(t)}
    const wv=document.getElementById('hwave');if(wv&&wv.offsetParent){const talking=home&&home.classList.contains('talking');
     [...wv.children].forEach((el,i)=>{const v=Math.abs(Math.sin(t*6+i*.45)*.5+Math.sin(t*2.9+i*1.7)*.3+Math.sin(t*12.1+i*2.3)*.2);el.style.height=(3+(talking?18:3)*(still?0:v))+'px'})}}
