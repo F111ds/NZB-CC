@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.21.1"
+VERSION = "1.22.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -5164,6 +5164,14 @@ class HalRoutes:
             page = PAIR_PAGE.replace("__PIN__", f"{pin[:3]} {pin[3:]}").replace("__ADDRS__", addrs) \
                 .replace("__MIN__", str(max(1, round((exp - time.time()) / 60)))).replace("__CODE__", _token_bytes.decode())
             self._h_send(200, page.encode("utf-8"), "text/html; charset=utf-8")
+            return
+        if path in ("/tv", "/tv/"):
+            # HAL on the TV, the animated screen (the TV app shows it; the access code travels in the #k=... part)
+            if self._h_gate(False):
+                from hal_tv_page import TV_PAGE
+                self._h_send(200, TV_PAGE.encode("utf-8"), "text/html; charset=utf-8", {"Cache-Control": "no-cache",
+                            "Content-Security-Policy": SECURITY_HEADERS["Content-Security-Policy"].replace(
+                                "style-src 'unsafe-inline'", "style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com")})
             return
         if path == "/manifest.webmanifest":
             if self._h_gate(False):

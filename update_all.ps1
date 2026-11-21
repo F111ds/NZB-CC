@@ -155,7 +155,7 @@ try {
         $paths = @("mobile_server.py", "nzb_command_center.py", "media_server.py", "media_inspector.py", "kodi_client.py",
                    "system_command_center.py", "system_monitor.py", "app_icon.ico", "system_center_icon.ico", "README.md",
                    "update_phone_app.ps1", "update_all.ps1", "setup_startup.ps1", "hal_server.py", "setup_hal_startup.ps1",
-                   "mobile_page.py", "mobile_icons.py", "app_page.py", "setup_autologon.ps1", "setup.ps1",
+                   "mobile_page.py", "mobile_icons.py", "app_page.py", "hal_tv_page.py", "setup_autologon.ps1", "setup.ps1",
                    "setup_jellyfin_service.ps1", "install_arr_resume.ps1", "backup_settings.ps1")
     }
     $wanted = @($paths | Where-Object {
