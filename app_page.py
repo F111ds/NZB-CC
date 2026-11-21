@@ -343,6 +343,10 @@ const LV={ok:0,info:1,warning:2,critical:3};
 // Same address as the NZB app and HAL: use whichever code this phone already saved.
 let token=LS.get('app_token','')||LS.get('nzb_mobile_token','')||LS.get('hal_token','');
 let tab='home',H=null,S=null,Q=null,UP=null,K=null,results=null,getSeg='upcoming',lastQuote='',busy=false;
+// HAL's lines, the same set the TV uses (GET /hal/api/lines): tapping his eye again moves him on to the next one
+let halLines=[],halLinesAt=0,halLineI=0,lastSaid='';
+async function halNextLine(){if(Date.now()-halLinesAt>180000){try{const d=await api('/hal/api/lines');if(Array.isArray(d.lines)&&d.lines.length){halLines=d.lines;halLinesAt=Date.now();halLineI=0}}catch(e){}}
+  if(!halLines.length)return greeting()+' '+lastQuote;halLineI=(halLineI+1)%halLines.length;const l=halLines[halLineI];return l.text||l.say||''}
 // Search: what to look for (Newznab categories: 2000 movies, 5000 TV) and how to sort; remembered on this device.
 let getCat=LS.get('app_cat',''),sortBy=LS.get('app_sort','best'),lastQuery='',searching=false;
 const CATS=[['','All'],['2000','Movies'],['5000','TV']];
@@ -1124,7 +1128,10 @@ document.addEventListener('click',e=>{const c=e.target.closest('button,a,[data-h
   if(d.hal){openHal('/hal/?tab='+encodeURIComponent(d.hal));return}
   if(d.halurl){$('sheet').classList.add('hidden');openHal(d.halurl);return}
   if('talk' in d){LS.set('hal_talk',talkative()?'off':'on');if(!talkative()&&CAN_SPEAK)speechSynthesis.cancel();else{unlocked=true;talk($('heye'),$('hquote'),'Thank you, '+NAME()+'. I\'ll talk to you from now on.',true)}render();return}
-  if(c.id==='heye'){if(voiceOn){speechSynthesis.cancel();voiceOn=false;return}unlocked=true;talk(c,$('hquote'),greeting()+' '+lastQuote,CAN_SPEAK);return}
+  if(c.id==='heye'){if(voiceOn){speechSynthesis.cancel();voiceOn=false;return}unlocked=true;
+   // the first tap says what's on screen; each tap after that, HAL's next line (the same lines as on the TV)
+   if(lastSaid){halNextLine().then(t=>{lastSaid=t;talk(c,$('hquote'),t,CAN_SPEAK)});return}
+   lastSaid=greeting()+' '+lastQuote;talk(c,$('hquote'),lastSaid,CAN_SPEAK);return}
   if(d.q){act(()=>api('/api/queue/'+d.q,{}),d.q==='pause'?'Downloads paused.':'Downloads resumed.');return}
   if(d.qi){if(d.qi==='delete'&&!confirm('Remove '+(d.name||'this download')+' from the queue?'))return;act(()=>api('/api/queue/item',{id:d.id,action:d.qi}),d.qi==='delete'?'Removed.':null);return}
   if(d.stream){openStream(d.stream);return}
