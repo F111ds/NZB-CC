@@ -244,6 +244,18 @@ nav.tabs button.on{color:#ffb59a;text-shadow:0 0 12px rgba(255,90,40,.9)}nav.tab
 .eyewrap svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
 .hero.center .eyewrap .eye{width:132px;height:132px;box-shadow:0 0 0 2px #3a3a40,0 0 0 6px #0d0d0f,0 0 0 8px #6c7178,0 0 60px 12px rgba(255,42,18,.35)}
 .hero.center .eyewrap .eye::before{inset:19px}
+/* HAL looks around: his light moves inside the lens */
+.eyewrap .eye{overflow:hidden}.eyewrap .eye::before{transform:translate(var(--gx,0px),var(--gy,0px))}
+/* the sweep turns on the graphics chip, smooth whatever the page is doing */
+#hsweep{transform-box:view-box;transform-origin:50% 50%;animation:hspin 9s linear infinite}@keyframes hspin{to{transform:rotate(360deg)}}
+#hsparks{position:absolute;left:-40px;top:-40px;width:316px;height:316px;pointer-events:none}
+/* opening: the dial lights round, the gauges fill, the cards rise in */
+.intro #hrings line{animation:tickin .3s both}@keyframes tickin{from{opacity:0}}
+.intro .hr{animation:ringin 1.4s cubic-bezier(.2,.8,.2,1) .25s both}@keyframes ringin{from{stroke-dasharray:0 1000}}
+.intro .eyewrap .eye{animation:lensin .8s cubic-bezier(.2,.8,.2,1) both}@keyframes lensin{from{transform:scale(.6);opacity:0}}
+.intro #hbody>*{animation:rise .6s cubic-bezier(.2,.8,.2,1) both}@keyframes rise{from{opacity:0;transform:translateY(18px)}}
+.intro #hbody>*:nth-child(1){animation-delay:0.58s}.intro #hbody>*:nth-child(2){animation-delay:0.66s}.intro #hbody>*:nth-child(3){animation-delay:0.74s}.intro #hbody>*:nth-child(4){animation-delay:0.82s}.intro #hbody>*:nth-child(5){animation-delay:0.90s}.intro #hbody>*:nth-child(6){animation-delay:0.98s}.intro #hbody>*:nth-child(7){animation-delay:1.06s}.intro #hbody>*:nth-child(8){animation-delay:1.14s}.intro #hbody>*:nth-child(9){animation-delay:1.22s}.intro #hbody>*:nth-child(10){animation-delay:1.30s}.intro #hbody>*:nth-child(11){animation-delay:1.38s}.intro #hbody>*:nth-child(12){animation-delay:1.46s}
+@media (prefers-reduced-motion:reduce){#hsweep,.intro *{animation:none!important}}
 .hwave{display:flex;gap:3px;justify-content:center;align-items:center;height:22px;margin-top:8px}
 .hwave i{width:3px;height:3px;border-radius:2px;background:linear-gradient(#ffb347,#ff3a1e);box-shadow:0 0 6px rgba(255,90,40,.8)}
 @media (prefers-reduced-motion:reduce){#ember{opacity:.9}}
@@ -520,7 +532,8 @@ function piCard(hw){if(!hw||(hw.temp==null&&hw.cpu_pct==null&&!hw.model))return'
     '<div class="wgrid" style="margin-top:10px"><div><span class="k">UP FOR</span><b>'+upFor(hw.uptime)+'</b></div><div><span class="k">LOAD</span><b>'+(hw.load&&hw.load.length?hw.load[0].toFixed(2):'—')+'</b></div><div><span class="k">UPDATES</span><b style="color:var(--'+(hw.update?'sky':'green')+')">'+(hw.update?'yes':'none')+'</b></div></div>'+
     (hw.update?'<div class="sub" style="color:var(--soft);font-size:13px;margin-top:10px">To update, on the Pi: sudo pihole -up</div>':'')+'</div>'}
 function renderHome(){const el=$('t-home');
-  if(!$('heye'))el.innerHTML='<div id="hhead"></div><div class="hero'+(DESK?'':' center')+'">'+(DESK?'<button class="eye big" id="heye" aria-label="Hear HAL"></button>':'<div class="eyewrap"><svg id="hrings" viewBox="0 0 236 236"></svg><button class="eye" id="heye" aria-label="Hear HAL"></button></div>')+'<div><div class="g" id="hgreet"></div><div class="q" id="hquote"></div>'+(DESK?'':'<div class="hwave" id="hwave">'+'<i></i>'.repeat(30)+'</div>')+'</div></div><div id="hbody"></div>';
+  if(!$('heye'))el.innerHTML='<div id="hhead"></div><div class="hero'+(DESK?'':' center')+'">'+(DESK?'<button class="eye big" id="heye" aria-label="Hear HAL"></button>':'<div class="eyewrap"><canvas id="hsparks" width="632" height="632"></canvas><svg id="hrings" viewBox="0 0 236 236"></svg><button class="eye" id="heye" aria-label="Hear HAL"></button></div>')+'<div><div class="g" id="hgreet"></div><div class="q" id="hquote"></div>'+(DESK?'':'<div class="hwave" id="hwave">'+'<i></i>'.repeat(30)+'</div>')+'</div></div><div id="hbody"></div>';
+  if(!DESK&&!el.dataset.intro){el.dataset.intro=1;el.classList.add('intro');setTimeout(()=>el.classList.remove('intro'),3200)}
   $('hhead').innerHTML=topbar('',true);$('hbody').innerHTML=homeBody();$('hgreet').textContent=greeting();
   const eye=$('heye');eye.className='eye'+(DESK?' big':'')+' '+(S?S.hal.level:'')+(eye.classList.contains('talking')?' talking':'');
   if($('hrings'))$('hrings').innerHTML=heroRings();
@@ -528,7 +541,7 @@ function renderHome(){const el=$('t-home');
 // HAL's gauges round his eye on Home: CPU, temperature and memory, with a ring of ticks and a slow sweep.
 function heroRings(){const v=S&&S.vitals,c=118,arc=(r,frac,g)=>{const L=2*Math.PI*r,f=Math.max(0,Math.min(1,frac||0));
   return'<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="6"/><circle class="hr" cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="url(#'+g+')" stroke-width="6" stroke-linecap="round" stroke-dasharray="'+(L*f).toFixed(1)+' '+L.toFixed(1)+'" transform="rotate(-90 '+c+' '+c+')" filter="url(#hglow)"/>'};
-  let tk='';for(let i=0;i<72;i++){const a=i*5*Math.PI/180,r1=110,r2=i%6?113:116;tk+='<line x1="'+(c+r1*Math.sin(a)).toFixed(1)+'" y1="'+(c-r1*Math.cos(a)).toFixed(1)+'" x2="'+(c+r2*Math.sin(a)).toFixed(1)+'" y2="'+(c-r2*Math.cos(a)).toFixed(1)+'" stroke="rgba(255,210,190,'+(i%6?.25:.55)+')" stroke-width="1"/>'}
+  let tk='';for(let i=0;i<72;i++){const a=i*5*Math.PI/180,r1=110,r2=i%6?113:116;tk+='<line x1="'+(c+r1*Math.sin(a)).toFixed(1)+'" y1="'+(c-r1*Math.cos(a)).toFixed(1)+'" x2="'+(c+r2*Math.sin(a)).toFixed(1)+'" y2="'+(c-r2*Math.cos(a)).toFixed(1)+'" stroke="rgba(255,210,190,'+(i%6?.25:.55)+')" stroke-width="1" style="animation-delay:'+(i*.012).toFixed(3)+'s"/>'}
   const cpu=v?v.cpu.pct:0,tmp=v?v.cpu.temp:null,mem=v?v.mem.pct:0;
   return'<defs><linearGradient id="hga" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd27a"/><stop offset="1" stop-color="#ff4b2b"/></linearGradient><linearGradient id="hgb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff9a3c"/><stop offset="1" stop-color="#e11d48"/></linearGradient><linearGradient id="hgc" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9ff5d0"/><stop offset="1" stop-color="#2dd4bf"/></linearGradient>'+
    '<linearGradient id="hsw" gradientUnits="userSpaceOnUse" x1="'+c+'" y1="'+(c-106)+'" x2="'+(c+75)+'" y2="'+(c-75)+'"><stop offset="0" stop-color="#ffb07a" stop-opacity="0"/><stop offset="1" stop-color="#ffe0c8" stop-opacity=".9"/></linearGradient><filter id="hglow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>'+
@@ -1178,6 +1191,16 @@ if(token)start();else showPair();
 
 // ===== Ember background: slow smoke drawn by the graphics chip, brightest behind HAL. Low resolution and ~24 frames
 // a second to spare the battery; paused when the app is in the background; one still frame for reduced motion. =====
+// Where HAL is looking (-1..1): small glances every couple of seconds, and now and then a look round the room.
+function halGaze(t){const sm=x=>x<=0?0:x>=1?1:x*x*(3-2*x),r=i=>{const x=Math.sin(i*12.9898)*43758.5453;return x-Math.floor(x)};
+ const rc=t%40;if(rc<4.4){const k=[[0,0,0],[.4,-1,.05],[1.3,-1,.05],[1.6,1,.05],[2.5,1,.05],[2.8,-.5,0],[3.3,-.5,0],[3.7,0,0],[4.4,0,0]];
+  for(let i=0;i<k.length-1;i++){const[a,ax,ay]=k[i],[b,bx,by]=k[i+1];if(rc>=a&&rc<=b){const e=sm((rc-a)/Math.min(.3,b-a));return[ax+(bx-ax)*e,ay+(by-ay)*e]}}}
+ const n=Math.floor(t/2.4),f=t/2.4-n,e=sm(f/.25),to=[(r(n)-.5)*1.5,(r(n+.5)-.5)*1.1],fr=[(r(n-1)-.5)*1.5,(r(n-.5)-.5)*1.1];return[fr[0]+(to[0]-fr[0])*e,fr[1]+(to[1]-fr[1])*e]}
+// A few motes of light drifting in from round the dial into the eye.
+const HSP=Array.from({length:10},(_,i)=>({a:i/10*6.283+Math.sin(i*7)*.4,o:(i*.37)%1,v:.28+(i%4)*.06,r:2+(i%3)}));
+function halSparks(t){const c=document.getElementById('hsparks');if(!c)return;const x=c.getContext('2d'),C=316,W=632;x.clearRect(0,0,W,W);
+ for(const m of HSP){const p=(m.o+t*m.v)%1,rad=(150-120*p)*2,al=Math.sin(p*Math.PI)*.8,px=C+rad*Math.cos(m.a+p*.6),py=C+rad*Math.sin(m.a+p*.6);
+  const g=x.createRadialGradient(px,py,0,px,py,m.r*5);g.addColorStop(0,'rgba(255,215,160,'+al.toFixed(2)+')');g.addColorStop(1,'rgba(255,90,30,0)');x.fillStyle=g;x.beginPath();x.arc(px,py,m.r*5,0,7);x.fill()}}
 (function(){const cv=document.getElementById('ember');if(!cv)return;const gl=cv.getContext('webgl',{antialias:false,alpha:false});
  if(!gl){cv.style.background='radial-gradient(ellipse at 50% 22%,rgba(255,60,20,.5),transparent 60%),#0a0405';return}
  const vs='attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}';
@@ -1201,7 +1224,7 @@ if(token)start();else showPair();
  function frame(now){if(!document.hidden&&now-last>40){last=now;const t=(now-t0)/1000+30;
    const home=document.getElementById('heye'),hv=home&&home.offsetParent?home.getBoundingClientRect():null;
    gl.uniform1f(uc,hv?1-((hv.top+hv.height/2)/innerHeight):.78);gl.uniform1f(ut,still?30:t);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
-   const sw=document.getElementById('hsweep');if(sw&&!still)sw.setAttribute('transform','rotate('+(t*40%360).toFixed(1)+' 118 118)');
+   if(home&&hv&&!still){const g=halGaze(t);home.style.setProperty('--gx',(g[0]*20).toFixed(2)+'px');home.style.setProperty('--gy',(g[1]*15).toFixed(2)+'px');halSparks(t)}
    const wv=document.getElementById('hwave');if(wv&&wv.offsetParent){const talking=home&&home.classList.contains('talking');
     [...wv.children].forEach((el,i)=>{const v=Math.abs(Math.sin(t*6+i*.45)*.5+Math.sin(t*2.9+i*1.7)*.3+Math.sin(t*12.1+i*2.3)*.2);el.style.height=(3+(talking?18:3)*(still?0:v))+'px'})}}
   if(!still)requestAnimationFrame(frame)}
