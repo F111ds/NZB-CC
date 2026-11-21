@@ -36,7 +36,7 @@ final class BigHal {
     final View eye;
     private final View ring;
     private final LinearLayout words;
-    private final TextView line, hint;
+    private final TextView line, hint, status;
     private final int eyePx, ringPx;
     private ValueAnimator spin;
     private float spinDeg;
@@ -113,6 +113,16 @@ final class BigHal {
         LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-2, -2);
         hl.topMargin = dp(6);
         words.addView(hint, hl);
+        // the status line: a coloured dot and all well, or what needs looking at
+        status = text(10, 0xFF9FF5C4, R.string.font_medium);
+        status.setSingleLine(true);
+        status.setEllipsize(TextUtils.TruncateAt.END);
+        status.setMaxWidth(dp(400));
+        status.setCompoundDrawablePadding(dp(7));
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(-2, -2);
+        sl.topMargin = dp(9);
+        words.addView(status, sl);
+        setStatus(new String[]{"checking", "", "", "0"});   // until HAL's first reading
         view.addView(words, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));
 
         eye.setOnFocusChangeListener((v, has) -> {
@@ -191,6 +201,52 @@ final class BigHal {
             s.setSpan(new android.text.style.ForegroundColorSpan(Color.WHITE), 0, cut + 1, 0);
         }
         line.setText(s);
+    }
+
+    /** {level, title, detail, count} from EmberHome.halStatus: green all well, amber something to check, red a problem. */
+    void setStatus(String[] s) {
+        String level = s[0];
+        int n = 0;
+        try {
+            n = Integer.parseInt(s[3]);
+        } catch (NumberFormatException ignored) {
+            n = 0;
+        }
+        int dot, col;
+        String head, tail = "";
+        if ("checking".equals(level)) {
+            dot = 0xFF8A8F98;
+            col = 0x99FFFFFF;
+            head = "Checking the house\u2026";
+        } else if (level.isEmpty()) {
+            dot = 0xFF8A8F98;
+            col = 0xB3FFFFFF;
+            head = "Can't reach the PC";
+        } else if ("ok".equals(level) || n == 0) {
+            dot = 0xFF5EEA9B;
+            col = 0xFF9FF5C4;
+            head = "All systems functioning normally";
+        } else {
+            boolean crit = "critical".equals(level);
+            dot = crit ? 0xFFFF5A4A : 0xFFFBBF24;
+            col = crit ? 0xFFFF8A7A : 0xFFFFD27A;
+            head = s[1];
+            tail = n > 1 ? "  \u00B7  +" + (n - 1) + " more" : (s[2].isEmpty() ? "" : "  \u00B7  " + s[2]);
+        }
+        android.text.SpannableStringBuilder b = new android.text.SpannableStringBuilder(head);
+        b.setSpan(new android.text.style.ForegroundColorSpan(col), 0, head.length(), 0);
+        if (!tail.isEmpty()) {
+            int at = b.length();
+            b.append(tail);
+            b.setSpan(new android.text.style.ForegroundColorSpan(0xB3FFEBE4), at, b.length(), 0);
+            b.setSpan(new android.text.style.StyleSpan(Typeface.NORMAL), at, b.length(), 0);
+        }
+        status.setText(b);
+        android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
+        d.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        d.setColor(dot);
+        d.setSize(dp(7), dp(7));
+        status.setCompoundDrawablesRelativeWithIntrinsicBounds(d, null, null, null);
     }
 
     /** The ring turns slowly (one turn in 9 seconds) while Home is on screen with animations on. */
