@@ -87,11 +87,12 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 #det .dhint b{color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:5px;padding:0 5px;margin:0 5px 0 16px}
 #main{position:absolute;inset:0;transition:opacity .35s}
 #main.off{opacity:0}
+#sweep{position:absolute;inset:0;will-change:transform;animation:spin 9s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 </style></head><body><div id="stage">
 <canvas id="gl" class="full" width="1920" height="1080"></canvas><canvas id="sp" class="full" width="960" height="540"></canvas><canvas id="fx" class="full" width="960" height="540"></canvas>
 
 <div id="main">
-<svg id="eye" style="position:absolute;left:345px;top:14px;transform-origin:150px 150px" width="270" height="270" viewBox="0 0 300 300">
+<div id="eyewrap" style="position:absolute;left:345px;top:14px;width:270px;height:270px;transform-origin:135px 135px"><svg id="eye" style="position:absolute;left:0;top:0" width="270" height="270" viewBox="0 0 300 300">
  <defs>
   <radialGradient id="lens"><stop offset="0" stop-color="#fffbe0"/><stop offset=".06" stop-color="#ffd27a"/><stop offset=".16" stop-color="#ff5a1f"/><stop offset=".34" stop-color="#d4140a"/><stop offset=".6" stop-color="#5a0402"/><stop offset=".88" stop-color="#120000"/><stop offset="1" stop-color="#000"/></radialGradient>
   <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9aa0a8"/><stop offset=".5" stop-color="#2b2e33"/><stop offset="1" stop-color="#6c7178"/></linearGradient>
@@ -105,7 +106,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
   <filter id="glf"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
  </defs>
  <circle cx="150" cy="150" r="150" fill="url(#bloom)"/>
- <g id="ticks"></g><g id="sweep"><path d="M150 7 A143 143 0 0 1 251 49" fill="none" stroke="url(#sw)" stroke-width="9" stroke-linecap="round" opacity=".6"/></g>
+ <g id="ticks"></g>
  
  <g fill="none" stroke-linecap="round" filter="url(#glf)">
   <circle id="r1" cx="150" cy="150" r="128" stroke="url(#ga)" stroke-width="6" stroke-dasharray="0 804" transform="rotate(-90 150 150)"/>
@@ -116,7 +117,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
  <g clip-path="url(#lensclip)"><g id="iris"><circle cx="150" cy="150" r="80" fill="url(#lens)"/><circle id="core" cx="150" cy="150" r="40" fill="url(#coreg)" style="mix-blend-mode:screen"/></g></g>
  <ellipse cx="128" cy="112" rx="34" ry="16" fill="rgba(255,255,255,.16)" transform="rotate(-28 128 112)"/><circle cx="182" cy="186" r="5" fill="rgba(255,255,255,.12)"/>
  <g font-family="JetBrains Mono,monospace" font-size="9.5" font-weight="700" fill="#ffe2d6"><text id="l1" x="142" y="26" text-anchor="end"></text><text id="l2" x="142" y="38" text-anchor="end" fill="#ffb59a"></text><text id="l3" x="142" y="50" text-anchor="end" fill="#9ff5d0"></text></g>
-</svg>
+</svg><div id="sweep"><svg width="270" height="270" viewBox="0 0 300 300"><defs><linearGradient id="sw2" gradientUnits="userSpaceOnUse" x1="150" y1="7" x2="251" y2="49"><stop offset="0" stop-color="#ffb07a" stop-opacity="0"/><stop offset="1" stop-color="#ffe0c8" stop-opacity=".95"/></linearGradient></defs><path d="M150 7 A143 143 0 0 1 251 49" fill="none" stroke="url(#sw2)" stroke-width="9" stroke-linecap="round" opacity=".6"/></svg></div></div>
 <div class="card glass l" id="cpc" style="left:26px;top:22px;width:288px;height:186px">
  <div class="k">THE PC <b id="pcl" class="ok">● OK</b></div>
  <div style="display:flex;gap:18px;margin-top:9px;align-items:flex-end">
@@ -247,8 +248,8 @@ $('gl').style.opacity=0;
 const DOT=document.createElement('canvas');DOT.width=DOT.height=128;{const d=DOT.getContext('2d'),g=d.createRadialGradient(64,64,0,64,64,64);g.addColorStop(0,'rgba(255,215,160,1)');g.addColorStop(1,'rgba(255,90,30,0)');d.fillStyle=g;d.fillRect(0,0,128,128)}
 const sp=$('sp').getContext('2d'),fx=$('fx').getContext('2d'),FW=1920,FH=1080,EX=960,EY=298;
 let seed=7;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
-const sparks=Array.from({length:12},()=>({x:rnd()*FW,y:rnd()*FH,v:18+rnd()*40,r:1+rnd()*2.6,ph:rnd()*6.28,dr:(rnd()-.5)*20}));
-const motes=Array.from({length:40},()=>({s:Math.floor(rnd()*4),o:rnd(),v:.12+rnd()*.18,w:(rnd()-.5)*120,r:1+rnd()*1.8}));
+const sparks=Array.from({length:6},()=>({x:rnd()*FW,y:rnd()*FH,v:18+rnd()*40,r:1+rnd()*2.6,ph:rnd()*6.28,dr:(rnd()-.5)*20}));
+const motes=Array.from({length:18},()=>({s:Math.floor(rnd()*4),o:rnd(),v:.12+rnd()*.18,w:(rnd()-.5)*120,r:1+rnd()*1.8}));
 const srcPts=[[314*2,115*2],[314*2,312*2],[646*2,115*2],[646*2,312*2]];
 function gaze(t){
  if(t<1.5)return[0,0];
@@ -268,10 +269,9 @@ function render(t){
   if(a>.01){sp.globalAlpha=a;sp.drawImage(DOT,x-s.r*4,y-s.r*4,s.r*8,s.r*8)}}sp.globalAlpha=1;
  // boot: the veil lifts, the lens assembles, ticks light in turn, panels unfold from the eye
  $('veil').style.opacity=1-ease((t-.1)/.6);
- const eye=$('eye'),px=Math.sin(t*.23),py=Math.cos(t*.17);
+ const eye=$('eyewrap'),px=Math.sin(t*.23),py=Math.cos(t*.17);
  eye.style.transform=`scale(${.55+.45*ease((t-.05)/.8)}) translate(${-px*2}px,${-py*2}px)`;eye.style.opacity=Math.min(1,t/.3);
  tickEls.forEach((l,i)=>l.style.opacity=t>.2+i*.008?1:0);
- $('sweep').setAttribute('transform',`rotate(${(t*40%360).toFixed(1)} 150 150)`);
  const bs='HAL 9000 · ONLINE',bn=Math.floor(Math.max(0,t-.3)*30);$('boot').textContent=bs.slice(0,bn);$('boot').style.opacity=t<1.2?1:Math.max(0,1-(t-1.2)/.3);
  cards.forEach((c,i)=>{const e=ease((t-.7-i*.06)/.5),left=parseFloat(c.style.left)<480||c.id==='alert'||c.id==='strip';
   if(t<2){c.style.clipPath=i<4?`inset(0 ${left?(1-e)*100:0}% 0 ${left?0:(1-e)*100}% round 20px)`:`inset(0 ${(1-e)*50}% 0 ${(1-e)*50}% round 16px)`;c.style.opacity=Math.min(1,e*1.4)}else if(c.style.clipPath){c.style.clipPath='';c.style.opacity=1}
