@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.32.4"
+VERSION = "1.32.5"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1639,25 +1639,77 @@ class FanControlApp:
     def __init__(self):
         self.exe = ""
         self.dir = ""
+        self.base_name = self.BASE
+        self.running = False
+        self.problem = ""
         self.rpm: dict = {}   # control id -> its fan's rpm (from LibreHardwareMonitor), to leave pumps alone
 
+    # where Fan Control is usually installed, for when Windows won't say where the running one is
+    INSTALL_DIRS = (r"C:\Program Files (x86)\FanControl", r"C:\Program Files\FanControl", r"C:\FanControl")
+
     def find(self) -> bool:
-        self.exe = self.dir = ""
+        """True when Fan Control runs and its configuration was found. self.running says whether it runs at all, and
+        self.problem why it can't be used (shown on the phone)."""
+        self.exe = self.dir = self.problem = ""
+        self.running = False
         try:
-            for p in psutil.process_iter(["name", "exe"]):
-                if str(p.info.get("name") or "").lower() == "fancontrol.exe" and p.info.get("exe"):
-                    self.exe = p.info["exe"]
-                    self.dir = os.path.join(os.path.dirname(self.exe), "Configurations")
-                    break
+            for p in psutil.process_iter(["name", "exe", "cmdline"]):
+                if str(p.info.get("name") or "").lower() != "fancontrol.exe":
+                    continue
+                self.running = True
+                exe = p.info.get("exe") or ((p.info.get("cmdline") or [""])[0] or "")
+                if exe and os.path.isfile(exe):
+                    self.exe = exe
+                break
         except Exception:  # noqa: BLE001
+            pass
+        if not self.running:
             return False
-        return bool(self.exe) and os.path.isfile(os.path.join(self.dir, self.BASE))
+        homes = [os.path.dirname(self.exe)] if self.exe else []
+        homes += [d for d in self.INSTALL_DIRS + tuple(os.path.join(os.path.expanduser("~"), x, "FanControl") for x in ("Downloads", "Desktop", "Documents"))
+                  if d not in homes]
+        for home in homes:
+            for d in (os.path.join(home, "Configurations"), home):
+                base = self._base_in(d)
+                if base:
+                    self.dir, self.base_name = d, base
+                    if not self.exe and os.path.isfile(os.path.join(home, "FanControl.exe")):
+                        self.exe = os.path.join(home, "FanControl.exe")
+                    break
+            if self.dir:
+                break
+        if not self.exe:
+            self.problem = "Fan Control is running, but Windows won't tell me where it's installed (run HAL as administrator)"
+        elif not self.dir:
+            self.problem = f"Fan Control is running, but I couldn't find its Configurations folder next to {self.exe}"
+        return bool(self.exe and self.dir)
+
+    def _base_in(self, d: str) -> str:
+        """The owner's configuration in folder d: userConfig.json, else the newest .json that isn't one of HAL's."""
+        try:
+            if os.path.isfile(os.path.join(d, self.BASE)):
+                return self.BASE
+            js = [f for f in os.listdir(d) if f.lower().endswith(".json") and not f.startswith("HAL-")]
+            if js and any(fc_controls(self._load(os.path.join(d, f))) for f in js[:20]):
+                js = [f for f in js if fc_controls(self._load(os.path.join(d, f)))]
+                return max(js, key=lambda f: os.path.getmtime(os.path.join(d, f)))
+        except OSError:
+            pass
+        return ""
+
+    @staticmethod
+    def _load(path: str):
+        try:
+            with open(path, encoding="utf-8-sig") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
 
     def path_for(self, mode: str) -> str:
-        return os.path.join(self.dir, self.BASE if mode == "auto" else f"HAL-{mode.title()}.json")
+        return os.path.join(self.dir, self.base_name if mode == "auto" else f"HAL-{mode.title()}.json")
 
     def write_profile(self, mode: str, rpm: dict | None = None) -> str:
-        with open(os.path.join(self.dir, self.BASE), encoding="utf-8-sig") as f:
+        with open(os.path.join(self.dir, self.base_name), encoding="utf-8-sig") as f:
             base = json.load(f)
         if not fc_controls(base):
             raise ValueError("Fan Control's configuration has no fan controls I can set")
@@ -1748,13 +1800,13 @@ class FanControl:
                 data = json.loads(r.read(8_000_000).decode("utf-8", "replace"))
         except Exception:  # noqa: BLE001
             with self.lock:
-                self.fans, self.available = [], has_app
+                self.fans, self.available = [], has_app or self.app.running
                 self.reason = "" if has_app else "LibreHardwareMonitor isn't answering (its web server on port 8085)"
             return
         fans = [f for f in lhm_fan_controls(data) if f["rpm"]]   # headers with a fan on them
         with self.lock:
             self.fans = fans
-            self.available = bool(fans_controllable(fans)) or bool(self.app.exe)
+            self.available = bool(fans_controllable(fans)) or has_app or self.app.running
             self.reason = "" if self.available else "LibreHardwareMonitor shows no fans it can control on this PC"
 
     def _set(self, cid: str, value) -> bool:
@@ -1815,6 +1867,11 @@ class FanControl:
                 self.mode, self.since, self.note, self.check = mode, time.time(), why, None
                 self.available = True
             return {"ok": True, "say": "The fans are back on your Fan Control setup." if mode == "auto" else f"The fans are on {mode.title()}."}
+        if self.app.running:
+            # Fan Control would undo anything set through LibreHardwareMonitor: say what's missing instead
+            with self.lock:
+                self.mode, self.since, self.note = "auto", time.time(), self.app.problem
+            return {"ok": False, "say": f"I can't change the fans: {self.app.problem}."}
         self.via = "LibreHardwareMonitor"
         self.refresh()
         with self.lock:
