@@ -576,7 +576,7 @@ Right-click > Run with PowerShell, from your NZB Command Center folder:
 
 - **setup.ps1** - everything you set up once. It shows what is already set up on this PC (phone server
   at startup, HAL inside the phone server, Jellyfin at startup, automatic sign-in then lock,
-  Sonarr/Radarr/Prowlarr) and runs the step you pick; **U** undoes Jellyfin or automatic sign-in.
+  Sonarr/Radarr/Prowlarr) and runs the step you pick; **U** undoes Jellyfin, automatic sign-in or CPU temperatures.
   The steps are still the separate `setup_*.ps1` / `install_arr_resume.ps1` scripts, so the
   instructions below still work.
 - **update_all.ps1** - updates everything (same as **Update everything** in the app).
