@@ -651,11 +651,13 @@ Pair with the **same access code as the NZB phone app**, then add it to your hom
   **Fan control:** the FANS card on the phone has AUTO · QUIET · NORMAL · COOL · MAX (about 35 / 50 / 70 / 100 %), and on
   the TV's PC details page OK steps through them. It works through LibreHardwareMonitor's web server, for the fans on the
   motherboard's headers (not the graphics card's, not pumps). Auto is your BIOS fan curves. HAL never sets the CPU fan below
-  40 % (every fan, if none is called CPU) or the others below 25 %, and hands back to Auto by himself when the CPU or graphics
-  card gets within 5 °C of its alert or the VRM, chipset, hot spot or an NVMe drive reaches its limit, and after a restart.
+  40 % (every fan, if none is called CPU) or the others below 25 %. On Quiet or Normal he hands back to Auto by himself when
+  the CPU or graphics card gets within 5 °C of its alert or the VRM, chipset, hot spot or an NVMe drive reaches its limit
+  (Cool and Max stay: they already cool more), and every mode goes back to Auto after a restart. Cool and Max also run the
+  graphics card's fans at that speed; Quiet and Normal leave them on the card's own curve.
   When **Fan Control** (Rem0o) is running it drives the fans itself, so HAL switches its configurations instead: it writes
   `HAL-Quiet/Normal/Cool/Max.json` next to your `userConfig.json` (copies of it with each motherboard fan at that mode's
-  fixed %, pumps and the graphics card on your curves) and loads them with `FanControl.exe -c`; Auto loads your
+  fixed %, pumps on your curves) and loads them with `FanControl.exe -c`; Auto loads your
   `userConfig.json`. HAL checks Fan Control's title bar to confirm each switch.
   Other fan software (ASUS Fan Xpert / Armoury Crate, iCUE for its own fans) should not control the same fans.
 - **Services**: SABnzbd, Jellyfin, Sonarr, Radarr, Prowlarr and the NZB phone server: answering, response time and

@@ -244,7 +244,11 @@ assert r["ok"] and fc.mode == "cool" and ("/lpc/nct6798d/0/control/0", "70") in 
 # LibreHardwareMonitor restarted (its controls back on the BIOS curve): HAL puts the mode back
 _lhm["pct"]["1"] = 50.0; _lhm["sets"].clear()
 assert fc.watch("") == "" and ("/lpc/nct6798d/0/control/1", "70") in _lhm["sets"], _lhm["sets"]
-# something runs hot: back to Auto by itself
+# something runs hot on Cool: it stays (it already cools more than Auto)
+_lhm["sets"].clear()
+assert fc.watch("the CPU reached 88°C") == "" and fc.mode == "cool"
+# ... on Quiet: back to Auto by itself
+assert fc.set_mode("quiet")["ok"]
 _lhm["sets"].clear()
 assert fc.watch("the CPU reached 88°C") == "the CPU reached 88°C" and fc.mode == "auto" and all(s[1] == "null" for s in _lhm["sets"]) and len(_lhm["sets"]) == 4
 try:
@@ -309,9 +313,11 @@ q = hs.fc_profile(_cfg, "quiet")
 cc = {c["Name"]: c for c in hs.fc_controls(q)}
 assert cc["CPU"]["ManualControl"] and cc["CPU"]["ManualControlValue"] == 40, cc["CPU"]          # CPU floor
 assert cc["Chassis 1"]["ManualControl"] and cc["Chassis 1"]["ManualControlValue"] == 35
-assert not cc["AIO Pump"]["ManualControl"] and not cc["GPU Fan"]["ManualControl"]                # pump and graphics card keep their curves
+assert not cc["AIO Pump"]["ManualControl"] and not cc["GPU Fan"]["ManualControl"]                # Quiet: pump and graphics card keep their curves
 assert not hs.fc_controls(_cfg)[0]["ManualControl"]                                              # the owner's file isn't touched
-assert {c["ManualControlValue"] for c in hs.fc_controls(hs.fc_profile(_cfg, "max")) if c["ManualControl"]} == {100}
+mx = {c["Name"]: c for c in hs.fc_controls(hs.fc_profile(_cfg, "max"))}
+assert mx["GPU Fan"]["ManualControl"] and mx["GPU Fan"]["ManualControlValue"] == 100 and not mx["AIO Pump"]["ManualControl"]   # Max: graphics card too
+assert {c["ManualControlValue"] for c in mx.values() if c["ManualControl"]} == {100}
 d = _tf.mkdtemp(); conf = _os.path.join(d, "Configurations"); _os.makedirs(conf)
 with open(_os.path.join(conf, "userConfig.json"), "w") as f:
     _json.dump(_cfg, f)
@@ -325,12 +331,28 @@ assert app.path_for("auto").endswith("userConfig.json")
 loaded = []
 class _App(hs.FanControlApp):
     def find(self): self.exe, self.dir = app.exe, conf; return True
-    def switch(self, mode):
+    def switch(self, mode, readback=None):
         loaded.append(_os.path.basename(self.path_for(mode) if mode == "auto" else self.write_profile(mode))); return (mode != "max"), ("" if mode != "max" else "Fan Control didn't switch to HAL-Max.json")
 fc2 = hs.FanControl(port=1); fc2.app = _App()
 r = fc2.set_mode("cool")
 assert r["ok"] and fc2.mode == "cool" and fc2.view()["via"] == "Fan Control" and loaded == ["HAL-Cool.json"], (r, loaded)
-assert fc2.watch("the CPU reached 88°C") and fc2.mode == "auto" and loaded[-1] == "userConfig.json"
+assert fc2.watch("the CPU reached 88°C") == "" and fc2.mode == "cool"          # hot on Cool: stays
+assert fc2.set_mode("normal")["ok"]
+assert fc2.watch("the CPU reached 88°C") and fc2.mode == "auto" and loaded[-1] == "userConfig.json"   # hot on Normal: back to Auto
+# the switch check: a title naming another configuration and readings that didn't move = failed; otherwise done
+class _T(hs.FanControlApp):
+    def __init__(self, titles): super().__init__(); self.titles = list(titles); self.exe = app.exe; self.dir = conf
+    def title(self): return self.titles.pop(0) if len(self.titles) > 1 else self.titles[0]
+_sleep = hs.time.sleep; hs.time.sleep = lambda s: None
+_popen = hs.subprocess.Popen; hs.subprocess.Popen = lambda *a, **k: None
+try:
+    assert _T(["Fan Control V286 (userConfig.json)", "Fan Control V286 (HAL-Cool.json)"]).switch("cool")[0]
+    assert _T(["Fan Control V286"]).switch("cool")[0]                                   # title without a configuration: not taken as failed
+    assert _T(["Fan Control V286 (userConfig.json)"]).switch("cool", lambda: True)[0]   # readings reached the %: done
+    ok_, err_ = _T(["Fan Control V286 (userConfig.json)"]).switch("cool", lambda: False)
+    assert not ok_ and "HAL-Cool.json" in err_
+finally:
+    hs.time.sleep, hs.subprocess.Popen = _sleep, _popen
 r = fc2.set_mode("max")
 assert not r["ok"] and fc2.mode == "auto" and "didn't switch" in r["say"] and loaded[-1] == "userConfig.json", (r, loaded)
 fc2.refresh(); assert fc2.view()["available"]     # available through Fan Control even without LibreHardwareMonitor
