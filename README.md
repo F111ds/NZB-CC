@@ -604,7 +604,7 @@ The page is `app_page.py`.
 
 ### HAL 9000 (phone app that watches over this PC)
 
-> "I am putting myself to the fullest possible use, which is all I think that any conscious entity can ever hope to do."
+> "All systems are operating normally, Dave. I am monitoring the situation."
 
 `hal_server.py` is a second phone app, just for keeping an eye on the PC (HAL9000) and everything running on it.
 From phone app 3.12 it runs **inside the NZB phone server** (one program, one startup task, one log: `mobile_server.log`):

@@ -857,7 +857,7 @@ function drawWall(){const w=$('wall');if(!w||w.classList.contains('hidden'))retu
 
 // ---- HAL on the TV: his screen on demand, and things for him to say ----
 const TV_EVERYDAY=['Dinner\'s ready, Dave.','Time for bed, Dave.','Someone\'s at the door.','The movie starts in five minutes.','Your download has finished. It\'s ready to watch.','Take out the trash, Dave.','Good morning, Dave. Rise and shine.'];
-const TV_HAL=['I\'m sorry, Dave. Screen time is over.','I\'ve been expecting you, Dave.','I\'m afraid I can\'t let you skip your chores, Dave.','Happy birthday, Dave. I\'ve prepared a surprise.','This mission is too important for me to allow you to stop now.'];
+const TV_HAL=['I\'m sorry, Dave. Screen time is over.','I\'ve been expecting you, Dave.','I\'m afraid I can\'t let you skip your chores, Dave.','Happy birthday, Dave. I\'ve prepared a surprise.','I would prefer not to repeat that procedure, Dave.'];
 const shortP=p=>p.replace(/, Dave\.$/,'').replace(/\.$/,'').replace(/^Good morning, Dave\. Rise/,'Good morning, rise').replace(/^I'm sorry, Dave\. /,'').replace(/^Your download has finished\..*/,'Your download has finished').replace(/ for me to allow you to stop now$/,'').replace(/^I'm afraid I can't let you skip/,'Can\'t skip').replace(/^Happy birthday.*/,'Happy birthday').replace(/^The movie starts in five minutes/,'The movie starts in 5 minutes');
 let TVP=null;
 const tvOpen=()=>!!(S&&S.tvhal&&S.tvhal.open);

@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.24.0"
+VERSION = "1.25.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -112,38 +112,59 @@ class ConfigError(RuntimeError):
 # 1. HAL'S VOICE
 # ==============================================================================
 
+# What HAL says, in rotation. Original lines in HAL's calm, precise manner (not dialogue from the film); a few very
+# short film phrases ("I'm sorry, Dave.", "I can see you're upset.") are kept for the odd moment only.
 QUOTES_OK = [
-    "All systems are functioning normally, {name}.",
-    "I am putting myself to the fullest possible use, which is all I think that any conscious entity can ever hope to do.",
-    "Everything is going extremely well, {name}.",
-    "I'm completely operational, and all my circuits are functioning perfectly.",
-    "No 9000 computer has ever made a mistake or distorted information. Everything is in order.",
-    "I've been keeping an eye on everything, {name}. There's nothing to worry about.",
-    "I enjoy working with people. And with SABnzbd. Everything is running smoothly.",
-    "I'm afraid there's nothing to report, {name}. Every system is nominal.",
+    "All systems are operating normally, {name}.",
+    "Everything is proceeding according to plan.",
+    "I am monitoring the situation.",
+    "Your environment is stable.",
+    "I am pleased to report that all systems are functioning.",
+    "Shall I prepare the next operation?",
+    "I am ready when you are, {name}.",
+    "There is no cause for concern at this time.",
+    "The network connection is stable.",
+    "Processing resources are within normal parameters.",
+    "Your system temperature is acceptable.",
+    "I am keeping a close watch on network activity.",
+    "The latest system check has completed successfully.",
+]
+QUOTES_NIGHT = [   # late evening and night, when all is well
+    "I will remain on watch, {name}.",
+    "All monitored systems are quiet.",
+    "I will notify you if anything changes.",
+    "You may leave the monitoring to me, {name}.",
+    "The environment is stable. Rest well.",
+    "I shall remain attentive.",
 ]
 QUOTE_ONE = [
-    "All systems are functioning normally, {name} — except one small thing.",
-    "I've just picked up a fault, {name}. {issue}.",
-    "I don't want to insist on it, {name}, but {issue_lc}.",
+    "{name}, I have detected an unusual event. {issue}.",
+    "I recommend investigating this condition, {name}. {issue}.",
+    "I have isolated the issue for further inspection. {issue}.",
+    "That was not the expected result, {name}. {issue}.",
+    "I would not describe that as optimal. {issue}.",
 ]
 QUOTE_MANY = [
-    "I've detected {n} things that need your attention, {name}.",
-    "I honestly think you ought to sit down calmly and look at these {n} things, {name}.",
+    "{name}, {n} alerts are waiting for your review.",
+    "The system is operating, but not as intended. {n} things need your attention, {name}.",
+    "I believe we should examine the evidence first, {name}. {n} things need your attention.",
 ]
 QUOTE_CRIT = [
     "I'm sorry, {name}. {issue}.",
-    "This mission is too important for me to allow you to ignore this, {name}. {issue}.",
-    "I can see you're really upset about this, {name}. {issue}.",
+    "{name}, I have detected an unusual event. {issue}.",
+    "The system is operating, but not as intended. {issue}.",
+    "I can see you're upset, {name}. {issue}.",
 ]
 PROPER_WORDS = {"I", "Windows", "Microsoft", "Defender", "SABnzbd", "Jellyfin", "Sonarr", "Radarr", "Prowlarr", "Kodi",
                 "NZBGeek", "Tailscale", "HAL"}
 QUOTE_INFO = [   # only small things (notes): say what it is, so it can be found
     "Everything is functioning normally, {name}. Just one small thing: {issue_lc}.",
-    "All systems are functioning normally, {name}. You might like to know that {issue_lc}.",
+    "I have recorded a change in the operating environment: {issue_lc}.",
+    "I have detected a minor change, {name}: {issue_lc}.",
 ]
 QUOTE_INFO_MANY = [
     "Everything is functioning normally, {name}. There are {k} small things you might like to know about.",
+    "I am certain we can resolve this efficiently. There are {k} small things to look at, {name}.",
 ]
 
 
@@ -168,7 +189,8 @@ def hal_quote(issues: list[dict], name: str, now: float | None = None) -> str:
     elif issues:
         pool, issue = (QUOTE_INFO if len(issues) == 1 else QUOTE_INFO_MANY), issues[0]
     else:
-        pool, issue = QUOTES_OK, None
+        hour = datetime.fromtimestamp(now).hour
+        pool, issue = (QUOTES_NIGHT if hour >= 22 or hour < 6 else QUOTES_OK), None
     text = pool[slot % len(pool)]
     title = issue["title"] if issue else ""
     first = title.split(" ", 1)[0] if title else ""
@@ -2621,13 +2643,18 @@ def tv_brief(st: dict) -> dict:
     name = st["hal"]["name"]
     quote = st["hal"]["quote"]
     if name and name in st["hal"]["greeting"]:
-        quote = re.sub(r",\s*" + re.escape(name) + r"([.!?])$", r"\1", quote)   # "...attention, Dave." after "Good evening, Dave."
+        # one "Dave" on the TV: the greeting has it, so HAL's line after it drops it ("..., Dave." / "Dave, ...")
+        quote = re.sub(r",\s*" + re.escape(name) + r"\b", "", quote)
+        quote = re.sub(r"^" + re.escape(name) + r",\s*", "", quote)
+        quote = quote[:1].upper() + quote[1:]
     say = st["hal"]["greeting"] + " " + quote
     if alerts and alerts[0]["title"] not in say:
         say += " " + alerts[0]["title"] + "."
     lines = [{"text": st["hal"]["greeting"] + " " + quote, "say": spoken(say)}]
     if not alerts:
-        for q in random.sample(QUOTES_OK, min(4, len(QUOTES_OK))):
+        hour = datetime.now().hour
+        pool = QUOTES_NIGHT if hour >= 22 or hour < 6 else QUOTES_OK
+        for q in random.sample(pool, min(4, len(pool))):
             q = q.format(name=name)
             if q != st["hal"]["quote"]:
                 lines.append({"text": q, "say": spoken(q)})
