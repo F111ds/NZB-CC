@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.32.5"
+VERSION = "1.32.6"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -468,6 +468,7 @@ DEFAULT_SETTINGS = {
     # more temperatures (from LibreHardwareMonitor, where the PC has these sensors)
     "gpu_hot_alert": 100, "gpu_mem_alert": 100, "vrm_temp_alert": 100, "chipset_temp_alert": 90, "nvme_temp_alert": 80,
     "fan_alert": True,              # tell me when a fan that normally spins stops
+    "fan_control_config": "",       # Fan Control's configuration file, if HAL can't find it (e.g. C:\\...\\userConfig.json)
     "ping_host": "1.1.1.1",
     "phone_port": 8765,
     "nut_host": "", "nut_port": 3493, "nut_ups": "",   # Network UPS Tools (blank host: not used)
@@ -1642,6 +1643,7 @@ class FanControlApp:
         self.base_name = self.BASE
         self.running = False
         self.problem = ""
+        self.config_path = ""   # the fan_control_config setting
         self.rpm: dict = {}   # control id -> its fan's rpm (from LibreHardwareMonitor), to leave pumps alone
 
     # where Fan Control is usually installed, for when Windows won't say where the running one is
@@ -1665,24 +1667,53 @@ class FanControlApp:
             pass
         if not self.running:
             return False
-        homes = [os.path.dirname(self.exe)] if self.exe else []
-        homes += [d for d in self.INSTALL_DIRS + tuple(os.path.join(os.path.expanduser("~"), x, "FanControl") for x in ("Downloads", "Desktop", "Documents"))
-                  if d not in homes]
-        for home in homes:
-            for d in (os.path.join(home, "Configurations"), home):
-                base = self._base_in(d)
-                if base:
-                    self.dir, self.base_name = d, base
-                    if not self.exe and os.path.isfile(os.path.join(home, "FanControl.exe")):
-                        self.exe = os.path.join(home, "FanControl.exe")
-                    break
-            if self.dir:
+        if self.config_path and os.path.isfile(self.config_path):
+            self.dir, self.base_name = os.path.dirname(self.config_path), os.path.basename(self.config_path)
+        for d in ([] if self.dir else self.config_dirs()):
+            base = self._base_in(d)
+            if base:
+                self.dir, self.base_name = d, base
                 break
+        if not self.exe:
+            for home in self.INSTALL_DIRS:
+                if os.path.isfile(os.path.join(home, "FanControl.exe")):
+                    self.exe = os.path.join(home, "FanControl.exe")
+                    break
         if not self.exe:
             self.problem = "Fan Control is running, but Windows won't tell me where it's installed (run HAL as administrator)"
         elif not self.dir:
-            self.problem = f"Fan Control is running, but I couldn't find its Configurations folder next to {self.exe}"
+            self.problem = (f"Fan Control is running from {os.path.dirname(self.exe)}, but I couldn't find its configuration"
+                            f" (userConfig.json) there or in your AppData, Documents or ProgramData folders")
         return bool(self.exe and self.dir)
+
+    def config_dirs(self) -> list[str]:
+        """Where Fan Control may keep its configurations: next to it (portable), or in the user's folders (newer
+        installed versions: AppData, Documents) or ProgramData; the Configurations folder in each, then the folder."""
+        env = os.environ.get
+        user = os.path.expanduser("~")
+        homes = [os.path.dirname(self.exe)] if self.exe else []
+        homes += [os.path.join(b, "FanControl") for b in (env("APPDATA", ""), env("LOCALAPPDATA", ""), env("PROGRAMDATA", r"C:\ProgramData"),
+                                                           os.path.join(user, "Documents"), os.path.join(user, "OneDrive", "Documents"),
+                                                           os.path.join(user, "Downloads"), os.path.join(user, "Desktop")) if b]
+        homes += list(self.INSTALL_DIRS)
+        out = []
+        for h in homes:
+            for d in (os.path.join(h, "Configurations"), h):
+                if d not in out:
+                    out.append(d)
+        # Fan Control's own settings can name the configuration in use (e.g. "...\\userConfig.json"): follow it
+        for h in homes:
+            for nm in ("FanControl.settings.json", "settings.json", "AppSettings.json"):
+                try:
+                    with open(os.path.join(h, nm), encoding="utf-8-sig") as f:
+                        txt = f.read(200000)
+                except OSError:
+                    continue
+                for m in re.finditer(r'"([A-Za-z]:[^"]+?\.json)"', txt.replace("\\\\", "\\")):
+                    d = os.path.dirname(m.group(1))
+                    if d not in out:
+                        out.insert(0, d)
+        return out
 
     def _base_in(self, d: str) -> str:
         """The owner's configuration in folder d: userConfig.json, else the newest .json that isn't one of HAL's."""
@@ -3956,6 +3987,7 @@ class Hal(FunMixin):
         self.kuma_down_t: dict[str, float] = {}  # monitor -> when it went down
         self.fan_watch = FanWatch()
         self.fan_ctl = FanControl()
+        self.fan_ctl.app.config_path = str(self.settings.get("fan_control_config") or "")
         self._fan_was = str(st.get("fan_mode") or "auto")   # a manual mode left over from before a restart
         self.pi_temp_hist: deque = deque(maxlen=120)
         self.pi_cpu_hist: deque = deque(maxlen=120)
