@@ -518,6 +518,12 @@ except urllib.error.HTTPError as e:
 code, body, _ = call("/hal/", tok=None)
 assert code == 200 and b"const B='/hal'" in body and b'href="/hal/manifest.webmanifest"' in body and b"__BASE__" not in body
 assert f"localhost:{port}/hal/pair".encode() in body
+# the TV's animated HAL screen: served under /hal/tv, no code needed for the page itself (its data calls need it),
+# web fonts allowed, the remote and voice hooks the TV app calls
+code, body, hdr = call("/hal/tv", tok=None)
+assert code == 200 and b"window.halKey" in body and b"window.halSay" in body and b"window.halLine" in body and b"HAL.ready()" in body
+assert "fonts.gstatic.com" in hdr["Content-Security-Policy"] and "connect-src 'self'" in hdr["Content-Security-Policy"]
+assert call("/hal/api/tv/details", tok=None)[0] == 401
 man = json.loads(call("/hal/manifest.webmanifest", tok=None)[1])
 assert man["start_url"] == "/hal/" and man["scope"] == "/hal/" and man["icons"][0]["src"] == "/hal/icon.png"
 assert call("/hal/icon-512.png", tok=None)[1][:4] == b"\x89PNG"

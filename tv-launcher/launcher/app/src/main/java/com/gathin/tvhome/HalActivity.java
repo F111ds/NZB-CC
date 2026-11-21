@@ -44,6 +44,15 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import android.net.Uri;
+import android.view.ViewGroup;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
@@ -84,6 +93,9 @@ public class HalActivity extends Activity {
 
     private TextToSpeech tts;
     private boolean ttsReady, speaking;
+    /** The animated HAL screen from the PC (<server>/hal/tv), laid over this one once it says it's ready. */
+    private WebView web;
+    private boolean webOn;
     private String pendingSay = "";      // to say once the voice is ready
     private String lastSay = "";
     private String shownQuote = "";
@@ -103,6 +115,7 @@ public class HalActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON | WindowManager.LayoutParams.FLAG_FULLSCREEN);
         extras = HomeExtras.load(this);
         setContentView(build());
+        setupWeb();
         takeMessage(getIntent());
         tts = new TextToSpeech(this, status -> {
             if (status != TextToSpeech.SUCCESS || tts == null) return;
@@ -148,6 +161,10 @@ public class HalActivity extends Activity {
         running = true;
         io = Executors.newSingleThreadExecutor();
         eye.start();
+        if (web != null) {
+            web.onResume();
+            web.resumeTimers();
+        }
         refresh();
         main.postDelayed(this::nextLine, LINE_MS);
         main.postDelayed(this::drift, DRIFT_MS);
@@ -158,6 +175,10 @@ public class HalActivity extends Activity {
         running = false;
         main.removeCallbacksAndMessages(null);
         eye.stop();
+        if (web != null) {
+            web.onPause();
+            web.pauseTimers();
+        }
         if (detailsOpen()) closeDetails();
         if (io != null) {
             final ExecutorService old = io;
@@ -179,6 +200,7 @@ public class HalActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        dropWeb();
         if (tts != null) {
             try {
                 tts.shutdown();
@@ -192,6 +214,19 @@ public class HalActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        // The animated screen has its own details pages: the arrows and Back go to it (OK still makes HAL talk).
+        if (webOn && web != null) {
+            String k = keyCode == KeyEvent.KEYCODE_DPAD_DOWN ? "down" : keyCode == KeyEvent.KEYCODE_DPAD_UP ? "up"
+                    : keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? "left" : keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ? "right"
+                    : keyCode == KeyEvent.KEYCODE_BACK ? "back" : null;
+            if (k != null) {
+                final boolean back = "back".equals(k);
+                web.evaluateJavascript("window.halKey?halKey('" + k + "'):false", v -> {
+                    if (back && !"true".equals(v)) finish();
+                });
+                return true;
+            }
+        }
         // Details: Down opens them, Left/Right go between the pages, Back (or Up) returns to HAL.
         if (detailsOpen()) {
             if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_DPAD_UP) {
@@ -217,6 +252,88 @@ public class HalActivity extends Activity {
             return true;
         }
         return super.onKeyDown(keyCode, event);
+    }
+
+    // ---- the animated screen (from the PC) ----------------------------------------------------------
+
+    /** Loads <server>/hal/tv over this screen. It stays invisible until the page calls HAL.ready(); if the PC is
+     *  older (no such page), it errors, or it doesn't answer in 12 s, this screen carries on as before. */
+    private void setupWeb() {
+        if (extras.kodiServer.isEmpty()) return;
+        try {
+            web = new WebView(this);
+            WebSettings ws = web.getSettings();
+            ws.setJavaScriptEnabled(true);
+            ws.setDomStorageEnabled(true);
+            ws.setMediaPlaybackRequiresUserGesture(false);
+            ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
+            web.setBackgroundColor(0xFF0A0405);
+            web.setAlpha(0f);
+            web.setFocusable(false);
+            web.setFocusableInTouchMode(false);
+            web.addJavascriptInterface(new Bridge(), "HAL");
+            web.setWebViewClient(new WebViewClient() {
+                @Override
+                public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
+                    if (r.isForMainFrame()) dropWeb();
+                }
+
+                @Override
+                public void onReceivedHttpError(WebView v, WebResourceRequest r, WebResourceResponse resp) {
+                    if (r.isForMainFrame()) dropWeb();
+                }
+            });
+            addContentView(web, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            web.loadUrl(extras.kodiServer + "/hal/tv#k=" + Uri.encode(extras.kodiToken));
+            main.postDelayed(() -> {
+                if (!webOn) dropWeb();
+            }, 12_000);
+        } catch (Throwable t) {
+            web = null;     // no WebView on this TV: the plain screen it is
+        }
+    }
+
+    private void dropWeb() {
+        main.post(() -> {
+            if (web == null) return;
+            WebView w = web;
+            web = null;
+            webOn = false;
+            try {
+                if (w.getParent() instanceof ViewGroup) ((ViewGroup) w.getParent()).removeView(w);
+                w.destroy();
+            } catch (Exception ignored) {
+                // gone
+            }
+        });
+    }
+
+    private void webJs(String js) {
+        if (webOn && web != null) web.evaluateJavascript(js, null);
+    }
+
+    /** What the page may ask of the app. */
+    private class Bridge {
+        @JavascriptInterface
+        public void ready() {
+            main.post(() -> {
+                if (web == null || webOn) return;
+                webOn = true;
+                web.animate().alpha(1f).setDuration(350).start();
+                if (!shownQuote.isEmpty()) webJs("window.halLine&&halLine(" + JSONObject.quote(shownQuote) + ")");
+            });
+        }
+
+        /** HAL says something of the page's own ("Dave… are you there?") with the TV's voice. */
+        @JavascriptInterface
+        public void say(String text) {
+            if (text == null || text.trim().isEmpty() || text.length() > 300) return;
+            main.post(() -> {
+                if (speaking) return;
+                shownQuote = text.trim();
+                HalActivity.this.say(shownQuote);
+            });
+        }
     }
 
     // ---- layout ---------------------------------------------------------------------------------
@@ -521,7 +638,10 @@ public class HalActivity extends Activity {
     private void setLine(String say, String text) {
         shownQuote = text.trim();
         currentSay = say.isEmpty() ? shownQuote : say;
-        if (!speaking) quote.setText("“" + shownQuote + "”");
+        if (!speaking) {
+            quote.setText("“" + shownQuote + "”");
+            webJs("window.halLine&&halLine(" + JSONObject.quote(shownQuote) + ")");
+        }
     }
 
     /** A different HAL line every few minutes (the PC sends a handful). */
@@ -609,6 +729,7 @@ public class HalActivity extends Activity {
     }
 
     private void reveal(float fraction) {
+        webJs("window.halSay&&halSay(" + JSONObject.quote(shownQuote) + "," + fraction + ")");
         String q = "“" + shownQuote + "”";
         int upTo = Math.max(1, Math.min(q.length(), Math.round(q.length() * fraction)));
         SpannableString s = new SpannableString(q);
@@ -637,6 +758,7 @@ public class HalActivity extends Activity {
             main.post(() -> {
                 speaking = false;
                 quote.setText("“" + shownQuote + "”");
+                webJs("window.halVoice&&halVoice(false)");
             });
         }
 
