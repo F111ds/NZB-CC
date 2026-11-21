@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.27.0"
+VERSION = "1.27.1"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -2571,9 +2571,9 @@ def tv_grids(hal, st: dict, sc: dict, hist: dict) -> dict:
          "big": f"{int(ph.get('queries') or 0):,}" if ph.get("ok") else "—",
          "bigsub": (f"asked · {int(ph.get('blocked') or 0):,} blocked ({ph.get('percent') or 0:.0f}%)"
                     + (f" · {ph['clients']} devices" if ph.get("clients") else "")) if ph.get("ok") else "",
-         "hourly": [h[0] for h in hourly], "hourly2": [h[1] for h in hourly], "hourly_color": "#2A9D74", "hourly2_color": "#FF6A4D",
+         "hourly": [h[0] for h in hourly], "hourly2": [h[1] for h in hourly], "hourly_color": DNS_ALLOWED, "hourly2_color": DNS_BLOCKED,
          "hourly_labels": ["24 h ago", "18 h", "12 h", "6 h", "now"] if hourly else [],
-         "hourly_label": "green: allowed   red: blocked" if hourly else "",
+         "hourly_label": "amber: allowed   red: blocked" if hourly else "",
          "rows": [] if hourly else [["Pi-hole isn't answering", "", "ok"]]},
     ], [
         {"key": "PI-HOLE", "badge": ("BLOCKING" if ph.get("blocking") is not False else "PAUSED") if ph.get("ok") else "NOT ANSWERING",
@@ -2583,11 +2583,20 @@ def tv_grids(hal, st: dict, sc: dict, hist: dict) -> dict:
                   ["Sites on the lists", f"{int(ph.get('domains') or 0):,}" if ph.get("domains") else "—", "ok"],
                   ["Devices", str(ph.get("clients") or "—"), "ok"]]},
         {"key": "MOST BLOCKED", "badge": "TODAY", "weight": 1.25,
-         "rows": [[d[0][:34], f"{d[1]:,}", "ok", round(d[1] * 100 / bmax)] for d in top_b[:5]] or [["Nothing yet", "", "ok"]]},
+         "rows": [[d[0][:34], f"{d[1]:,}", "ok", round(d[1] * 100 / bmax), DNS_BLOCKED] for d in top_b[:5]] or [["Nothing yet", "", "ok"]]},
         {"key": "MOST ASKED FOR", "badge": "ALLOWED", "weight": 1.25,
-         "rows": [[d[0][:34], f"{d[1]:,}", "ok", round(d[1] * 100 / amax)] for d in top_a[:5]] or [["Nothing yet", "", "ok"]]},
+         "rows": [[d[0][:34], f"{d[1]:,}", "ok", round(d[1] * 100 / amax), DNS_ALLOWED] for d in top_a[:5]] or [["Nothing yet", "", "ok"]]},
     ]]
     return {"The PC": pc, "Network": net, "Uptime Kuma": kuma, "Raspberry Pi": pi}
+
+
+def tv_brief_with_history(hal, st: dict) -> dict:
+    """tv_brief, plus each Uptime Kuma monitor's real response times from the last hour (its little line on the TV)."""
+    b = tv_brief(st)
+    with hal.lock:
+        for m in (b.get("screen") or {}).get("kuma", {}).get("monitors") or []:
+            m["ms_hist"] = list(hal.kuma_ms.get(m["name"]) or [])[-30:]
+    return b
 
 
 def tv_details(hal) -> dict:
@@ -2749,6 +2758,9 @@ def tv_brief(st: dict) -> dict:
             "kuma_up": km.get("up") if km.get("ok") else None, "kuma_total": len(km.get("monitors") or []) if km.get("ok") else None,
             "ads_on": ph.get("blocking") is not False if ph.get("ok") else None}
 
+
+# allowed / blocked DNS requests: the same two colours on every screen (they stay apart for red-green colour blindness)
+DNS_ALLOWED, DNS_BLOCKED = "#ffc46b", "#ff3a1e"
 
 TV_PACKAGE = "com.gathin.tvhome"
 TV_PHRASES_MAX = 20
@@ -5358,7 +5370,7 @@ class HalRoutes:
                                    "issues": len(st["issues"]), "cpu": st["vitals"]["cpu"]["pct"], "ram": st["vitals"]["mem"]["pct"],
                                    "ads": ph.get("blocked") if ph.get("ok") else None, "kuma_down": km.get("down") if km.get("ok") else None,
                                    "fullest": {"mount": full["mount"], "pct": full["pct"], "free": full["free"]} if full else None,
-                                   "record": st["record"], **tv_brief(st)})
+                                   "record": st["record"], **tv_brief_with_history(hal, st)})
             elif path == "/api/tv/details":
                 self._h_json(200, tv_details(hal))
             elif path == "/api/tv/phrases":
