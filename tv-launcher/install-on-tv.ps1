@@ -219,7 +219,7 @@ SetKey 'rows_below_dock' 0
 SetKey 'date_below_clock' $false   # clock and date on one line
 SetKey 'kodi_row_size' 5           # five posters: recently watched
 SetKey 'dock_tile_scale' 0.5       # small app tiles in a compact row, centred
-SetKey 'home_apps' @('com.netflix.ninja|Netflix', 'com.amazon.amazonvideo.livingroom|Prime Video', 'com.google.android.youtube.tv|YouTube', 'org.xbmc.kodi|Kodi')   # only these on Home; the rest are under the grid button
+SetKey 'home_apps' @('com.netflix.ninja|Netflix', 'com.amazon.amazonvideo.livingroom|Prime Video', 'org.xbmc.kodi|Kodi')   # only these on Home; the rest are under the grid button
 SetKey 'show_library_pill' $false  # no App library pill after the dock; Right past the last app or the grid button opens it
 SetKey 'library_ok_opens' $true   # App library: OK opens the app; hold OK for Add to Home
 SetKey 'sky_intensity' 70        # time-of-day sky behind Home (0 turns it off)

@@ -127,7 +127,7 @@ experience on top of it, piece by piece, checking each change on the real TV.
     within seconds when you come back to Home, and includes a movie you left open in Kodi.
 - **"Ready to watch"**: when SABnzbd finishes a download, a card with the poster slides in under the top line.
 - **A calm dock**: one glass band along the bottom with just the apps we use, each as its own icon: Netflix, Prime
-  Video, YouTube, Kodi, and **HAL 9000**. Everything else is behind the library button, and the dock keeps the order
+  Video and Kodi (HAL is the big eye above the posters). Everything else is behind the library button, and the dock keeps the order
   you set.
 - **The look, in HAL's red style**: behind the posters, the background art of the movie or show you're on fills
   the screen, dimmed so the posters stand out, and fades to the next one as you move along the row. HAL's red glow
@@ -136,8 +136,10 @@ experience on top of it, piece by piece, checking each change on the real TV.
   look. The glow and the embers take the colour of the poster you're on (a little warmer in the evening, cooler in
   the morning), each poster has a faint reflection under it as if the row stood on a glossy floor, the poster you
   move to lifts and tilts toward you, and the art slides gently the other way as you move along the row.
-  **HAL's eye in the dock** is drawn as on his screen and the phone: it glances around, watches the selection move
-  along the posters, blinks now and then and glows brighter when you select him. When the TV is switched on, **HAL
+  **HAL's big eye** sits above the posters, under the top line, with his latest line from the PC beside it and a
+  slow ring of light turning round it. It's drawn as on his screen and the phone: it glances around, watches the
+  selection move along the posters, blinks now and then and glows brighter when selected. Press Up from the posters
+  to select him; OK opens his monitor screens (his icon is no longer in the dock). When the TV is switched on, **HAL
   wakes up**: his eye lights in the dark and a red pulse spreads out before Home fades in. A "Ready to watch" card
   arrives with a burst of sparks. (The motion pauses whenever an app is open, and is off when the TV's animations
   are off. While it's new, the TV reports its free memory, the home screen's memory and CPU, and how smoothly it
