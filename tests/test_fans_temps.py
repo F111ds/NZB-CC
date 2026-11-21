@@ -296,4 +296,44 @@ fc.set_mode("auto")
 _srv.shutdown()
 print("fan control ok")
 
+
+# ---------------- Rem0o's Fan Control: HAL writes profiles from userConfig.json and switches them ----------------
+import os as _os, tempfile as _tf
+_cfg = {"__VERSION__": "286", "Main": {"Controls": [
+    {"Name": "CPU", "Identifier": "/lpc/nct6798d/0/control/1", "ManualControl": False, "ManualControlValue": 50, "SelectedFanCurve": "CPU curve", "Enable": True},
+    {"Name": "Chassis 1", "Identifier": "/lpc/nct6798d/0/control/0", "ManualControl": False, "ManualControlValue": 50, "SelectedFanCurve": "Case", "Enable": True},
+    {"Name": "AIO Pump", "Identifier": "/lpc/nct6798d/0/control/6", "ManualControl": False, "ManualControlValue": 100, "Enable": True},
+    {"Name": "GPU Fan", "Identifier": "/gpu-nvidia/0/control/0", "ManualControl": False, "ManualControlValue": 30, "Enable": True}],
+    "FanCurves": [{"Name": "CPU curve"}, {"Name": "Case"}]}}
+q = hs.fc_profile(_cfg, "quiet")
+cc = {c["Name"]: c for c in hs.fc_controls(q)}
+assert cc["CPU"]["ManualControl"] and cc["CPU"]["ManualControlValue"] == 40, cc["CPU"]          # CPU floor
+assert cc["Chassis 1"]["ManualControl"] and cc["Chassis 1"]["ManualControlValue"] == 35
+assert not cc["AIO Pump"]["ManualControl"] and not cc["GPU Fan"]["ManualControl"]                # pump and graphics card keep their curves
+assert not hs.fc_controls(_cfg)[0]["ManualControl"]                                              # the owner's file isn't touched
+assert {c["ManualControlValue"] for c in hs.fc_controls(hs.fc_profile(_cfg, "max")) if c["ManualControl"]} == {100}
+d = _tf.mkdtemp(); conf = _os.path.join(d, "Configurations"); _os.makedirs(conf)
+with open(_os.path.join(conf, "userConfig.json"), "w") as f:
+    _json.dump(_cfg, f)
+app = hs.FanControlApp(); app.exe = _os.path.join(d, "FanControl.exe"); app.dir = conf
+pth = app.write_profile("cool")
+assert pth.endswith("HAL-Cool.json") and _os.path.isfile(pth)
+with open(pth) as f:
+    assert {c["ManualControlValue"] for c in hs.fc_controls(_json.load(f)) if c["ManualControl"]} == {70}
+assert app.path_for("auto").endswith("userConfig.json")
+# the controller uses it when Fan Control runs (switch faked: records what it would load)
+loaded = []
+class _App(hs.FanControlApp):
+    def find(self): self.exe, self.dir = app.exe, conf; return True
+    def switch(self, mode):
+        loaded.append(_os.path.basename(self.path_for(mode) if mode == "auto" else self.write_profile(mode))); return (mode != "max"), ("" if mode != "max" else "Fan Control didn't switch to HAL-Max.json")
+fc2 = hs.FanControl(port=1); fc2.app = _App()
+r = fc2.set_mode("cool")
+assert r["ok"] and fc2.mode == "cool" and fc2.view()["via"] == "Fan Control" and loaded == ["HAL-Cool.json"], (r, loaded)
+assert fc2.watch("the CPU reached 88°C") and fc2.mode == "auto" and loaded[-1] == "userConfig.json"
+r = fc2.set_mode("max")
+assert not r["ok"] and fc2.mode == "auto" and "didn't switch" in r["say"] and loaded[-1] == "userConfig.json", (r, loaded)
+fc2.refresh(); assert fc2.view()["available"]     # available through Fan Control even without LibreHardwareMonitor
+print("Fan Control profiles ok")
+
 print("\nALL FAN AND TEMPERATURE TESTS PASSED")

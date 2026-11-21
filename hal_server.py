@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.31.1"
+VERSION = "1.32.0"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1575,6 +1575,119 @@ def fan_targets(fans: list[dict], mode: str) -> dict:
     return out
 
 
+# ---- Rem0o's Fan Control (it drives the fans itself, so HAL switches its configurations instead) ----
+
+def fc_controls(cfg) -> list[dict]:
+    """The fan controls in a Fan Control configuration (dicts with "Identifier" and "ManualControl")."""
+    out = []
+
+    def walk(x):
+        if isinstance(x, dict):
+            if "Identifier" in x and "ManualControl" in x:
+                out.append(x)
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+    walk(cfg)
+    return out
+
+
+def fc_profile(cfg: dict, mode: str) -> dict:
+    """A copy of the owner's configuration with each motherboard fan at the mode's fixed % (with the floors);
+    pumps and the graphics card keep the owner's curves."""
+    cfg = json.loads(json.dumps(cfg))
+    ctrls = [c for c in fc_controls(cfg) if not str(c.get("Identifier", "")).lower().startswith("/gpu") and "pump" not in str(c.get("Name", "")).lower()]
+    fans = [{"name": str(c.get("Name") or ""), "control_id": str(c.get("Identifier"))} for c in ctrls]
+    want = fan_targets(fans, mode)
+    for c in ctrls:
+        if str(c.get("Identifier")) in want:
+            c["ManualControl"] = True
+            c["ManualControlValue"] = want[str(c.get("Identifier"))]
+    return cfg
+
+
+class FanControlApp:
+    """Finds Fan Control running, writes HAL-Quiet/Normal/Cool/Max.json next to the owner's userConfig.json and
+    switches between them ("FanControl.exe -c <file>"; Auto loads userConfig.json), checking its title bar."""
+    BASE = "userConfig.json"
+
+    def __init__(self):
+        self.exe = ""
+        self.dir = ""
+
+    def find(self) -> bool:
+        self.exe = self.dir = ""
+        try:
+            for p in psutil.process_iter(["name", "exe"]):
+                if str(p.info.get("name") or "").lower() == "fancontrol.exe" and p.info.get("exe"):
+                    self.exe = p.info["exe"]
+                    self.dir = os.path.join(os.path.dirname(self.exe), "Configurations")
+                    break
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(self.exe) and os.path.isfile(os.path.join(self.dir, self.BASE))
+
+    def path_for(self, mode: str) -> str:
+        return os.path.join(self.dir, self.BASE if mode == "auto" else f"HAL-{mode.title()}.json")
+
+    def write_profile(self, mode: str) -> str:
+        with open(os.path.join(self.dir, self.BASE), encoding="utf-8-sig") as f:
+            base = json.load(f)
+        if not fc_controls(base):
+            raise ValueError("Fan Control's configuration has no fan controls I can set")
+        path = self.path_for(mode)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(fc_profile(base, mode), f, indent=2)
+        os.replace(tmp, path)
+        return path
+
+    def title(self) -> str:
+        """Fan Control's window title ("Fan Control V286 (userConfig.json)"), or ""."""
+        if not IS_WINDOWS:
+            return ""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            pids = {p.pid for p in psutil.process_iter(["name"]) if str(p.info.get("name") or "").lower() == "fancontrol.exe"}
+            found = []
+            user32 = ctypes.windll.user32
+
+            @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            def cb(hwnd, _):
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if pid.value in pids:
+                    n = user32.GetWindowTextLengthW(hwnd)
+                    if n:
+                        buf = ctypes.create_unicode_buffer(n + 1)
+                        user32.GetWindowTextW(hwnd, buf, n + 1)
+                        if "fan control" in buf.value.lower():
+                            found.append(buf.value)
+                return True
+            user32.EnumWindows(cb, 0)
+            return found[0] if found else ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def switch(self, mode: str) -> tuple[bool, str]:
+        path = self.path_for(mode) if mode == "auto" else self.write_profile(mode)
+        flags = 0x08000000 if IS_WINDOWS else 0   # no console window
+        subprocess.Popen([self.exe, "-c", path], cwd=os.path.dirname(self.exe), creationflags=flags,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        name = os.path.basename(path).lower()
+        for _ in range(16):   # up to 8 s for Fan Control to load it
+            time.sleep(0.5)
+            t = self.title().lower()
+            if name in t:
+                return True, ""
+            if not t:
+                break
+        return (not self.title()), ("" if not self.title() else "Fan Control didn't switch to " + os.path.basename(path))
+
+
 class FanControl:
     """Fan modes for the phone and TV: Auto (the BIOS curves) or a fixed % from LibreHardwareMonitor, with HAL
     handing back to Auto by himself when anything runs hot."""
@@ -1589,6 +1702,8 @@ class FanControl:
         self.reason = "checking"
         self.last_error = ""
         self.check: dict | None = None   # after a change: the speeds before, to see the fans really respond
+        self.app = FanControlApp()
+        self.via = ""                    # "Fan Control" when it runs (HAL switches its configurations), else LibreHardwareMonitor
         self.lock = threading.RLock()
 
     def _open(self, url: str, method: str = "GET", timeout: float = 3.0):
@@ -1596,17 +1711,19 @@ class FanControl:
         return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=timeout)
 
     def refresh(self) -> None:
+        has_app = self.app.find()
         try:
             with self._open(f"http://127.0.0.1:{self.port}/data.json") as r:
                 data = json.loads(r.read(8_000_000).decode("utf-8", "replace"))
         except Exception:  # noqa: BLE001
             with self.lock:
-                self.fans, self.available, self.reason = [], False, "LibreHardwareMonitor isn't answering (its web server on port 8085)"
+                self.fans, self.available = [], has_app
+                self.reason = "" if has_app else "LibreHardwareMonitor isn't answering (its web server on port 8085)"
             return
         fans = [f for f in lhm_fan_controls(data) if f["rpm"]]   # headers with a fan on them
         with self.lock:
             self.fans = fans
-            self.available = bool(fans_controllable(fans))
+            self.available = bool(fans_controllable(fans)) or bool(self.app.exe)
             self.reason = "" if self.available else "LibreHardwareMonitor shows no fans it can control on this PC"
 
     def _set(self, cid: str, value) -> bool:
@@ -1634,6 +1751,27 @@ class FanControl:
         mode = str(mode or "").lower()
         if mode not in FAN_ORDER:
             raise ValueError("Unknown fan mode.")
+        if self.app.find():
+            # Fan Control is in charge of the fans: switch its configuration (it would undo anything set beside it)
+            self.via = "Fan Control"
+            try:
+                ok, err = self.app.switch(mode)
+            except Exception as e:  # noqa: BLE001
+                ok, err = False, str(e)
+            if not ok and mode != "auto":
+                try:
+                    self.app.switch("auto")
+                except Exception:  # noqa: BLE001
+                    pass
+            self.refresh()
+            with self.lock:
+                if not ok:
+                    self.mode, self.since, self.note = "auto", time.time(), err
+                    return {"ok": False, "say": f"The fans stay on your own Fan Control setup: {err}."}
+                self.mode, self.since, self.note, self.check = mode, time.time(), why, None
+                self.available = True
+            return {"ok": True, "say": "The fans are back on your Fan Control setup." if mode == "auto" else f"The fans are on {mode.title()}."}
+        self.via = "LibreHardwareMonitor"
         self.refresh()
         with self.lock:
             fans = list(self.fans)
@@ -1680,6 +1818,8 @@ class FanControl:
             self.set_mode("auto", why=hot)
             return hot
         self.refresh()
+        if self.via == "Fan Control":
+            return ""
         with self.lock:
             fans = list(self.fans)
         if not fans:
@@ -1705,7 +1845,7 @@ class FanControl:
 
     def view(self) -> dict:
         with self.lock:
-            return {"mode": self.mode, "since": self.since, "note": self.note, "available": self.available, "reason": self.reason,
+            return {"mode": self.mode, "since": self.since, "note": self.note, "available": self.available, "reason": self.reason, "via": self.via,
                     "modes": FAN_ORDER, "fans": [{"name": f["name"], "rpm": f["rpm"], "pct": f["pct"]} for f in self.fans]}
 
 
