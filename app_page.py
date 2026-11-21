@@ -1200,10 +1200,16 @@ if(token)start();else showPair();
 // ===== Ember background: slow smoke drawn by the graphics chip, brightest behind HAL. Low resolution and ~24 frames
 // a second to spare the battery; paused when the app is in the background; one still frame for reduced motion. =====
 // Where HAL is looking (-1..1): small glances every couple of seconds, and now and then a look round the room.
-function halGaze(t){const sm=x=>x<=0?0:x>=1?1:x*x*(3-2*x),r=i=>{const x=Math.sin(i*12.9898)*43758.5453;return x-Math.floor(x)};
- const rc=t%40;if(rc<4.4){const k=[[0,0,0],[.4,-1,.05],[1.3,-1,.05],[1.6,1,.05],[2.5,1,.05],[2.8,-.5,0],[3.3,-.5,0],[3.7,0,0],[4.4,0,0]];
-  for(let i=0;i<k.length-1;i++){const[a,ax,ay]=k[i],[b,bx,by]=k[i+1];if(rc>=a&&rc<=b){const e=sm((rc-a)/Math.min(.3,b-a));return[ax+(bx-ax)*e,ay+(by-ay)*e]}}}
- const n=Math.floor(t/4),f=t/4-n,e=sm(f/.25),to=[(r(n)-.5)*.9,(r(n+.5)-.5)*.7],fr=[(r(n-1)-.5)*.9,(r(n-.5)-.5)*.7];return[fr[0]+(to[0]-fr[0])*e,fr[1]+(to[1]-fr[1])*e]}
+const IDLE={from:[0,0],to:[0,0],at:-9,next:2+Math.random()*3,room:-1,nextRoom:25+Math.random()*60};
+function idleGaze(t,sx,sy){const sm=x=>x<=0?0:x>=1?1:x*x*(3-2*x),G=IDLE;
+ if(G.room<0&&t>=G.nextRoom){G.room=t;G.nextRoom=t+35+Math.random()*85}
+ if(G.room>=0){const rc=t-G.room,d=Math.random()<.5?1:-1,k=G.rk||(G.rk=[[0,0,0],[.4,-d,.05],[1.3,-d,.05],[1.6,d,.05],[2.5,d,.05],[2.8,-.5*d,0],[3.3,-.5*d,0],[3.7,0,0],[4.4,0,0]]);
+  if(rc<4.4){for(let i=0;i<k.length-1;i++){const[a,ax,ay]=k[i],[b,bx,by]=k[i+1];if(rc>=a&&rc<=b){const e=sm((rc-a)/Math.min(.3,b-a));return[ax+(bx-ax)*e,ay+(by-ay)*e]}}}
+  G.room=-1;G.rk=null;G.from=[0,0];G.to=[0,0];G.at=t;G.next=t+1+Math.random()*3}
+ if(t>=G.next){const e0=sm((t-G.at)/.25);G.from=[G.from[0]+(G.to[0]-G.from[0])*e0,G.from[1]+(G.to[1]-G.from[1])*e0];
+  G.to=Math.random()<.35?[0,0]:[(Math.random()*2-1)*sx,(Math.random()*2-1)*sy];G.at=t;G.next=t+(Math.random()<.2?5+Math.random()*4:1+Math.random()*3.5)}
+ const e=sm((t-G.at)/.28);return[G.from[0]+(G.to[0]-G.from[0])*e,G.from[1]+(G.to[1]-G.from[1])*e]}
+function halGaze(t){return idleGaze(t,.45,.35)}
 // A few motes of light drifting in from round the dial into the eye.
 const HSP=Array.from({length:10},(_,i)=>({a:i/10*6.283+Math.sin(i*7)*.4,o:(i*.37)%1,v:.28+(i%4)*.06,r:2+(i%3)}));
 function halSparks(t){const c=document.getElementById('hsparks');if(!c)return;const x=c.getContext('2d'),C=316,W=632;x.clearRect(0,0,W,W);
