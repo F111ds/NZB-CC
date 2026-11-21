@@ -242,6 +242,7 @@ void main(){vec2 uv=gl_FragCoord.xy/r;vec2 p=uv*vec2(r.x/r.y,1.)*2.2;vec2 q=vec2
   // the smoke is soft, so it is drawn at half size to spare the TV
   $('gl').width=960;$('gl').height=540;W=960;H=540;gl.viewport(0,0,W,H);gl.uniform2f(gl.getUniformLocation(pr,'r'),W,H);ut=gl.getUniformLocation(pr,'t');glOK=true}}catch(e){}}
 if(!glOK)$('gl').style.background='radial-gradient(ellipse 520px 380px at 50% 28%,rgba(255,60,20,.5),transparent 70%),#0a0405';
+const DOT=document.createElement('canvas');DOT.width=DOT.height=32;{const d=DOT.getContext('2d'),g=d.createRadialGradient(16,16,0,16,16,16);g.addColorStop(0,'rgba(255,215,160,1)');g.addColorStop(1,'rgba(255,90,30,0)');d.fillStyle=g;d.fillRect(0,0,32,32)}
 const sp=$('sp').getContext('2d'),fx=$('fx').getContext('2d'),FW=1920,FH=1080,EX=960,EY=298;
 let seed=7;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
 const sparks=Array.from({length:12},()=>({x:rnd()*FW,y:rnd()*FH,v:18+rnd()*40,r:1+rnd()*2.6,ph:rnd()*6.28,dr:(rnd()-.5)*20}));
@@ -258,11 +259,11 @@ function gaze(t){
 function pathD(vals,w,h,lo,hi,step){const pts=vals.map((v,i)=>`${(i*w/Math.max(1,vals.length-1)).toFixed(1)} ${(h-(v-lo)/Math.max(1e-6,hi-lo)*h*.8-h*.1).toFixed(1)}`);return'M'+pts.join(' L')}
 function render(t){
  const boot=ease(t/2.6);
- if(glOK){gl.uniform1f(ut,t+40.);gl.drawArrays(gl.TRIANGLE_STRIP,0,4)}
+ if(glOK&&t<3.2){gl.uniform1f(ut,t+40.);gl.drawArrays(gl.TRIANGLE_STRIP,0,4)}
  // sparks
  sp.setTransform(1,0,0,1,0,0);sp.clearRect(0,0,960,540);sp.setTransform(.5,0,0,.5,0,0);
  for(const s of sparks){const y=((s.y-t*s.v)%FH+FH)%FH,x=s.x+Math.sin(t*.8+s.ph)*s.dr,a=(.35+.35*Math.sin(t*3+s.ph))*Math.min(1,y/FH*2)*boot;
-  const g=sp.createRadialGradient(x,y,0,x,y,s.r*4);g.addColorStop(0,`rgba(255,200,120,${a})`);g.addColorStop(1,'rgba(255,90,30,0)');sp.fillStyle=g;sp.beginPath();sp.arc(x,y,s.r*4,0,7);sp.fill()}
+  if(a>.01){sp.globalAlpha=a;sp.drawImage(DOT,x-s.r*4,y-s.r*4,s.r*8,s.r*8)}}sp.globalAlpha=1;
  // boot: the veil lifts, the lens assembles, ticks light in turn, panels unfold from the eye
  $('veil').style.opacity=1-ease((t-.1)/.6);
  const eye=$('eye'),px=Math.sin(t*.23),py=Math.cos(t*.17);
@@ -309,7 +310,7 @@ function render(t){
  fx.setTransform(1,0,0,1,0,0);fx.clearRect(0,0,960,540);fx.setTransform(.5,0,0,.5,0,0);
  if(t>1.4&&!detOn){const a=Math.min(1,(t-1.4)/1);for(const m of motes){const[sx,sy]=srcPts[m.s],p=(m.o+t*m.v)%1,cx=(sx+EX)/2+m.w,cy=Math.min(sy,EY)-80+m.w*.3;
   const x=(1-p)*(1-p)*sx+2*(1-p)*p*cx+p*p*EX,y=(1-p)*(1-p)*sy+2*(1-p)*p*cy+p*p*EY,al=a*Math.sin(p*Math.PI)*.85*(p<.92?1:0);
-  const gg=fx.createRadialGradient(x,y,0,x,y,m.r*5);gg.addColorStop(0,`rgba(255,215,160,${al})`);gg.addColorStop(1,'rgba(255,90,30,0)');fx.fillStyle=gg;fx.beginPath();fx.arc(x,y,m.r*5,0,7);fx.fill()}}
+  if(al>.01){fx.globalAlpha=al;fx.drawImage(DOT,x-m.r*5,y-m.r*5,m.r*10,m.r*10)}}fx.globalAlpha=1}
 
 
 }
@@ -354,7 +355,7 @@ window.halKey=function(k){if(k==='down'){if(!detOn)openDet();return true}
  return false};
 addEventListener('keydown',e=>{const m={ArrowDown:'down',ArrowUp:'up',ArrowLeft:'left',ArrowRight:'right',Escape:'back',Backspace:'back'}[e.key];if(m&&halKey(m))e.preventDefault()});
 // ---------- go ----------
-let lastF=0;function loop(ts){if(ts-lastF>=32){lastF=ts;render(now())}requestAnimationFrame(loop)}
+function loop(){render(now());requestAnimationFrame(loop)}
 window.render=render;
 poll();pollSlow();requestAnimationFrame(loop);
 setTimeout(()=>{try{if(APP)HAL.ready()}catch(e){}},300);
