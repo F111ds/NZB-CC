@@ -87,7 +87,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 #det .dhint b{color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:5px;padding:0 5px;margin:0 5px 0 16px}
 #main{position:absolute;inset:0;transition:opacity .35s}
 #main.off{opacity:0}
-#sweep{position:absolute;inset:0;will-change:transform;animation:spin 9s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+#sweep{position:absolute;left:50%;top:50%;width:266px;height:266px;margin:-133px 0 0 -133px;pointer-events:none;will-change:transform;animation:spin 9s linear infinite;background:conic-gradient(from 0deg,rgba(255,176,122,0) 0deg,rgba(255,176,122,.08) 120deg,rgba(255,200,160,.35) 300deg,rgba(255,232,210,.95) 358deg,rgba(255,176,122,0) 360deg);border-radius:50%;-webkit-mask:radial-gradient(closest-side,transparent calc(100% - 8px),#000 calc(100% - 7px));mask:radial-gradient(closest-side,transparent calc(100% - 8px),#000 calc(100% - 7px))}@keyframes spin{to{transform:rotate(360deg)}}
 </style></head><body><div id="stage">
 <canvas id="gl" class="full" width="1920" height="1080"></canvas><canvas id="sp" class="full" width="960" height="540"></canvas><canvas id="fx" class="full" width="960" height="540"></canvas>
 
@@ -117,7 +117,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
  <g clip-path="url(#lensclip)"><g id="iris"><circle cx="150" cy="150" r="80" fill="url(#lens)"/><circle id="core" cx="150" cy="150" r="40" fill="url(#coreg)" style="mix-blend-mode:screen"/></g></g>
  <ellipse cx="128" cy="112" rx="34" ry="16" fill="rgba(255,255,255,.16)" transform="rotate(-28 128 112)"/><circle cx="182" cy="186" r="5" fill="rgba(255,255,255,.12)"/>
  <g font-family="JetBrains Mono,monospace" font-size="9.5" font-weight="700" fill="#ffe2d6"><text id="l1" x="142" y="26" text-anchor="end"></text><text id="l2" x="142" y="38" text-anchor="end" fill="#ffb59a"></text><text id="l3" x="142" y="50" text-anchor="end" fill="#9ff5d0"></text></g>
-</svg><div id="sweep"><svg width="270" height="270" viewBox="0 0 300 300"><defs><linearGradient id="sw2" gradientUnits="userSpaceOnUse" x1="150" y1="7" x2="251" y2="49"><stop offset="0" stop-color="#ffb07a" stop-opacity="0"/><stop offset="1" stop-color="#ffe0c8" stop-opacity=".95"/></linearGradient></defs><path d="M150 7 A143 143 0 0 1 251 49" fill="none" stroke="url(#sw2)" stroke-width="9" stroke-linecap="round" opacity=".6"/></svg></div></div>
+</svg><div id="sweep"></div></div>
 <div class="card glass l" id="cpc" style="left:26px;top:22px;width:288px;height:186px">
  <div class="k">THE PC <b id="pcl" class="ok">● OK</b></div>
  <div style="display:flex;gap:18px;margin-top:9px;align-items:flex-end">
