@@ -129,21 +129,20 @@ experience on top of it, piece by piece, checking each change on the real TV.
 - **A calm dock**: one glass band along the bottom with just the apps we use, each as its own icon: Netflix, Prime
   Video and Kodi (HAL is the big eye above the posters). Everything else is behind the library button, and the dock keeps the order
   you set.
-- **The look, in HAL's red style**: behind everything, HAL's own backdrop: deep red-black space with faint stars
-  and his glow behind his eye, so his words and the posters read cleanly. HAL's red glow
-  rises from under the dock; the background stays still. The posters' bars, the KODI tag and the dock's glass are HAL red; the top line keeps its own
-  look. The glow takes the colour of the poster you're on (a little warmer in the evening, cooler in
-  the morning), each poster has a faint reflection under it as if the row stood on a glossy floor, the poster you
-  move to lifts and tilts toward you, and the art slides gently the other way as you move along the row.
-  **HAL's big eye** sits above the posters, under the top line, with his latest line from the PC beside it and a
-  slow ring of light turning round it. It's drawn as on his screen and the phone: it glances around, watches the
-  selection move along the posters, blinks now and then and glows brighter when selected. Press Up from the posters
-  to select him; OK opens his monitor screens (his icon is no longer in the dock). When the TV is switched on, **HAL
-  wakes up**: his eye lights in the dark and a red pulse spreads out before Home fades in. A "Ready to watch" card
-  arrives with a burst of sparks. (The motion pauses whenever an app is open, and is off when the TV's animations
-  are off. While it's new, the TV reports its free memory, the home screen's memory and CPU, and how smoothly it
-  draws to the PC once a minute: a summary every 10 minutes in the phone server's log, and `GET /api/tv/perf`.) Without anything
-  in Recently watched, it's the Sora font on a time-of-day sky (night blues, a warm sunset glow). There's a news
+- **HAL's big eye**: above the posters, under the top line, with a chrome rim and his latest line from the PC
+  beside it ("Good morning, Dave. Everything is running smoothly."). It's drawn as on his screen and the phone, and
+  it moves: it glances around, watches the selection move along the posters, blinks now and
+  then, and glows brighter when selected. Press **Up** from the posters to select him; **OK** opens his monitor
+  screens (his icon is no longer in the dock). When the TV is switched on, **HAL wakes up**: his eye lights in the
+  dark and a red pulse spreads out before Home fades in.
+- **The look, in HAL's red style**: a still backdrop of deep red-black space with faint stars and his glow behind
+  the eye, so his words and the posters read cleanly. The posters are glossy and stand on a floor with a soft
+  horizon line and faint reflections; the one you move to lifts and tilts toward you. The KODI tag is a solid red
+  pill, the dock a glossy capsule with a warm line under it, and the glow under the dock takes the colour of the
+  poster you're on. HAL, the posters and the dock are evenly spaced under the top line, which keeps its own look.
+  No embers or background animation. (While it's new, the TV reports its free memory, the home screen's memory and
+  CPU, and how smoothly it draws to the PC once a minute: a summary every 10 minutes in the phone server's log, and
+  `GET /api/tv/perf`.) Without anything in Recently watched, it's the Sora font on a time-of-day sky. There's a news
   ticker too (with Mexico News Daily), off by default because it was too busy.
 
 ### The screensaver
