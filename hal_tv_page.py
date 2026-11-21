@@ -105,11 +105,11 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
   <filter id="glf"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
  </defs>
  <circle cx="150" cy="150" r="150" fill="url(#bloom)"/>
- <g id="ticks"></g><g id="sweep"><path d="M150 7 A143 143 0 0 1 251 49" fill="none" stroke="url(#sw)" stroke-width="9" stroke-linecap="round" opacity=".6"/></g>
+ <g id="ticks"></g>
  <g fill="none" stroke-linecap="round" filter="url(#glf)">
-  <circle cx="150" cy="150" r="128" stroke="rgba(255,255,255,.08)" stroke-width="6"/><circle id="r1" cx="150" cy="150" r="128" stroke="url(#ga)" stroke-width="6" stroke-dasharray="0 804" transform="rotate(-90 150 150)"/>
-  <circle cx="150" cy="150" r="116" stroke="rgba(255,255,255,.08)" stroke-width="6"/><circle id="r2" cx="150" cy="150" r="116" stroke="url(#gb)" stroke-width="6" stroke-dasharray="0 729" transform="rotate(-90 150 150)"/>
-  <circle cx="150" cy="150" r="104" stroke="rgba(255,255,255,.08)" stroke-width="6"/><circle id="r3" cx="150" cy="150" r="104" stroke="url(#gc)" stroke-width="6" stroke-dasharray="0 653" transform="rotate(-90 150 150)"/>
+  <circle id="r1" cx="150" cy="150" r="128" stroke="url(#ga)" stroke-width="6" stroke-dasharray="0 804" transform="rotate(-90 150 150)"/>
+  <circle id="r2" cx="150" cy="150" r="116" stroke="url(#gb)" stroke-width="6" stroke-dasharray="0 729" transform="rotate(-90 150 150)"/>
+  <circle id="r3" cx="150" cy="150" r="104" stroke="url(#gc)" stroke-width="6" stroke-dasharray="0 653" transform="rotate(-90 150 150)"/>
  </g>
  <circle cx="150" cy="150" r="88" fill="url(#rim)"/><circle cx="150" cy="150" r="82" fill="#0b0b0d"/>
  <g clip-path="url(#lensclip)"><g id="iris"><circle cx="150" cy="150" r="80" fill="url(#lens)"/><circle id="core" cx="150" cy="150" r="40" fill="url(#coreg)" style="mix-blend-mode:screen"/></g></g>
@@ -279,7 +279,6 @@ function render(t){
  $('l1').textContent=B?`CPU ${Math.max(0,Math.round(cpu*e))}%`:'CPU';$('l2').textContent=B&&B.cpu_temp!=null?`TEMP ${Math.round(tmp*e)}°`:'TEMP';$('l3').textContent=B?`MEM ${Math.round(mem*e)}%`:'MEM';
  $('cpu').textContent=B?Math.max(0,Math.round(cpu*e)):'—';$('ping').textContent=B&&B.ping!=null?Math.max(1,Math.round(B.ping*e)):'—';
  const br=.75+.25*Math.sin(t*1.6);$('core').setAttribute('r',34+8*br);$('core').setAttribute('opacity',.55+.4*br);
- $('sweep').setAttribute('transform',`rotate(${(t*40%360).toFixed(1)} 150 150)`);
  // speech
  speakSelf(t);
  const txt=String(say.text||''),shown=t<3.6?0:(say.frac>=0?Math.round(txt.length*Math.min(1,say.frac<0?1:say.frac)):txt.length);
