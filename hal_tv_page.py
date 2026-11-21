@@ -344,7 +344,7 @@ function render(t){
  speakSelf(t);
  const txt=String(say.text||''),shown=t<1.5?0:(say.frac>=0?Math.round(txt.length*Math.min(1,say.frac<0?1:say.frac)):txt.length);
  const gr=B&&B.greeting&&txt.startsWith(B.greeting)?B.greeting.length:0,rest=txt.slice(gr).trim(),sh=Math.max(0,shown-gr-(txt.length-gr-rest.length));
- $('quote').className='quote'+(rest.length>90?' vlong':rest.length>55?' long':'');$('quote').innerHTML=t<1.5||!rest?'':'“'+esc(rest.slice(0,sh))+(sh<rest.length?'<span class="caret"></span>':'”<span class="caret"></span>');
+ $('quote').className='quote'+(rest.length>90?' vlong':rest.length>55?' long':'');$('quote').innerHTML=t<1.5||!rest?'':'“'+esc(rest.slice(0,sh))+(sh<rest.length?'<span class="caret"></span>':'”');
  const speaking=say.speaking&&t>=1.5;
  talkGlow(speaking,txt,shown);
  

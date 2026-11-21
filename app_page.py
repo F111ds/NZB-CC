@@ -310,7 +310,7 @@ nav.tabs button.on{color:#ffb59a;text-shadow:0 0 12px rgba(255,90,40,.9)}nav.tab
 .hero.center .eyewrap .eye::after{content:"";position:absolute;inset:16%;border-radius:50%;pointer-events:none;background:radial-gradient(ellipse 38% 20% at 38% 22%,rgba(255,255,255,.35),transparent 70%)}
 .hero.center .g{margin-top:6px;font:500 12px var(--mono);letter-spacing:.32em;color:rgba(255,235,228,.75)}
 .hero.center .q{font-size:19px;font-weight:300;color:#ffe9e0;margin-top:10px}
-#hquote::after{content:"";display:inline-block;width:2px;height:1.05em;background:#ff3a1e;margin-left:4px;vertical-align:-3px}
+#hquote .caret{width:2px;height:1.05em;background:#ff3a1e;margin-left:4px;vertical-align:-3px}   /* only while HAL types */
 .hrule{height:1px;margin:2px 0 12px;background:linear-gradient(90deg,transparent,rgba(255,60,30,.85),transparent);box-shadow:0 0 8px rgba(255,40,20,.8)}
 .hidline{font-family:inherit;font-size:13px;color:rgba(255,235,228,.85);margin:0 2px 12px}
 .hidline span{display:flex;align-items:center;gap:10px}.hidline .ic{color:#ff4a3a;width:17px;height:17px}
