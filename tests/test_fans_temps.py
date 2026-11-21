@@ -376,4 +376,23 @@ c4 = hs.tv_fan_card(vv, {"available": True, "mode": "max", "modes": hs.FAN_ORDER
 assert len(c4["rows"]) == 4 and not any(r[0] == "Graphics card" for r in c4["rows"]), c4["rows"]
 print("pumps and the TV card ok")
 
+# Fan Control running but not usable: no fallback to LibreHardwareMonitor (Fan Control would undo it), and say why
+class _Hidden(hs.FanControlApp):
+    def find(self): self.running, self.exe, self.dir, self.problem = True, "", "", "Fan Control is running, but Windows won't tell me where it's installed (run HAL as administrator)"; return False
+fc3 = hs.FanControl(port=1); fc3.app = _Hidden()
+r = fc3.set_mode("max")
+assert not r["ok"] and "administrator" in r["say"] and fc3.mode == "auto", r
+fc3.refresh(); assert fc3.view()["available"]          # the buttons stay, so a tap explains
+# the owner's configuration: userConfig.json, else the newest Fan Control configuration that isn't HAL's
+d2 = _tf.mkdtemp()
+for nm, t in (("Old.json", 100), ("Mine.json", 200), ("HAL-Max.json", 300), ("notes.json", 400)):
+    with open(_os.path.join(d2, nm), "w") as f:
+        _json.dump(_cfg if nm != "notes.json" else {"x": 1}, f)
+    _os.utime(_os.path.join(d2, nm), (t, t))
+assert hs.FanControlApp()._base_in(d2) == "Mine.json"
+with open(_os.path.join(d2, "userConfig.json"), "w") as f:
+    _json.dump(_cfg, f)
+assert hs.FanControlApp()._base_in(d2) == "userConfig.json"
+print("Fan Control detection ok")
+
 print("\nALL FAN AND TEMPERATURE TESTS PASSED")
