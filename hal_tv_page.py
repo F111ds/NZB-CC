@@ -103,7 +103,8 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
 #det .dd .bar{height:5px;border-radius:3px;background:rgba(255,255,255,.12);margin-top:4px;overflow:hidden}#det .dd .bar b{display:block;height:100%;border-radius:3px}
 #det .dd .inf{font:500 9px "JetBrains Mono",monospace;color:rgba(255,230,220,.6);margin-top:3px}
 #det .cores{display:flex;gap:2px;height:14px;margin-top:6px}#det .cores i{flex:1;background:rgba(255,255,255,.08);position:relative;border-radius:1px}#det .cores i b{position:absolute;left:0;right:0;bottom:0;background:#7cf5b5;border-radius:1px}
-#det .checks{display:flex;gap:2px;height:7px;margin-top:7px}#det .checks i{flex:1;border-radius:1px}
+#det .checks{display:flex;gap:3px;height:4px;margin-top:9px}#det .checks i{flex:1;border-radius:2px;opacity:.85}
+#det .hl.lv{justify-content:space-between}
 #det .q{margin-top:6px}#det .q .n{display:flex;justify-content:space-between;font-size:12px}#det .q .qb{height:5px;border-radius:3px;background:rgba(255,255,255,.12);margin:5px 0;overflow:hidden}#det .q .qb b{display:block;height:100%;background:linear-gradient(90deg,#ff6a3a,#ffc46b)}
 #det .q .i{font:500 9.5px "JetBrains Mono",monospace;color:rgba(255,230,220,.6);margin-bottom:6px}
 #det .dhint{position:absolute;left:0;right:0;bottom:9px;text-align:center;font:500 10px "JetBrains Mono",monospace;color:rgba(255,220,210,.55)}
@@ -202,7 +203,7 @@ const rate=v=>{if(v==null||isNaN(v))return'—';const u=['B/s','KB/s','MB/s','GB
 let LIVE=null,liveAt=0,liveSlow=false;
 const liveFresh=()=>LIVE&&Date.now()-liveAt<15000;
 async function pollLive(){let next=liveSlow?10000:2000;
- try{if(!document.hidden&&!detOn){LIVE=await api('/api/live');liveAt=Date.now();drawLive()}}catch(e){next=10000}
+ try{if(!document.hidden){LIVE=await api('/api/live');liveAt=Date.now();if(detOn)drawDet();else drawLive()}}catch(e){next=10000}
  setTimeout(pollLive,next)}
 function drawLive(){if(!LIVE)return;const L='<span class="live">● LIVE</span>';
  const c=(LIVE.cpu||[]).filter(v=>v!=null);
@@ -367,15 +368,23 @@ function render(t){
 // ---------- details pages ----------
 let detOn=false,detAt=0;
 const TABS=['The PC','Network','Uptime Kuma','Raspberry Pi','Downloads'];
-function graphSvg(v,col,fit,v2,col2){v=v.map(Number);const all=v.concat(v2||[]).map(Number);let lo=fit?Math.min(...all):0,hi=Math.max(...all,fit?lo+1:1);const pad=(hi-lo)*(fit?.25:.15);lo=fit?Math.max(0,lo-pad):0;hi+=pad;
- const P=a=>a.map((x,i)=>(i*100/(a.length-1)).toFixed(2)+','+(50-50*(x-lo)/(hi-lo)).toFixed(2)).join(' ');let o=`<svg class="g" viewBox="0 0 100 50" preserveAspectRatio="none"><polygon points="0,50 ${P(v)} 100,50" fill="${col}" opacity=".18"/><polyline points="${P(v)}" fill="none" stroke="${col}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>`;
- if(v2&&v2.length>1)o+=`<polygon points="0,50 ${P(v2.map(Number))} 100,50" fill="${col2}" opacity=".14"/><polyline points="${P(v2.map(Number))}" fill="none" stroke="${col2}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>`;return o+'</svg>'}
+// Smooth curves through the readings (never above a real peak or below a real low), with a fill that fades out.
+let gsId=0;
+function graphSvg(v,col,fit,v2,col2){v=v.map(Number);const all=v.concat(v2||[]).map(Number);let lo=fit?Math.min(...all):0,hi=Math.max(...all,fit?lo+1:1);
+ if(fit&&hi-lo<Math.max(4,lo*.4)){const m=(hi+lo)/2,h=Math.max(4,lo*.4)/2;lo=m-h;hi=m+h}
+ const pad=(hi-lo)*(fit?.25:.15);lo=fit?Math.max(0,lo-pad):0;hi+=pad;
+ const P=a=>a.map((x,i)=>[i*100/Math.max(1,a.length-1),50-50*(x-lo)/(hi-lo)]);
+ const curve=pts=>{let d=`M${pts[0][0].toFixed(2)},${pts[0][1].toFixed(2)}`;for(let i=0;i<pts.length-1;i++){const p0=pts[Math.max(0,i-1)],p1=pts[i],p2=pts[i+1],p3=pts[Math.min(pts.length-1,i+2)];
+   const mn=Math.min(p1[1],p2[1]),mx=Math.max(p1[1],p2[1]),c1y=Math.min(mx,Math.max(mn,p1[1]+(p2[1]-p0[1])*.32)),c2y=Math.min(mx,Math.max(mn,p2[1]-(p3[1]-p1[1])*.32)),dx=(p2[0]-p1[0])/3;
+   d+=` C${(p1[0]+dx).toFixed(2)},${c1y.toFixed(2)} ${(p2[0]-dx).toFixed(2)},${c2y.toFixed(2)} ${p2[0].toFixed(2)},${p2[1].toFixed(2)}`}return d};
+ const one=(a,c)=>{const id='gs'+(++gsId),d=curve(P(a));return`<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".32"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></linearGradient></defs><path d="${d} L100,50 L0,50 Z" fill="url(#${id})"/><path d="${d}" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`};
+ let o=`<svg class="g" viewBox="0 0 100 50" preserveAspectRatio="none">`+one(v,col);if(v2&&v2.length>1)o+=one(v2.map(Number),col2);return o+'</svg>'}
 const lcol=l=>l==='critical'?'#ff7a6b':l==='warning'?'#ffc46b':l==='info'?'#9cc8ff':'#7cf5b5';
 const bcol=b=>{const u=String(b||'').toUpperCase();return/^(CHECK|PAUSED|NOT |WARM)/.test(u)?'warning':/^(DOWN|HOT|PROBLEM)/.test(u)||/STOPPED/.test(u)?'critical':/SPINNING/.test(u)?'ok':/HEALTHY|^UP |^ALL|^ONLINE|^BLOCKING|^COOL|^OK/.test(u)?'ok':''};
 function detCard(c){let h=`<div class="k">${esc(c.key)}${c.badge?`<b class="${bcol(c.badge)}">${esc(c.badge)}</b>`:''}</div>`;
  if(c.big)h+=`<div class="big">${esc(c.big)}${c.bigsub?`<small>${esc(c.bigsub)}</small>`:''}</div>`;
  const fg=c.graph&&c.graph.length>1,fh=!fg&&c.hourly&&c.hourly.length,fill=!fg&&!fh&&!(c.footer_graph&&c.footer_graph.length>1);
- if(fg)h+=graphSvg(c.graph,c.graph_color||'#ff9a5c',c.graph_fit,c.graph2,c.graph2_color);
+ if(fg)h+=graphSvg(c.graph,c.graph_color||'#ff9a5c',c.graph_fit,c.graph2,c.graph2_color)+(c.live?'<div class="hl lv"><span>last 2 min</span><span class="live" style="margin:0">● LIVE</span></div>':'');
  if(c.legend)h+=`<div class="hl">${c.legend.map(l=>`<span style="color:${esc(l[1])}">■&nbsp;</span>${esc(l[0])}&nbsp;&nbsp;&nbsp;`).join('')}</div>`;
  if(c.checks)h+=`<div class="checks">${c.checks.slice(-30).map(x=>`<i style="background:${x==='up'?'#7cf5b5':x==='down'?'#ff6a4d':x?'#ffc46b':'rgba(255,255,255,.08)'}"></i>`).join('')}</div>`;
  if(c.cores&&c.cores.length)h+=`<div class="cores">${c.cores.map(v=>`<i><b style="height:${Math.max(8,Math.min(100,v))}%"></b></i>`).join('')}</div>`;
@@ -386,10 +395,20 @@ function detCard(c){let h=`<div class="k">${esc(c.key)}${c.badge?`<b class="${bc
  if(c.hourly&&c.hourly.length){const mx=Math.max(...c.hourly,1);h+=`<div class="hb" style="${fh?'flex:1':'height:46px'};${c.hourly_tops?'padding-top:14px':''}">${c.hourly.map((v,k)=>{const b=c.hourly2?c.hourly2[k]||0:0;return`<i style="height:${Math.max(3,v*100/mx)}%;background:${c.hourly_color||'#2a9d74'}"><s style="height:${v?b*100/v:0}%;background:${c.hourly2_color||'#ff6a4d'}"></s>${c.hourly_tops&&c.hourly_tops[k]?`<em>${esc(c.hourly_tops[k])}</em>`:''}</i>`}).join('')}</div>`;
   if(c.hourly_labels){const each=c.hourly_labels.length===c.hourly.length;h+=`<div class="hl" style="${each?'':'justify-content:space-between'}">${c.hourly_labels.map(l=>`<span style="${each?'flex:1;text-align:center':''}">${esc(l)}</span>`).join('')}</div>`}
   if(c.hourly_label)h+=`<div class="hl">${esc(c.hourly_label)}</div>`}
- if(c.footer_graph&&c.footer_graph.length>1)h+=`<div class="k" style="margin-top:10px">${esc(c.footer_key||'')}${c.footer_badge?`<b>${esc(c.footer_badge)}</b>`:''}</div>`+graphSvg(c.footer_graph,c.footer_color||'#7cf5b5');
+ if(c.footer_graph&&c.footer_graph.length>1)h+=`<div class="k" style="margin-top:10px"><span>${esc(c.footer_key||'')}${c.footer_live?'<span class="live">● LIVE</span>':''}</span>${c.footer_badge?`<b>${esc(c.footer_badge)}</b>`:''}</div>`+graphSvg(c.footer_graph,c.footer_color||'#7cf5b5');
  if(c.chips&&c.chips.length)h+=`<div class="chips">${c.chips.map(x=>`<span>${esc(x[0])}<b>${esc(x[1])}</b>${esc(x[2])}</span>`).join('')}</div>`;
  return`<div class="c glass" style="flex:${c.weight||1} 1 0">${h}</div>`}
-function drawDet(){const pages=(DET&&DET.pages)||[];const pg=pages[detAt];const el=$('det');
+// The live readings folded into the details pages: the PC's graphs and numbers, ping, and the traffic now.
+function liveDet(){if(!DET||!liveFresh())return;const L=LIVE,last=a=>a[a.length-1],ok=a=>(a||[]).filter(x=>x!=null),pg=t=>(DET.pages||[]).find(p=>p.title===t);
+ const cards=t=>{const p=pg(t);return p&&p.grid?[].concat(...p.grid):[]},card=(t,k)=>cards(t).find(c=>String(c.key).startsWith(k));
+ const cpu=ok(L.cpu),mem=ok(L.mem),gpu=ok(L.gpu),disk=ok(L.disk),ping=ok(L.ping),tmp=ok(L.cpu_temp),dn=ok(L.net_down),up=ok(L.net_up);
+ let c=card('The PC','PROCESSOR');if(c&&cpu.length>1){c.graph=cpu;c.live=1;c.big=Math.round(last(cpu))+'%';if(tmp.length&&c.bigsub)c.bigsub=String(c.bigsub).replace(/\d+°C/,Math.round(last(tmp))+'°C')}
+ c=card('The PC','MEMORY');if(c&&mem.length>1){c.graph=mem;c.live=1;c.badge=Math.round(last(mem))+'% USED'}
+ c=card('The PC','GRAPHICS');if(c&&gpu.length>1){c.graph=gpu;c.live=1;c.big=Math.round(last(gpu))+'%'}
+ c=card('The PC','DRIVES');if(c&&disk.length>1){c.footer_graph=disk;c.footer_live=1;c.footer_key='DISK ACTIVITY · LAST 2 MIN';c.footer_badge='NOW '+rate(last(disk))}
+ c=card('Network','INTERNET');if(c&&ping.length>1){c.graph=ping;c.live=1;c.big=Math.round(last(ping))+' ms';c.bigsub=String(c.bigsub||'').replace(/last (hour|2 min) [^·]*/,`last 2 min ${Math.round(Math.min(...ping))}–${Math.round(Math.max(...ping))} ms `)}
+ c=card('Network','TRAFFIC');if(c&&dn.length){c.big='↓ '+rate(last(dn));if(up.length)c.bigsub='↑ '+rate(last(up))+' now'}}
+function drawDet(){liveDet();const pages=(DET&&DET.pages)||[];const pg=pages[detAt];const el=$('det');
  if(!pg){el.innerHTML='<div class="dh"><span class="title">Details</span></div><div class="dhint">I\'m reading it, Dave…</div>';return}
  const grid=pg.grid||[(pg.cols||[]).map(c=>c)];
  el.innerHTML=`<div class="dh"><svg width="34" height="34" viewBox="0 0 34 34"><circle cx="17" cy="17" r="16" fill="#2b2e33"/><circle cx="17" cy="17" r="12" fill="url(#lens)"/></svg><span class="title">${esc(pg.title)}</span><span class="k" style="margin-left:6px"><b class="${lv(pg.level)}">● ${esc(pg.head||'')}</b></span>
@@ -398,6 +417,7 @@ function drawDet(){const pages=(DET&&DET.pages)||[];const pg=pages[detAt];const 
  el.querySelectorAll('.c').forEach((c,i)=>{c.animate([{opacity:0,transform:'translateY(14px)'},{opacity:1,transform:'none'}],{duration:450,delay:i*60,easing:'cubic-bezier(.2,.8,.2,1)',fill:'both'})})}
 function openDet(){detOn=true;$('main').classList.add('off');$('det').classList.add('on');drawDet();if(!DET)pollSlowOnce()}
 function closeDet(){detOn=false;$('main').classList.remove('off');$('det').classList.remove('on')}
+async function pollDet(){if(detOn&&!document.hidden)await pollSlowOnce();setTimeout(pollDet,10000)}
 async function pollSlowOnce(){try{DET=await api('/api/tv/details');applyDet();if(detOn)drawDet()}catch(e){}}
 // the TV app hands us the remote: returns true if the page used the key
 window.halKey=function(k){if(k==='down'){if(!detOn)openDet();return true}
@@ -408,6 +428,6 @@ addEventListener('keydown',e=>{const m={ArrowDown:'down',ArrowUp:'up',ArrowLeft:
 fit();
 function loop(){render(now());frameCheck();requestAnimationFrame(loop)}
 window.render=render;
-poll();pollSlow();pollLive();requestAnimationFrame(loop);
+poll();pollSlow();pollLive();setTimeout(pollDet,10000);requestAnimationFrame(loop);
 setTimeout(()=>{try{if(APP)HAL.ready()}catch(e){}},300);
 </script></body></html>"""

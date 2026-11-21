@@ -641,6 +641,9 @@ Pair with the **same access code as the NZB phone app**, then add it to your hom
   Fan speeds also show on the phone's Home screen (FANS card) and on the TV's PC details page; a stopped fan reads
   STOPPED in red. The CPU graph and download bars on HAL's TV page, and the download bars on the phone, are live:
   the last 2 minutes, a new reading every 2 seconds (`/api/live`), slowing to every 10 seconds if the TV starts dropping frames.
+  The TV's details pages are live too: the PC's processor, memory, graphics and disk activity graphs and ping on the
+  Network page (last 2 minutes, every 2 seconds), the traffic speeds now, and the rest refreshed every 10 seconds; while
+  they are open HAL asks Uptime Kuma every 15 seconds. Their graphs are smooth curves through the readings.
 - **Services**: SABnzbd, Jellyfin, Sonarr, Radarr, Prowlarr and the NZB phone server: answering, response time and
   what each is doing. **Restart / Start** from the phone (through its Task Scheduler task, its Windows service, or
   the command line it was last running with). Optional: HAL restarts a service by himself when it stops answering
