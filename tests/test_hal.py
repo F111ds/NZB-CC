@@ -191,6 +191,22 @@ assert all(sv["state"] == "up" for sv in st["services"])
 json.dumps(st)  # serialisable
 assert len(hal.history("24h")["cpu"]) == 144 and len(hal.history("7d")["cpu"]) == 168 and len(hal.history("1h")["cpu"]) == 60
 
+# Live graphs: the newest point is this minute so far, so the TV's graphs move between saved minutes.
+class _LiveMon:
+    def hist(self, key):
+        return [99.0] * 120 if key == "cpu" else []
+
+    def snapshot(self):
+        return {}
+
+_mon, hal.monitor = hal.monitor, _LiveMon()
+hal._minute_t = hs.time.monotonic() - 20
+h1 = hal.history("1h")["cpu"]
+assert len(h1) == 60 and h1[-1] == 99.0, h1[-3:]
+h24 = hal.history("24h")["cpu"]
+assert len(h24) == 144 and h24[-1] == 99.0, h24[-3:]      # a full day kept: a new 10-minute step, oldest dropped
+hal.monitor = _mon
+
 # power cut -> critical event + push; auto shutdown at low battery; power back -> cancel
 hal.settings["ups_shutdown"] = True
 base_ups = dict(hal.ups)

@@ -791,8 +791,8 @@ class PiHole:
         return [r for r in rows if r[0].lower().rstrip(".") not in exact and not any(p.search(r[0]) for p in rx)]
 
     def _hourly(self, fetch, kind: str) -> list:
-        """Queries and blocked per hour over the last 24 hours ([[total, blocked], ...], oldest first); kept 5 minutes."""
-        if time.time() - getattr(self, "_hourly_t", 0) < 300:
+        """Queries and blocked per hour over the last 24 hours ([[total, blocked], ...], oldest first); re-read at most every 25 s."""
+        if time.time() - getattr(self, "_hourly_t", 0) < 25:     # fresh on every check, so this hour's bar grows live
             return getattr(self, "_hourly_v", [])
         self._hourly_t = time.time()
         buckets: dict = {}
@@ -4165,7 +4165,8 @@ class Hal(FunMixin):
             if n % 10 == 0:
                 self.save()
 
-    def sample_history(self) -> None:
+    def _history_row(self, secs: int = 60) -> dict:
+        """The averages of the monitor's last `secs` one-second samples, one value per history key."""
         m = self.monitor
 
         def avg(key, count):
@@ -4174,14 +4175,28 @@ class Hal(FunMixin):
 
         snap = m.snapshot() if m else {}
         gpus = snap.get("gpus") or []
-        row = {"cpu": avg("cpu", 60), "mem": avg("mem", 60), "cpu_temp": avg("cpu_temp", 60),
-               "gpu": avg(f"gpu:{gpus[0]['key']}", 60) if gpus else None, "ping": avg("ping", 15), "net_down": avg("net_down", 60),
-               "net_up": avg("net_up", 60)}
-        dr, dw = avg("disk_read", 60), avg("disk_write", 60)
+        row = {"cpu": avg("cpu", secs), "mem": avg("mem", secs), "cpu_temp": avg("cpu_temp", secs),
+               "gpu": avg(f"gpu:{gpus[0]['key']}", secs) if gpus else None, "ping": avg("ping", min(secs, 15)),
+               "net_down": avg("net_down", secs), "net_up": avg("net_up", secs)}
+        dr, dw = avg("disk_read", secs), avg("disk_write", secs)
         row["disk"] = round((dr or 0) + (dw or 0), 1) if (dr is not None or dw is not None) else None
+        return row
+
+    def sample_history(self) -> None:
+        row = self._history_row(60)
         with self.lock:
+            self._minute_t = time.monotonic()
             for k in HIST_KEYS:
                 self.minutes[k].append(row.get(k))
+
+    def _live_point(self) -> dict:
+        """This minute so far (since the last saved minute, at least the last 5 seconds): the graphs' newest point,
+        so their right-hand end follows what's happening now instead of waiting for the minute to finish."""
+        since = time.monotonic() - getattr(self, "_minute_t", time.monotonic() - 60)
+        try:
+            return self._history_row(max(5, min(60, int(since))))
+        except Exception:  # noqa: BLE001 - the graphs still show the saved minutes
+            return {}
 
     def roll_hour(self) -> None:
         with self.lock:
@@ -4190,14 +4205,25 @@ class Hal(FunMixin):
                 self.hours[k].append(round(sum(vals) / len(vals), 1) if vals else None)
 
     def history(self, rng: str) -> dict:
+        live = self._live_point() if rng in ("1h", "24h") else {}
         with self.lock:
             if rng == "1h":
-                return {k: list(self.minutes[k])[-60:] for k in HIST_KEYS}
+                return {k: (list(self.minutes[k]) + ([live[k]] if live.get(k) is not None else []))[-60:] for k in HIST_KEYS}
             if rng == "24h":
                 out = {}
                 for k in HIST_KEYS:
                     vals = list(self.minutes[k])
-                    out[k] = [self._mean(vals[i:i + 10]) for i in range(0, len(vals), 10)]
+                    n = len(vals)
+                    if live.get(k) is not None:
+                        vals.append(live[k])
+                    # 10-minute steps; the last one also holds the minutes so far, so it moves while you watch
+                    out[k] = [self._mean(vals[i:i + 10]) for i in range(0, n, 10)] or ([live[k]] if live.get(k) is not None else [])
+                    if n and n % 10 == 0 and live.get(k) is not None:
+                        out[k].append(live[k])
+                        if n >= (self.minutes[k].maxlen or n + 1):   # a full day kept: the oldest step makes room
+                            out[k] = out[k][1:]
+                    elif n and live.get(k) is not None:
+                        out[k][-1] = self._mean(vals[(n - 1) // 10 * 10:])
                 return out
             if rng == "7d":
                 return {k: list(self.hours[k]) for k in HIST_KEYS}
