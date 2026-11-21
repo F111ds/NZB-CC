@@ -89,8 +89,8 @@ separation must pass. Never put red and green side by side as the only differenc
   in front (`#ddd`, stroke 1.8). Status on the right in its status colour.
 - Big numbers: Plus Jakarta 800, letter-spacing -.03em, line-height 1; units smaller beside them.
 - HAL's greeting: mono 500, letter-spacing .32-.34em, CAPITALS ("GOOD AFTERNOON, DAVE.").
-- HAL's words: Plus Jakarta 300 italic, 17px TV / 19px phone, in curly quotes, ending in the red cursor
-  (2px wide, `#ff3a1e`). The greeting is never repeated inside the line.
+- HAL's words: Plus Jakarta 300 italic, 17px TV / 19px phone, in curly quotes, with the red cursor
+  (2px wide, `#ff3a1e`) only while he types; it goes away when the line is finished. The greeting is never repeated inside the line.
 
 ## HAL's eye
 
