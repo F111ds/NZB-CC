@@ -105,6 +105,7 @@ canvas.full{position:absolute;inset:0;width:960px;height:540px}
   <filter id="glf"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
  </defs>
  <circle cx="150" cy="150" r="150" fill="url(#bloom)"/>
+ <g id="ticks"></g><g id="sweep"><path d="M150 7 A143 143 0 0 1 251 49" fill="none" stroke="url(#sw)" stroke-width="9" stroke-linecap="round" opacity=".6"/></g>
  
  <g fill="none" stroke-linecap="round" filter="url(#glf)">
   <circle id="r1" cx="150" cy="150" r="128" stroke="url(#ga)" stroke-width="6" stroke-dasharray="0 804" transform="rotate(-90 150 150)"/>
@@ -219,7 +220,7 @@ setInterval(()=>{if(APP&&!say.speaking&&now()>60&&Math.random()<.5)try{HAL.say('
 // ---------- scene ----------
 const T0=performance.now(),now=()=>(performance.now()-T0)/1000;
 let tk='';for(let i=0;i<72;i++){const a=i*5*Math.PI/180,r1=139,r2=i%6?143:147;tk+=`<line x1="${(150+r1*Math.sin(a)).toFixed(1)}" y1="${(150-r1*Math.cos(a)).toFixed(1)}" x2="${(150+r2*Math.sin(a)).toFixed(1)}" y2="${(150-r2*Math.cos(a)).toFixed(1)}" stroke="rgba(255,210,190,${i%6?.25:.55})" stroke-width="1.2"/>`}
-const tickEls=[];
+$('ticks').innerHTML=tk;const tickEls=[...$('ticks').children];
 $('wave').innerHTML='<i></i>'.repeat(34);const waveEls=[...$('wave').children];
 const cards=[...document.querySelectorAll('#main .card')];cards.forEach(c=>{const s=document.createElement('i');s.className='sheen';c.appendChild(s)});
 // WebGL smoke + god rays
@@ -231,7 +232,7 @@ float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y);}
 float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<4;i++){v+=a*n(p);p=p*2.03+vec2(1.7,9.2);a*=.5;}return v;}
 void main(){vec2 uv=gl_FragCoord.xy/r;vec2 p=uv*vec2(r.x/r.y,1.)*2.2;vec2 q=vec2(fbm(p+vec2(0.,t*.04)),fbm(p+vec2(5.2,1.3)-t*.03));float w=fbm(p+1.9*q+vec2(t*.02,-t*.06));
- vec2 c=(uv-vec2(.5,.71))*vec2(r.x/r.y,1.);float d=length(c);float pulse=.88+.12*sin(t*1.6);vec3 col=vec3(.035,.008,.01);
+ vec2 c=(uv-vec2(.5,.71))*vec2(r.x/r.y,1.);float d=length(c);float pulse=1.;vec3 col=vec3(.035,.008,.01);
  col+=vec3(.42,.05,.02)*pow(w,2.2)*1.6;col+=vec3(.95,.38,.05)*smoothstep(.62,.95,w)*.35*(1.-uv.y*.6);col+=vec3(1.,.22,.05)*exp(-d*d*9.)*.62*pulse;col+=vec3(1.,.55,.2)*exp(-d*d*60.)*.25*pulse;
  float bt=clamp((t-40.)/2.6,0.,1.);col*=1.-.55*smoothstep(.45,1.1,length((uv-.5)*vec2(1.2,1.5)));col*=.15+.85*bt;gl_FragColor=vec4(col,1.);}`;
  const sh=(ty,src)=>{const s=gl.createShader(ty);gl.shaderSource(s,src);gl.compileShader(s);return s};
@@ -244,7 +245,7 @@ if(!glOK)$('gl').style.background='radial-gradient(ellipse 520px 380px at 50% 28
 const sp=$('sp').getContext('2d'),fx=$('fx').getContext('2d'),FW=1920,FH=1080,EX=960,EY=298;
 let seed=7;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
 const sparks=Array.from({length:12},()=>({x:rnd()*FW,y:rnd()*FH,v:18+rnd()*40,r:1+rnd()*2.6,ph:rnd()*6.28,dr:(rnd()-.5)*20}));
-const motes=Array.from({length:0},()=>({s:Math.floor(rnd()*4),o:rnd(),v:.12+rnd()*.18,w:(rnd()-.5)*120,r:1+rnd()*1.8}));
+const motes=Array.from({length:40},()=>({s:Math.floor(rnd()*4),o:rnd(),v:.12+rnd()*.18,w:(rnd()-.5)*120,r:1+rnd()*1.8}));
 const srcPts=[[314*2,115*2],[314*2,312*2],[646*2,115*2],[646*2,312*2]];
 function gaze(t){
  if(t<1.5)return[0,0];
@@ -266,7 +267,8 @@ function render(t){
  $('veil').style.opacity=1-ease((t-.1)/.6);
  const eye=$('eye'),px=Math.sin(t*.23),py=Math.cos(t*.17);
  eye.style.transform=`scale(${.55+.45*ease((t-.05)/.8)}) translate(${-px*2}px,${-py*2}px)`;eye.style.opacity=Math.min(1,t/.3);
- tickEls.forEach((l,i)=>l.style.opacity=t>.5+i*.018?1:0);
+ tickEls.forEach((l,i)=>l.style.opacity=t>.2+i*.008?1:0);
+ $('sweep').setAttribute('transform',`rotate(${(t*40%360).toFixed(1)} 150 150)`);
  const bs='HAL 9000 · ONLINE',bn=Math.floor(Math.max(0,t-.3)*30);$('boot').textContent=bs.slice(0,bn);$('boot').style.opacity=t<1.2?1:Math.max(0,1-(t-1.2)/.3);
  cards.forEach((c,i)=>{const e=ease((t-.7-i*.06)/.5),left=parseFloat(c.style.left)<480||c.id==='alert'||c.id==='strip';
   if(t<2){c.style.clipPath=i<4?`inset(0 ${left?(1-e)*100:0}% 0 ${left?0:(1-e)*100}% round 20px)`:`inset(0 ${(1-e)*50}% 0 ${(1-e)*50}% round 16px)`;c.style.opacity=Math.min(1,e*1.4)}else if(c.style.clipPath){c.style.clipPath='';c.style.opacity=1}
@@ -278,14 +280,14 @@ function render(t){
  ring('r1',804,cpu/100);ring('r2',729,tmp/100);ring('r3',653,mem/100);
  $('l1').textContent=B?`CPU ${Math.max(0,Math.round(cpu*e))}%`:'CPU';$('l2').textContent=B&&B.cpu_temp!=null?`TEMP ${Math.round(tmp*e)}°`:'TEMP';$('l3').textContent=B?`MEM ${Math.round(mem*e)}%`:'MEM';
  $('cpu').textContent=B?Math.max(0,Math.round(cpu*e)):'—';$('ping').textContent=B&&B.ping!=null?Math.max(1,Math.round(B.ping*e)):'—';
- const br=.75+.25*Math.sin(t*1.6);$('core').setAttribute('r',34+8*br);$('core').setAttribute('opacity',.55+.4*br);
+ $('core').setAttribute('r',40);$('core').setAttribute('opacity',.85);
  // speech
  speakSelf(t);
  const txt=String(say.text||''),shown=t<1.5?0:(say.frac>=0?Math.round(txt.length*Math.min(1,say.frac<0?1:say.frac)):txt.length);
  $('quote').className='quote'+(txt.length>110?' vlong':txt.length>70?' long':'');$('quote').innerHTML=t<1.5||!txt?'':'“'+esc(txt.slice(0,shown))+(shown<txt.length?'<span class="caret"></span>':'”');
  const speaking=say.speaking&&t>=3.6;
  waveEls.forEach((el,i)=>{const v=Math.abs(nz(t*7+i*.45,i));el.style.height=(3+(speaking?20:2)*v).toFixed(1)+'px'});
- if(speaking)$('core').setAttribute('opacity',.75+.25*Math.abs(nz(t*9,1)));
+ 
  const g=gaze(t);$('iris').setAttribute('transform',`translate(${(g[0]*17).toFixed(2)} ${(g[1]*17).toFixed(2)})`);
  // light sheen across the cards every 6 s
  cards.forEach((c,i)=>{const w=c.offsetWidth,ph=((t-1.5-i*.18)%6+6)%6,s=c.querySelector('.sheen');s.style.transform=`translateX(${(-120+ph/1.2*(w+240)).toFixed(0)}px) skewX(-14deg)`;s.style.opacity=ph<1.2?1:0});
@@ -307,7 +309,7 @@ function render(t){
  const d=new Date();$('clock').textContent=d.toLocaleDateString([], {weekday:'short',day:'numeric',month:'short'}).toUpperCase()+' · '+d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
  // canvas effects: data streams into HAL, his voice round the lens, the scanning beam
  fx.setTransform(1,0,0,1,0,0);fx.clearRect(0,0,960,540);fx.setTransform(.5,0,0,.5,0,0);
- if(t>2.4&&!detOn){const a=Math.min(1,(t-2.4)/1.2);for(const m of motes){const[sx,sy]=srcPts[m.s],p=(m.o+t*m.v)%1,cx=(sx+EX)/2+m.w,cy=Math.min(sy,EY)-80+m.w*.3;
+ if(t>1.4&&!detOn){const a=Math.min(1,(t-1.4)/1);for(const m of motes){const[sx,sy]=srcPts[m.s],p=(m.o+t*m.v)%1,cx=(sx+EX)/2+m.w,cy=Math.min(sy,EY)-80+m.w*.3;
   const x=(1-p)*(1-p)*sx+2*(1-p)*p*cx+p*p*EX,y=(1-p)*(1-p)*sy+2*(1-p)*p*cy+p*p*EY,al=a*Math.sin(p*Math.PI)*.85*(p<.92?1:0);
   const gg=fx.createRadialGradient(x,y,0,x,y,m.r*5);gg.addColorStop(0,`rgba(255,215,160,${al})`);gg.addColorStop(1,'rgba(255,90,30,0)');fx.fillStyle=gg;fx.beginPath();fx.arc(x,y,m.r*5,0,7);fx.fill()}}
 
