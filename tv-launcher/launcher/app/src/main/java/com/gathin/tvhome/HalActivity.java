@@ -96,6 +96,8 @@ public class HalActivity extends Activity {
     /** The animated HAL screen from the PC (<server>/hal/tv), laid over this one once it says it's ready. */
     private WebView web;
     private boolean webOn;
+    /** This activity's own HAL screen: hidden while the animated one loads, shown again if that fails. */
+    private View nativeRoot;
     private String pendingSay = "";      // to say once the voice is ready
     private String lastSay = "";
     private String shownQuote = "";
@@ -261,6 +263,9 @@ public class HalActivity extends Activity {
     private void setupWeb() {
         if (extras.kodiServer.isEmpty()) return;
         try {
+            ViewGroup content = findViewById(android.R.id.content);
+            nativeRoot = content.getChildCount() > 0 ? content.getChildAt(0) : null;
+            if (nativeRoot != null) nativeRoot.setAlpha(0f);   // start on black: HAL's boot plays from black
             web = new WebView(this);
             WebSettings ws = web.getSettings();
             ws.setJavaScriptEnabled(true);
@@ -287,14 +292,16 @@ public class HalActivity extends Activity {
             web.loadUrl(extras.kodiServer + "/hal/tv#k=" + Uri.encode(extras.kodiToken));
             main.postDelayed(() -> {
                 if (!webOn) dropWeb();
-            }, 12_000);
+            }, 7_000);
         } catch (Throwable t) {
             web = null;     // no WebView on this TV: the plain screen it is
+            if (nativeRoot != null) nativeRoot.setAlpha(1f);
         }
     }
 
     private void dropWeb() {
         main.post(() -> {
+            if (nativeRoot != null) nativeRoot.animate().alpha(1f).setDuration(250).start();
             if (web == null) return;
             WebView w = web;
             web = null;
@@ -319,7 +326,7 @@ public class HalActivity extends Activity {
             main.post(() -> {
                 if (web == null || webOn) return;
                 webOn = true;
-                web.animate().alpha(1f).setDuration(350).start();
+                web.setAlpha(1f);   // the page starts black itself, so no fade is needed
                 if (!shownQuote.isEmpty()) webJs("window.halLine&&halLine(" + JSONObject.quote(shownQuote) + ")");
             });
         }
