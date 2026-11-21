@@ -76,7 +76,7 @@ except ImportError:  # pragma: no cover - friendly message on a PC without psuti
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import system_monitor as sm  # noqa: E402
 
-VERSION = "1.31.0"
+VERSION = "1.31.1"
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
@@ -1587,6 +1587,8 @@ class FanControl:
         self.fans: list[dict] = []
         self.available = False
         self.reason = "checking"
+        self.last_error = ""
+        self.check: dict | None = None   # after a change: the speeds before, to see the fans really respond
         self.lock = threading.RLock()
 
     def _open(self, url: str, method: str = "GET", timeout: float = 3.0):
@@ -1608,14 +1610,24 @@ class FanControl:
             self.reason = "" if self.available else "LibreHardwareMonitor shows no fans it can control on this PC"
 
     def _set(self, cid: str, value) -> bool:
+        """LibreHardwareMonitor answers 200 even when it refuses ({"result": "fail", "message": ...}), and an older
+        one without this feature can answer with its web page: only {"result": "ok"} counts."""
         q = urllib.parse.urlencode({"action": "Set", "id": cid, "value": value})
         for method in ("POST", "GET"):
             try:
                 with self._open(f"http://127.0.0.1:{self.port}/Sensor?{q}", method=method) as r:
-                    if r.status == 200:
-                        return True
+                    body = r.read(20000).decode("utf-8", "replace")
             except Exception:  # noqa: BLE001
                 continue
+            try:
+                j = json.loads(body)
+            except ValueError:
+                self.last_error = "this LibreHardwareMonitor's web server can't set fans (update LibreHardwareMonitor)"
+                continue
+            if isinstance(j, dict) and str(j.get("result", "")).lower() == "ok":
+                return True
+            self.last_error = f"LibreHardwareMonitor said: {j.get('message') or j.get('result') or 'no'}" if isinstance(j, dict) else "unexpected answer"
+            return False
         return False
 
     def set_mode(self, mode: str, why: str = "") -> dict:
@@ -1627,19 +1639,33 @@ class FanControl:
             fans = list(self.fans)
             if not self.available:
                 return {"ok": False, "say": self.reason or "I can't control the fans on this PC."}
+        self.last_error = ""
+        want = fan_targets(fans, mode) if mode != "auto" else {}
         if mode == "auto":
             ok = all(self._set(f["control_id"], "null") for f in fans)
         else:
-            ok = all(self._set(cid, v) for cid, v in fan_targets(fans, mode).items())
+            ok = all(self._set(cid, v) for cid, v in want.items())
+            if ok:
+                # it said yes: check the controller really took the new power
+                time.sleep(1.5)
+                self.refresh()
+                with self.lock:
+                    now = {f["control_id"]: f["pct"] for f in self.fans}
+                off = [cid for cid, v in want.items() if now.get(cid) is None or abs(now[cid] - v) > 3]
+                if off:
+                    ok = False
+                    self.last_error = "the fan controller didn't take the new power (the motherboard or another fan program may be in charge)"
             if not ok:
                 for f in fans:
                     self._set(f["control_id"], "null")
         if not ok:
             with self.lock:
                 self.mode, self.since = "auto", time.time()
-            return {"ok": False, "say": "LibreHardwareMonitor didn't accept the change, so the fans stay on your BIOS curves."}
+                self.note = self.last_error
+            return {"ok": False, "say": "The fans didn't change, so they stay on your BIOS curves" + (f": {self.last_error}." if self.last_error else ".")}
         with self.lock:
             self.mode, self.since, self.note = mode, time.time(), why
+            self.check = {"at": time.time(), "rpm": {f["control_id"]: f["rpm"] or 0 for f in fans}, "want": want} if mode != "auto" else None
         return {"ok": True, "say": "The fans are back on Automatic: your BIOS curves." if mode == "auto" else f"The fans are on {mode.title()}."}
 
     def watch(self, hot: str) -> str:
@@ -1661,6 +1687,17 @@ class FanControl:
                 self.mode = "auto"
             return ""
         want = fan_targets(fans, mode)
+        with self.lock:
+            chk = self.check
+        if chk and time.time() - chk["at"] >= 8:
+            # 8 s after a change: a fan given clearly more (or less) power should have changed speed
+            moved = [f for f in fans if f["control_id"] in chk["want"] and chk["rpm"].get(f["control_id"])
+                     and abs((f["rpm"] or 0) - chk["rpm"][f["control_id"]]) / chk["rpm"][f["control_id"]] > .08]
+            with self.lock:
+                self.check = None
+                if not moved:
+                    self.note = ("the power changed but the fan speeds didn't: these headers may be set to a fixed mode in the BIOS,"
+                                 " or the fans are run by other software (iCUE, Armoury Crate)")
         for f in fans:
             if f["control_id"] in want and f["pct"] is not None and abs(f["pct"] - want[f["control_id"]]) > 8:
                 self._set(f["control_id"], want[f["control_id"]])
