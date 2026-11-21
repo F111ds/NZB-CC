@@ -10,6 +10,7 @@
     3. Jellyfin at Windows startup ........... setup_jellyfin_service.ps1
     4. Sign in automatically, then lock ...... setup_autologon.ps1
     5. Sonarr / Radarr / Prowlarr install .... install_arr_resume.ps1
+    6. CPU temperatures for HAL .............. setup_lhm.ps1
 
   Run it as often as you like: every step leaves what is already right alone.
   Updating is update_all.ps1 (or Update everything in the app); backing up is backup_settings.ps1.
@@ -46,7 +47,13 @@ $steps = @(
     @{ Name = "Sonarr / Radarr / Prowlarr install"; File = "install_arr_resume.ps1"; Undo = $false
        Check = {
            $n = @(Get-Process Sonarr, Radarr, Prowlarr -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name -Unique).Count
-           if ($n -eq 3) { "all three running" } elseif ($n) { "$n of 3 running" } else { "not running" } } }
+           if ($n -eq 3) { "all three running" } elseif ($n) { "$n of 3 running" } else { "not running" } } },
+    @{ Name = "CPU temperatures for HAL"; File = "setup_lhm.ps1"; Undo = $true
+       Check = {
+           $web = $false; try { $null = Invoke-WebRequest "http://localhost:8085/data.json" -UseBasicParsing -TimeoutSec 2; $web = $true } catch { }
+           $auto = [bool](@(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { "$($_.Actions.Execute)" -match 'LibreHardwareMonitor' }).Count)
+           if ($web -and $auto) { "set up" } elseif ($web) { "working, but not at startup" }
+           elseif (Get-Process LibreHardwareMonitor -ErrorAction SilentlyContinue) { "running, but its web server is off" } else { "not set up" } } }
 )
 
 while ($true) {
@@ -62,13 +69,13 @@ while ($true) {
         Write-Host ("  {0}. {1,-36}" -f ($i + 1), $s.Name) -NoNewline
         Say "$state$missing" $color
     }
-    Say "`n  U. Undo a step (Jellyfin or automatic sign-in)"
+    Say "`n  U. Undo a step (Jellyfin, automatic sign-in or CPU temperatures)"
     Say "  Q. Quit`n"
     $c = (Read-Host "Choose").Trim().ToUpper()
     if ($c -eq "Q" -or $c -eq "") { break }
     $undo = $false
     if ($c -eq "U") {
-        $c = (Read-Host "Undo which step (3 or 4)").Trim()
+        $c = (Read-Host "Undo which step (3, 4 or 6)").Trim()
         $undo = $true
     }
     $n = 0
