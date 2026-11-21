@@ -699,6 +699,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
             if (!cinemaLayout) {
                 AppAdapter.halInDock = false;
                 DockDecoration.polish = true;
+                ember.useHalBackdrop(true);   // HAL's own background: his words read cleanly over it
                 bigHal = new BigHal(this, root, root.indexOfChild(findViewById(R.id.glass)), this);
                 ember.halLine = bigHal::setLine;
                 bigHal.setLine("");
@@ -1305,7 +1306,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         if (ember != null) {
             ember.resumeMotion();
             ember.refreshHal();
-            if (bigHal != null) bigHal.motion(animations && !reducedMotion);
+            if (bigHal != null) {
+                bigHal.motion(animations && !reducedMotion);
+                bigHal.live(true);   // his eye always moves on Home
+            }
             restartIdleClock();
             if (perf != null) perf.homeShown(getWindow());
             if (wakeNext) {
@@ -1534,7 +1538,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         resumed = false;
         if (newsTicker != null) newsTicker.stop();
         if (ember != null) ember.pause();
-        if (bigHal != null) bigHal.motion(false);
+        if (bigHal != null) {
+            bigHal.motion(false);
+            bigHal.live(false);
+        }
         if (perf != null) perf.homeShown(null);
         // No UP reaches a paused Home, so a vendor-key hold it saw go down would still open its app later.
         // Only Home's own share is dropped: a key service that saw the same DOWN keeps its hold.
@@ -3496,7 +3503,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, K
         }
         kodiBlock.setY(kodiBaseY);
         kodiCount.setVisibility(View.GONE);
-        if (ember != null) ember.setFloor(headTop + headH + (int) (8 * density) + posterH);
+        if (ember != null) {
+            ember.setFloor(headTop + headH + (int) (8 * density) + posterH);
+            ember.setHalY(top + g + halH / 2f);
+        }
         if (kodiBlock.getVisibility() != View.VISIBLE) {
             kodiBlock.setVisibility(View.VISIBLE);
             ViewGroup bar = findViewById(R.id.topButtons);

@@ -213,6 +213,27 @@ final class BigHal {
         }
     }
 
+    /**
+     * HAL's eye is redrawn about 25 times a second while Home is on screen, from here: its own redraw loop depends on
+     * the TV telling the drawable it is visible, and on animations being on, neither of which every TV does.
+     */
+    private boolean ticking;
+    private final Runnable tick = new Runnable() {
+        @Override
+        public void run() {
+            if (!ticking) return;
+            eye.invalidate();
+            eye.postDelayed(this, 40);
+        }
+    };
+
+    void live(boolean on) {
+        if (on == ticking) return;
+        ticking = on;
+        eye.removeCallbacks(tick);
+        if (on) eye.post(tick);
+    }
+
     boolean focus() {
         return shown() && eye.requestFocus();
     }
